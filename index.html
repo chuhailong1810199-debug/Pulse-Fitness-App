@@ -912,7 +912,8 @@ let _sessionLogged = false; // prevent re-logging same session
 
 async function finishWorkout() {
   if (!activeClient || _workoutLogging) return;
-  // If already saved, still show summary with current state
+
+  // ── Already logged in this session (in-memory flag) ──
   if (_sessionLogged) {
     const prog  = getProgram();
     const day   = prog[activeDay];
@@ -924,6 +925,31 @@ async function finishWorkout() {
     showWorkoutSummary({ doneN, total, tonnage: 0, durationMs, streak: 0 });
     return;
   }
+
+  // ── Double-check Firestore: block if already logged today ──
+  try {
+    const todayMidnight = new Date(); todayMidnight.setHours(0,0,0,0);
+    const recentSnap = await getDocs(query(
+      collection(db, 'clients', activeClient.id, 'workoutHistory'),
+      orderBy('date', 'desc'),
+      limit(10)
+    ));
+    const alreadyToday = recentSnap.docs.some(d => {
+      const data = d.data();
+      if (data.day !== activeDay) return false;
+      const date = data.date?.toDate?.() || null;
+      if (!date) return false;
+      const dd = new Date(date); dd.setHours(0,0,0,0);
+      return dd.getTime() === todayMidnight.getTime();
+    });
+    if (alreadyToday) {
+      _sessionLogged = true;
+      updateFinishBtn();
+      showToast('Bạn đã nộp bài hôm nay rồi ✓');
+      return;
+    }
+  } catch(_e) { /* non-critical — proceed if check fails */ }
+
   _workoutLogging = true;
   // Pre-compute summary data so it's always available even if Firestore write fails
   let _summaryData = null;
@@ -1765,14 +1791,26 @@ async function hydrateExerciseLoadsForActiveDay() {
   } catch (_e) {}
 
   // ── Fallback: last completed workout from workoutHistory ──
+  // Also checks if today's session was already logged → locks the finish button.
   try {
     const histSnap = await getDocs(query(
       collection(db, 'clients', activeClient.id, 'workoutHistory'),
       orderBy('date', 'desc'),
       limit(20)
     ));
+    const todayMidnight = new Date(); todayMidnight.setHours(0,0,0,0);
     const latestDaySession = histSnap.docs.find(d => d.data().day === activeDay);
     if (!latestDaySession) return;
+
+    // If the latest session for this day was TODAY → mark as already logged
+    const sessionDate = latestDaySession.data().date?.toDate?.() || null;
+    if (sessionDate) {
+      const sd = new Date(sessionDate); sd.setHours(0,0,0,0);
+      if (sd.getTime() === todayMidnight.getTime()) {
+        _sessionLogged = true;
+        updateFinishBtn();
+      }
+    }
 
     const exSnap = await getDocs(collection(
       db, 'clients', activeClient.id, 'workoutHistory', latestDaySession.id, 'exercises'
