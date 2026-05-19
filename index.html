@@ -102,6 +102,7 @@ let _lastPickedExercise = null;
 let _dashVolumeChart = null;
 let exerciseLoads = {};
 let setLoads = {}; // exerciseKey → [kg_set1, kg_set2, ...]
+let _saveLoadsFBTimer = null;
 let strengthHistory = {}; // exerciseKey → [{date, kg}] sorted newest first
 
 function parseSetsCount(setsReps) {
@@ -1690,6 +1691,7 @@ function setExerciseLoad(exerciseKey, rawValue) {
     exerciseLoads[exerciseKey] = val;
   }
   saveExerciseLoadsToLocal();
+  scheduleSaveLoadsFB();
 }
 
 function getExerciseLoadValue(exerciseKey) {
@@ -1720,6 +1722,7 @@ function setSetLoad(key, si, rawValue) {
     saveExerciseLoadsToLocal();
   }
   saveSetLoadsToLocal();
+  scheduleSaveLoadsFB();
 }
 
 async function hydrateExerciseLoadsForActiveDay() {
@@ -1745,6 +1748,23 @@ async function hydrateExerciseLoadsForActiveDay() {
     } catch (_e) {}
   }
 
+  // ── Check sessionLoads (real-time kg backup, updated on every input) ──
+  try {
+    const slSnap = await getDoc(doc(db, 'clients', activeClient.id, 'sessionLoads', activeDay));
+    if (slSnap.exists()) {
+      const slData = slSnap.data() || {};
+      if (slData.exerciseLoads && Object.keys(slData.exerciseLoads).length > 0) {
+        exerciseLoads = { ...exerciseLoads, ...slData.exerciseLoads };
+        saveExerciseLoadsToLocal();
+      }
+      if (slData.setLoads && Object.keys(slData.setLoads).length > 0) {
+        setLoads = { ...setLoads, ...slData.setLoads };
+        saveSetLoadsToLocal();
+      }
+    }
+  } catch (_e) {}
+
+  // ── Fallback: last completed workout from workoutHistory ──
   try {
     const histSnap = await getDocs(query(
       collection(db, 'clients', activeClient.id, 'workoutHistory'),
@@ -1767,9 +1787,35 @@ async function hydrateExerciseLoadsForActiveDay() {
       if (Number.isFinite(load) && load > 0) restored[key] = load;
       if (Array.isArray(data.setLoads) && data.setLoads.length > 0) restoredSets[key] = data.setLoads;
     });
-    if (Object.keys(restored).length > 0) { exerciseLoads = restored; saveExerciseLoadsToLocal(); }
-    if (Object.keys(restoredSets).length > 0) { setLoads = restoredSets; saveSetLoadsToLocal(); }
+    // Only overwrite if sessionLoads didn't already have this key
+    Object.keys(restored).forEach(k => { if (!exerciseLoads[k]) exerciseLoads[k] = restored[k]; });
+    Object.keys(restoredSets).forEach(k => { if (!setLoads[k]) setLoads[k] = restoredSets[k]; });
+    saveExerciseLoadsToLocal();
+    saveSetLoadsToLocal();
   } catch (_e) {}
+}
+
+// ── PERSISTENT LOAD SYNC (Firestore) ───────────────────
+// Debounced save: writes current kg values to clients/{id}/sessionLoads/{day}
+// so they survive localStorage clears, device switches, week rollovers.
+function scheduleSaveLoadsFB() {
+  clearTimeout(_saveLoadsFBTimer);
+  _saveLoadsFBTimer = setTimeout(saveLoadsFB, 2000);
+}
+async function saveLoadsFB() {
+  if (!activeClient || !activeDay) return;
+  try {
+    const payload = {};
+    if (Object.keys(exerciseLoads).length > 0) payload.exerciseLoads = exerciseLoads;
+    if (Object.keys(setLoads).length > 0) payload.setLoads = setLoads;
+    if (!Object.keys(payload).length) return;
+    payload.updatedAt = serverTimestamp();
+    await setDoc(
+      doc(db, 'clients', activeClient.id, 'sessionLoads', activeDay),
+      payload,
+      { merge: true }
+    );
+  } catch(_e) {}
 }
 
 // ── STRENGTH PROGRESSION ───────────────────────────────
