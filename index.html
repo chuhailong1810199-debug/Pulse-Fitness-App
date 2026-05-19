@@ -1883,11 +1883,18 @@ async function loadStrengthHistory() {
 
     results.forEach(({ date, exSnap }) => {
       exSnap.forEach(d => {
-        const { exerciseKey, loadKg } = d.data();
+        const data = d.data();
+        const { exerciseKey, loadKg, sets, reps, tonnage, setLoads } = data;
         const kg = parseFloat(loadKg);
         if (!exerciseKey || !Number.isFinite(kg) || kg <= 0) return;
         if (!strengthHistory[exerciseKey]) strengthHistory[exerciseKey] = [];
-        strengthHistory[exerciseKey].push({ date, kg });
+        strengthHistory[exerciseKey].push({
+          date, kg,
+          sets: sets || 0,
+          reps: reps || 0,
+          tonnage: tonnage || 0,
+          setLoads: Array.isArray(setLoads) ? setLoads : []
+        });
       });
     });
 
@@ -1940,6 +1947,78 @@ function getStrengthSparkline(exerciseKey) {
     <div class="str-spark-labels">
       <span>${vals[0]}kg</span><span style="color:${col};font-weight:800;">${latest}kg ${delta>0?'↑ +'+delta:delta<0?'↓ '+delta:'→'}kg</span>
     </div>
+  </div>`;
+}
+
+function toggleKgHistory(key) {
+  const wrap = document.getElementById('kht_' + key);
+  if (!wrap) return;
+  const open = wrap.classList.toggle('kht-open');
+  const btn  = document.getElementById('khtbtn_' + key);
+  if (btn) btn.classList.toggle('kht-btn-active', open);
+}
+
+function getKgHistoryTable(key, ex) {
+  const hist = strengthHistory[key] || [];
+  const MAX_SETS = 4;
+
+  // Parse reps from setsReps string e.g. "4 × 8" → 8
+  function parseReps(str) {
+    if (!str) return null;
+    const m = str.match(/[x×]\s*(\d+)/i);
+    return m ? parseInt(m[1]) : null;
+  }
+  const defaultReps = parseReps(ex?.setsReps);
+
+  if (hist.length === 0) {
+    return `<div class="kht-empty">Hoàn thành buổi tập đầu tiên để bắt đầu theo dõi 📈</div>`;
+  }
+
+  const setHeaders = Array.from({length: MAX_SETS}, (_, i) =>
+    `<th colspan="2" class="kht-th-set">SET ${i+1}</th>`
+  ).join('');
+  const subHeaders = Array.from({length: MAX_SETS}, () =>
+    `<th class="kht-sub">REP</th><th class="kht-sub">LOAD</th>`
+  ).join('');
+
+  const rows = hist.slice(0, 8).map((h, i) => {
+    const d   = h.date instanceof Date ? h.date : new Date(h.date);
+    const dateStr = d.toLocaleDateString('vi-VN', { day:'2-digit', month:'2-digit', year:'numeric' });
+    const reps = h.reps || defaultReps || '—';
+    const sl   = h.setLoads || [];
+
+    let setCells = '';
+    for (let s = 0; s < MAX_SETS; s++) {
+      const kg = sl[s];
+      if (Number.isFinite(kg) && kg > 0) {
+        setCells += `<td class="kht-rep">${reps}</td><td class="kht-load">${kg}</td>`;
+      } else {
+        setCells += `<td class="kht-na"></td><td class="kht-na"></td>`;
+      }
+    }
+
+    const vol = h.tonnage || sl.filter(v => Number.isFinite(v) && v > 0).reduce((s, v) => s + v * (Number.isFinite(h.reps) ? h.reps : (defaultReps || 1)), 0);
+    return `<tr>
+      <td class="kht-week">${i + 1}</td>
+      <td class="kht-date">${dateStr}</td>
+      ${setCells}
+      <td class="kht-vol${vol > 0 ? ' kht-vol-pos' : ''}">${vol > 0 ? Math.round(vol) : '—'}</td>
+    </tr>`;
+  }).join('');
+
+  return `<div class="kht-scroll">
+    <table class="kht-table">
+      <thead>
+        <tr>
+          <th rowspan="2" class="kht-th">WEEK</th>
+          <th rowspan="2" class="kht-th">DATE</th>
+          ${setHeaders}
+          <th rowspan="2" class="kht-th kht-vol-th">VOLUME</th>
+        </tr>
+        <tr>${subHeaders}</tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
   </div>`;
 }
 
@@ -2112,7 +2191,13 @@ function renderExercises() {
                 <span class="set-load-unit">kg</span>
               </div>`).join('')}
           </div>
-          <button class="node-info" onclick="openModal(${pi},${ei})">i</button>
+          <div class="kht-wrap" id="kht_${key}">
+            ${getKgHistoryTable(key, ex)}
+          </div>
+          <div class="node-bottom-row">
+            <button class="kht-btn" id="khtbtn_${key}" onclick="event.stopPropagation();toggleKgHistory('${key}')">📊 History</button>
+            <button class="node-info" onclick="openModal(${pi},${ei})">i</button>
+          </div>
         </div>`;
       });
       html += `</div>`;
@@ -4395,6 +4480,31 @@ h1 span{color:#7665ff;}
 .node-name.done{color:rgba(255,255,255,0.30);text-decoration:line-through;}
 .node-sets{font-size:11px;color:rgba(255,255,255,0.55);font-weight:600;line-height:1.3;}
 /* Strength progression badge */
+/* ── KG HISTORY TABLE ─────────────────────────────────── */
+.node-bottom-row{display:flex;align-items:center;justify-content:space-between;margin-top:8px;}
+.kht-btn{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:rgba(255,255,255,0.45);font-size:10px;font-weight:700;padding:4px 8px;cursor:pointer;transition:all .15s;letter-spacing:.3px;}
+.kht-btn:hover,.kht-btn-active{background:oklch(68% .16 295 / 0.15);border-color:oklch(68% .16 295 / 0.4);color:oklch(72% .16 295);}
+.kht-wrap{display:none;margin-top:8px;}
+.kht-wrap.kht-open{display:block;}
+.kht-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:8px;border:1px solid rgba(255,255,255,0.08);}
+.kht-table{width:100%;border-collapse:collapse;font-size:10px;font-family:'Figtree',sans-serif;min-width:420px;}
+.kht-table thead tr:first-child th{background:oklch(18% 0.02 295);color:rgba(255,255,255,0.55);font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;padding:6px 4px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.10);}
+.kht-table thead tr:first-child th:not(:last-child){border-right:1px solid rgba(255,255,255,0.06);}
+.kht-th-set{border-left:1px solid rgba(255,255,255,0.10) !important;}
+.kht-sub{background:oklch(14% 0.01 295);color:rgba(255,255,255,0.35);font-size:9px;font-weight:600;padding:4px 3px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.10);}
+.kht-table tbody tr{border-bottom:1px solid rgba(255,255,255,0.05);}
+.kht-table tbody tr:last-child{border-bottom:none;}
+.kht-table tbody tr:nth-child(even){background:rgba(255,255,255,0.02);}
+.kht-week{color:rgba(255,255,255,0.35);font-weight:700;text-align:center;padding:6px 4px;min-width:32px;}
+.kht-date{color:rgba(255,255,255,0.50);padding:6px 4px;white-space:nowrap;text-align:center;}
+.kht-rep,.kht-load{text-align:center;padding:6px 4px;color:rgba(255,255,255,0.70);}
+.kht-load{font-weight:700;color:oklch(82% .12 295);border-left:1px dashed rgba(255,255,255,0.07);}
+.kht-th-set + th,.kht-th-set ~ th{border-left:1px solid rgba(255,255,255,0.08);}
+.kht-na{padding:4px;text-align:center;color:rgba(255,255,255,0.15);font-size:9px;}
+.kht-vol{text-align:center;padding:6px 5px;color:rgba(255,255,255,0.25);font-weight:700;border-left:1px solid rgba(255,255,255,0.10);}
+.kht-vol.kht-vol-pos{color:oklch(72% .20 145);}
+.kht-empty{font-size:11px;color:rgba(255,255,255,0.30);text-align:center;padding:12px 8px;font-style:italic;}
+/* ── END KG HISTORY TABLE ─────────────────────────────── */
 .str-badge{display:inline-flex;align-items:center;font-size:9.5px;font-weight:800;letter-spacing:.4px;padding:2px 6px;border-radius:4px;margin:3px 0 2px;width:fit-content;}
 .str-badge.str-up{background:oklch(72% .20 145 / 0.15);color:oklch(72% .20 145);border:1px solid oklch(72% .20 145 / 0.30);}
 .str-badge.str-down{background:oklch(65% .22 25 / 0.12);color:oklch(65% .22 25);border:1px solid oklch(65% .22 25 / 0.25);}
