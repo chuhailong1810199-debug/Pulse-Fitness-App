@@ -58,8 +58,10 @@ service cloud.firestore {
     match /clients/{clientId} {
       allow read, write: if isCoach() || isClientOwner(clientId);
 
-      // Tất cả subcollections: assessment, checkpoints, workoutHistory, videos
-      match /{subcollection}/{docId} {
+      // Tất cả subcollections ở MỌI độ sâu:
+      // assessment, checkpoints, workoutHistory, workoutHistory/{id}/exercises,
+      // videos, progressPhotos, sessionLoads
+      match /{document=**} {
         allow read, write: if isCoach() || isClientOwner(clientId);
       }
     }
