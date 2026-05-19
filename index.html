@@ -1843,15 +1843,14 @@ function scheduleSaveLoadsFB() {
 async function saveLoadsFB() {
   if (!activeClient || !activeDay) return;
   try {
-    const payload = {};
-    if (Object.keys(exerciseLoads).length > 0) payload.exerciseLoads = exerciseLoads;
-    if (Object.keys(setLoads).length > 0) payload.setLoads = setLoads;
-    if (!Object.keys(payload).length) return;
-    payload.updatedAt = serverTimestamp();
+    // Full overwrite (no merge) so deleted/zeroed kg values don't persist as stale data
     await setDoc(
       doc(db, 'clients', activeClient.id, 'sessionLoads', activeDay),
-      payload,
-      { merge: true }
+      {
+        exerciseLoads: Object.keys(exerciseLoads).length > 0 ? exerciseLoads : {},
+        setLoads: Object.keys(setLoads).length > 0 ? setLoads : {},
+        updatedAt: serverTimestamp()
+      }
     );
   } catch(_e) {}
 }
