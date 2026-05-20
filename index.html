@@ -2191,13 +2191,7 @@ function renderExercises() {
                 <span class="set-load-unit">kg</span>
               </div>`).join('')}
           </div>
-          <div class="kht-wrap" id="kht_${key}">
-            ${getKgHistoryTable(key, ex)}
-          </div>
-          <div class="node-bottom-row">
-            <button class="kht-btn" id="khtbtn_${key}" onclick="event.stopPropagation();toggleKgHistory('${key}')">📊 History</button>
-            <button class="node-info" onclick="openModal(${pi},${ei})">i</button>
-          </div>
+          <button class="node-info" onclick="openModal(${pi},${ei})">i</button>
         </div>`;
       });
       html += `</div>`;
@@ -2556,24 +2550,16 @@ function openModal(pi, ei) {
   document.getElementById('modal-setsreps-edit').style.display = 'none';
   const sparkWrap = document.getElementById('modal-strength-history');
   if (sparkWrap) {
-    const hist = strengthHistory[key];
-    if (hist && hist.length > 0) {
-      const spark = getStrengthSparkline(key);
-      const histRows = hist.slice(0,6).map(h => {
-        const d = h.date instanceof Date ? h.date : new Date(h.date);
-        const label = d.toLocaleDateString('vi-VN', {day:'2-digit',month:'2-digit'});
-        return `<div class="str-hist-row"><span class="str-hist-date">${label}</span><span class="str-hist-kg">${h.kg}kg</span></div>`;
-      }).join('');
-      sparkWrap.innerHTML = `<div class="str-modal-section">
-        <div class="str-modal-title">STRENGTH PROGRESSION</div>
-        ${spark}
-        <div class="str-hist-list">${histRows}</div>
-      </div>`;
-      sparkWrap.style.display = 'block';
-    } else {
-      sparkWrap.innerHTML = '';
-      sparkWrap.style.display = 'none';
-    }
+    const day   = getProgram()[activeDay];
+    const ex    = day?.phases[pi]?.exercises[ei];
+    const hist  = strengthHistory[key];
+    const spark = hist && hist.length >= 2 ? getStrengthSparkline(key) : '';
+    sparkWrap.innerHTML = `<div class="str-modal-section">
+      <div class="str-modal-title">STRENGTH HISTORY</div>
+      ${spark}
+      ${getKgHistoryTable(key, ex)}
+    </div>`;
+    sparkWrap.style.display = 'block';
   }
   document.getElementById('modal').classList.add('open');
 }
@@ -4481,11 +4467,7 @@ h1 span{color:#7665ff;}
 .node-sets{font-size:11px;color:rgba(255,255,255,0.55);font-weight:600;line-height:1.3;}
 /* Strength progression badge */
 /* ── KG HISTORY TABLE ─────────────────────────────────── */
-.node-bottom-row{display:flex;align-items:center;justify-content:space-between;margin-top:8px;}
-.kht-btn{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:rgba(255,255,255,0.45);font-size:10px;font-weight:700;padding:4px 8px;cursor:pointer;transition:all .15s;letter-spacing:.3px;}
-.kht-btn:hover,.kht-btn-active{background:oklch(68% .16 295 / 0.15);border-color:oklch(68% .16 295 / 0.4);color:oklch(72% .16 295);}
-.kht-wrap{display:none;margin-top:8px;}
-.kht-wrap.kht-open{display:block;}
+.kht-wrap{margin-top:10px;}
 .kht-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:8px;border:1px solid rgba(255,255,255,0.08);}
 .kht-table{width:100%;border-collapse:collapse;font-size:10px;font-family:'Figtree',sans-serif;min-width:420px;}
 .kht-table thead tr:first-child th{background:oklch(18% 0.02 295);color:rgba(255,255,255,0.55);font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;padding:6px 4px;text-align:center;border-bottom:1px solid rgba(255,255,255,0.10);}
