@@ -2738,18 +2738,61 @@ async function renderProgressPage() {
 }
 
 // ── WORKOUT LOG (Client-Facing) ────────────────────────
+let _wlDeleteMode = false;
+
+function toggleLogDeleteMode() {
+  _wlDeleteMode = !_wlDeleteMode;
+  const btn = document.getElementById('wl-delete-toggle');
+  if (btn) {
+    btn.textContent = _wlDeleteMode ? 'Done' : 'Edit';
+    btn.classList.toggle('wl-delete-active', _wlDeleteMode);
+  }
+  document.querySelectorAll('.wl-del-btn').forEach(el => {
+    el.style.display = _wlDeleteMode ? 'flex' : 'none';
+  });
+}
+
+async function deleteWorkoutSession(sessionId) {
+  if (!activeClient || !sessionId) return;
+  if (!confirm('Xoá session này khỏi lịch sử?')) return;
+  try {
+    // Delete exercises subcollection first
+    const exSnap = await getDocs(
+      collection(db, 'clients', activeClient.id, 'workoutHistory', sessionId, 'exercises')
+    );
+    const batch = writeBatch(db);
+    exSnap.docs.forEach(d => batch.delete(d.ref));
+    batch.delete(doc(db, 'clients', activeClient.id, 'workoutHistory', sessionId));
+    await batch.commit();
+
+    // Remove card from DOM instantly
+    const card = document.getElementById('wl-card-' + sessionId);
+    if (card) {
+      card.style.transition = 'opacity .25s, transform .25s';
+      card.style.opacity = '0';
+      card.style.transform = 'translateX(40px)';
+      setTimeout(() => card.remove(), 260);
+    }
+    // Refresh stats in background
+    renderStats();
+  } catch(e) {
+    alert('Lỗi: ' + e.message);
+  }
+}
+
 async function renderWorkoutLog() {
   const wrap = document.getElementById('workout-log-list');
   if (!wrap || !activeClient) return;
+  _wlDeleteMode = false;
   wrap.innerHTML = '<div class="loading">Loading sessions...</div>';
 
-  const hist = await getHistory(); // already newest-first
+  const hist = await getHistory();
   if (hist.length === 0) {
     wrap.innerHTML = '<div class="wl-empty">No workouts logged yet.<br>Complete a workout to see your history here.</div>';
     return;
   }
 
-  wrap.innerHTML = hist.map(s => {
+  const cards = hist.map(s => {
     const d = s.date?.toDate ? s.date.toDate() : (s.date ? new Date(s.date) : null);
     const dateStr = d && !isNaN(d)
       ? d.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' })
@@ -2757,17 +2800,13 @@ async function renderWorkoutLog() {
     const done  = s.done ?? 0;
     const total = s.total ?? 0;
     const pct   = total > 0 ? Math.round(done / total * 100) : 0;
-
-    // Top muscles from volumeByMuscle
     const muscles = s.volumeByMuscle
-      ? Object.entries(s.volumeByMuscle)
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 4)
-          .map(([m]) => m)
+      ? Object.entries(s.volumeByMuscle).sort((a,b) => b[1]-a[1]).slice(0,4).map(([m]) => m)
       : [];
 
     return `
-    <div class="wl-card">
+    <div class="wl-card" id="wl-card-${s.id}">
+      <button class="wl-del-btn" style="display:none" onclick="deleteWorkoutSession('${s.id}')">✕</button>
       <div class="wl-card-header">
         <div class="wl-date">${dateStr}</div>
         ${s.day ? `<div class="wl-day">${s.day}</div>` : ''}
@@ -2782,12 +2821,11 @@ async function renderWorkoutLog() {
           <div class="wl-stat-lbl">Completed</div>
         </div>
       </div>
-      ${muscles.length > 0 ? `
-      <div class="wl-muscles">
-        ${muscles.map(m => `<div class="wl-muscle-chip">${m}</div>`).join('')}
-      </div>` : ''}
+      ${muscles.length > 0 ? `<div class="wl-muscles">${muscles.map(m => `<div class="wl-muscle-chip">${m}</div>`).join('')}</div>` : ''}
     </div>`;
   }).join('');
+
+  wrap.innerHTML = cards;
 }
 
 // ── PROGRESS PHOTOS ────────────────────────────────────
@@ -4628,7 +4666,12 @@ h1 span{color:#7665ff;}
 .app-content{transition:opacity 0.18s ease,transform 0.18s ease;}
 .app-content.switching{opacity:0;transform:translateY(6px);pointer-events:none;}
 /* WORKOUT LOG */
-.wl-card{background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:1rem 1.25rem;margin-bottom:10px;display:flex;flex-direction:column;gap:8px;}
+.wl-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
+.wl-edit-btn{background:transparent;border:1px solid rgba(255,255,255,0.18);border-radius:6px;color:rgba(255,255,255,0.55);font-family:'Figtree',sans-serif;font-size:12px;font-weight:700;padding:5px 14px;cursor:pointer;letter-spacing:.5px;transition:all .15s;}
+.wl-edit-btn:hover,.wl-edit-btn.wl-delete-active{border-color:oklch(65% .22 25 / 0.6);color:oklch(65% .22 25);background:oklch(65% .22 25 / 0.08);}
+.wl-card{background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:1rem 1.25rem;margin-bottom:10px;display:flex;flex-direction:column;gap:8px;position:relative;}
+.wl-del-btn{position:absolute;top:-8px;left:-8px;width:22px;height:22px;border-radius:50%;background:oklch(55% .22 25);border:none;color:#fff;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,0.4);transition:transform .15s;}
+.wl-del-btn:hover{transform:scale(1.15);}
 .wl-card-header{display:flex;justify-content:space-between;align-items:center;}
 .wl-date{font-family:'Figtree',sans-serif;font-size:15px;font-weight:700;color:#fff;}
 .wl-day{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:#1e90ff;background:#2e1a00;border:1px solid #4e3000;border-radius:4px;padding:2px 8px;}
@@ -5594,7 +5637,10 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 
   <!-- LOG PAGE -->
   <div class="log-page" id="log-page">
-    <div class="section-title">Workout Log</div>
+    <div class="wl-header">
+      <div class="section-title" style="margin:0">Workout Log</div>
+      <button class="wl-edit-btn" id="wl-delete-toggle" onclick="toggleLogDeleteMode()">Edit</button>
+    </div>
     <div id="workout-log-list"><div class="loading">Loading sessions...</div></div>
   </div>
 
