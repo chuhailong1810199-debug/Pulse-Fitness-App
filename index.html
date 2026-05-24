@@ -1787,6 +1787,9 @@ async function hydrateExerciseLoadsForActiveDay() {
         setLoads = { ...setLoads, ...slData.setLoads };
         saveSetLoadsToLocal();
       }
+    } else if (Object.keys(exerciseLoads).length > 0 || Object.keys(setLoads).length > 0) {
+      // sessionLoads not in Firestore yet but localStorage has data → migrate it up now
+      saveLoadsFB();
     }
   } catch (_e) {}
 
@@ -1840,6 +1843,17 @@ function scheduleSaveLoadsFB() {
   clearTimeout(_saveLoadsFBTimer);
   _saveLoadsFBTimer = setTimeout(saveLoadsFB, 2000);
 }
+// Force-save immediately when user hides/closes the tab (mobile browser switch, etc.)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    clearTimeout(_saveLoadsFBTimer);
+    saveLoadsFB();
+  }
+});
+window.addEventListener('pagehide', () => {
+  clearTimeout(_saveLoadsFBTimer);
+  saveLoadsFB();
+});
 async function saveLoadsFB() {
   if (!activeClient || !activeDay) return;
   try {
