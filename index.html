@@ -4130,14 +4130,19 @@ body{font-family:"Figtree",-apple-system,BlinkMacSystemFont,sans-serif;backgroun
 /* ── SPLASH ANIMATION ── */
 .splash-bg{position:absolute;inset:0;background:#0a0010;}
 .splash-orb{position:absolute;width:340px;height:340px;border-radius:50%;background:radial-gradient(circle,oklch(45% .25 295/0.35) 0%,transparent 70%);top:50%;left:50%;transform:translate(-50%,-50%);animation:splash-orb-in .9s ease-out forwards;}
-.splash-content{position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;gap:16px;}
-.splash-logo{width:88px;height:88px;object-fit:contain;opacity:0;transform:scale(.55);animation:splash-logo-in .75s cubic-bezier(.22,1,.36,1) .1s forwards;}
-.splash-wordmark{font-family:'Figtree',sans-serif;font-size:38px;font-weight:900;letter-spacing:10px;color:#fff;opacity:0;transform:translateY(14px);animation:splash-text-in .5s ease-out .65s forwards;}
-.splash-sub{font-family:'Figtree',sans-serif;font-size:12px;font-weight:500;letter-spacing:3px;color:oklch(65% .18 295);text-transform:uppercase;opacity:0;animation:splash-text-in .4s ease-out 1s forwards;}
+.splash-content{position:relative;z-index:2;display:flex;align-items:center;justify-content:center;}
+.splash-logo{width:180px;height:180px;object-fit:contain;opacity:0;transform:scale(.5);animation:splash-logo-in .6s cubic-bezier(.22,1,.36,1) .15s forwards,splash-heartbeat 0.7s ease-in-out .85s infinite;}
 .splash-fade-out{animation:splash-out .45s ease-in forwards!important;}
 
 @keyframes splash-logo-in{to{opacity:1;transform:scale(1);}}
-@keyframes splash-text-in{to{opacity:1;transform:translateY(0);}}
+@keyframes splash-heartbeat{
+  0%  {transform:scale(1);}
+  14% {transform:scale(1.18);}
+  28% {transform:scale(1);}
+  42% {transform:scale(1.1);}
+  56% {transform:scale(1);}
+  100%{transform:scale(1);}
+}
 @keyframes splash-orb-in{from{opacity:0;transform:translate(-50%,-50%) scale(.6);}to{opacity:1;transform:translate(-50%,-50%) scale(1);}}
 @keyframes splash-out{to{opacity:0;}}
 .slide{display:none;position:absolute;inset:0;flex-direction:column;justify-content:flex-end;align-items:center;padding:0 0 env(safe-area-inset-bottom,24px);}
@@ -5357,8 +5362,6 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   <div class="splash-orb"></div>
   <div class="splash-content">
     <img src="images/pulse-logo.png" class="splash-logo" alt="Pulse">
-    <div class="splash-wordmark">PULSE</div>
-    <div class="splash-sub">by Long Chu</div>
   </div>
 </div>
 
