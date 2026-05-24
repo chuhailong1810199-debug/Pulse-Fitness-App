@@ -1769,7 +1769,7 @@ async function hydrateExerciseLoadsForActiveDay() {
   setLoads = {};
   if (!activeClient) return;
 
-  // Restore from localStorage first
+  // Restore from localStorage first (new-style key)
   const localKey = getLoadStorageKey();
   const localRaw = localStorage.getItem(localKey);
   if (localRaw) {
@@ -1785,6 +1785,51 @@ async function hydrateExerciseLoadsForActiveDay() {
       const parsed = JSON.parse(slRaw);
       if (parsed && typeof parsed === 'object') setLoads = parsed;
     } catch (_e) {}
+  }
+
+  // ── Migrate old-style localStorage keys (Mon/Wed/Fri → SessionA/B/C) ──
+  // If new key has no data, check if there's matching old-key data and migrate it.
+  if (Object.keys(exerciseLoads).length === 0 && /^Session[A-G]$/.test(activeDay)) {
+    const OLD_DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+    const prog = getProgram();
+    const activeDays = OLD_DAYS.filter(d => prog[d]);
+    const letterIndex = activeDay.charCodeAt(7) - 65; // 'SessionA' → 0, 'SessionB' → 1 …
+    const oldDay = activeDays[letterIndex];
+    if (oldDay) {
+      const oldExKey = `exerciseLoads_${activeClient.id}_${oldDay}`;
+      const oldSlKey = `setLoads_${activeClient.id}_${oldDay}`;
+      try {
+        const oldEx = localStorage.getItem(oldExKey);
+        if (oldEx) {
+          const p = JSON.parse(oldEx);
+          if (p && typeof p === 'object' && Object.keys(p).length > 0) {
+            // Remap keys: clientId_Mon_phaseIdx_exIdx → clientId_SessionA_phaseIdx_exIdx
+            const remapped = {};
+            for (const [k, v] of Object.entries(p)) {
+              remapped[k.replace(`_${oldDay}_`, `_${activeDay}_`)] = v;
+            }
+            exerciseLoads = remapped;
+            saveExerciseLoadsToLocal();
+            localStorage.removeItem(oldExKey);
+          }
+        }
+      } catch (_e) {}
+      try {
+        const oldSl = localStorage.getItem(oldSlKey);
+        if (oldSl) {
+          const p = JSON.parse(oldSl);
+          if (p && typeof p === 'object' && Object.keys(p).length > 0) {
+            const remapped = {};
+            for (const [k, v] of Object.entries(p)) {
+              remapped[k.replace(`_${oldDay}_`, `_${activeDay}_`)] = v;
+            }
+            setLoads = remapped;
+            saveSetLoadsToLocal();
+            localStorage.removeItem(oldSlKey);
+          }
+        }
+      } catch (_e) {}
+    }
   }
 
   // ── Check sessionLoads (real-time kg backup, updated on every input) ──
