@@ -295,6 +295,80 @@ async function loadUserProfile(user) {
 }
 
 // ── LOAD APP ───────────────────────────────────────────
+/**
+ * One-time localStorage migration: rename all day keys from Mon/Wed/Fri → SessionA/B/C.
+ * Runs on every app load but is a no-op once old keys are gone.
+ * Covers: exerciseLoads, setLoads, and the programCache.
+ */
+function migrateLocalStorageDayKeys(clientId) {
+  if (!clientId) return;
+  const OLD_DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+  // 1. Migrate programCache: pulse_prog_{clientId}
+  try {
+    const progRaw = localStorage.getItem('pulse_prog_' + clientId);
+    if (progRaw) {
+      const prog = JSON.parse(progRaw);
+      const oldKeys = Object.keys(prog).filter(k => OLD_DAYS.includes(k));
+      if (oldKeys.length > 0) {
+        const newProg = {};
+        let idx = 0;
+        // Keep non-day keys as-is, rename day keys in order
+        for (const k of Object.keys(prog)) {
+          if (OLD_DAYS.includes(k)) {
+            newProg[`Session${String.fromCharCode(65 + idx++)}`] = prog[k];
+          } else {
+            newProg[k] = prog[k];
+          }
+        }
+        localStorage.setItem('pulse_prog_' + clientId, JSON.stringify(newProg));
+        console.log('[migrate-ls] programCache updated:', Object.keys(newProg));
+      }
+    }
+  } catch(_e) {}
+
+  // 2. Migrate exerciseLoads_{clientId}_{oldDay} → exerciseLoads_{clientId}_Session{X}
+  //    Also remap the inner key strings: clientId_Mon_0_0 → clientId_SessionA_0_0
+  OLD_DAYS.forEach((oldDay, i) => {
+    const sessionKey = `Session${String.fromCharCode(65 + i)}`;
+    const oldExKey = `exerciseLoads_${clientId}_${oldDay}`;
+    const newExKey = `exerciseLoads_${clientId}_${sessionKey}`;
+    try {
+      const raw = localStorage.getItem(oldExKey);
+      if (raw) {
+        const data = JSON.parse(raw);
+        if (data && typeof data === 'object') {
+          const remapped = {};
+          for (const [k, v] of Object.entries(data)) {
+            remapped[k.replace(`_${oldDay}_`, `_${sessionKey}_`)] = v;
+          }
+          localStorage.setItem(newExKey, JSON.stringify(remapped));
+        }
+        localStorage.removeItem(oldExKey);
+        console.log(`[migrate-ls] exerciseLoads: ${oldDay} → ${sessionKey}`);
+      }
+    } catch(_e) {}
+
+    const oldSlKey = `setLoads_${clientId}_${oldDay}`;
+    const newSlKey = `setLoads_${clientId}_${sessionKey}`;
+    try {
+      const raw = localStorage.getItem(oldSlKey);
+      if (raw) {
+        const data = JSON.parse(raw);
+        if (data && typeof data === 'object') {
+          const remapped = {};
+          for (const [k, v] of Object.entries(data)) {
+            remapped[k.replace(`_${oldDay}_`, `_${sessionKey}_`)] = v;
+          }
+          localStorage.setItem(newSlKey, JSON.stringify(remapped));
+        }
+        localStorage.removeItem(oldSlKey);
+        console.log(`[migrate-ls] setLoads: ${oldDay} → ${sessionKey}`);
+      }
+    } catch(_e) {}
+  });
+}
+
 async function loadApp() {
   // Show role badge
   const badge = document.getElementById('role-badge');
@@ -370,6 +444,9 @@ async function loadApp() {
     await checkAndShowBaseline();
   }
 
+  // ── One-time: migrate old Mon/Wed/Fri localStorage keys → SessionA/B/C ──
+  if (activeClient) migrateLocalStorageDayKeys(activeClient.id);
+
   // ── Show cached program instantly while Firestore loads ──
   if (activeClient) {
     const cached = loadProgramCache(activeClient.id);
@@ -429,11 +506,12 @@ function subscribeProgram() {
     if (activeClient && activeClient.id === listenId) {
       activeClient.program = clientObj.program;
       const days = Object.keys(activeClient.program);
-      if (days.length > 0 && !activeClient.program[activeDay]) {
-        activeDay = days[0];
-      }
+      const dayChanged = days.length > 0 && !activeClient.program[activeDay];
+      if (dayChanged) activeDay = days[0];
       renderDayTabs();
       renderExercises();
+      // Re-hydrate if activeDay changed (e.g. old cache had Mon/Wed/Fri, Firestore now has SessionA/B/C)
+      if (dayChanged) hydrateExerciseLoadsForActiveDay().then(() => renderExercises());
     }
   });
 }
@@ -1787,51 +1865,6 @@ async function hydrateExerciseLoadsForActiveDay() {
     } catch (_e) {}
   }
 
-  // ── Migrate old-style localStorage keys (Mon/Wed/Fri → SessionA/B/C) ──
-  // If new key has no data, check if there's matching old-key data and migrate it.
-  if (Object.keys(exerciseLoads).length === 0 && /^Session[A-G]$/.test(activeDay)) {
-    const OLD_DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-    const prog = getProgram();
-    const activeDays = OLD_DAYS.filter(d => prog[d]);
-    const letterIndex = activeDay.charCodeAt(7) - 65; // 'SessionA' → 0, 'SessionB' → 1 …
-    const oldDay = activeDays[letterIndex];
-    if (oldDay) {
-      const oldExKey = `exerciseLoads_${activeClient.id}_${oldDay}`;
-      const oldSlKey = `setLoads_${activeClient.id}_${oldDay}`;
-      try {
-        const oldEx = localStorage.getItem(oldExKey);
-        if (oldEx) {
-          const p = JSON.parse(oldEx);
-          if (p && typeof p === 'object' && Object.keys(p).length > 0) {
-            // Remap keys: clientId_Mon_phaseIdx_exIdx → clientId_SessionA_phaseIdx_exIdx
-            const remapped = {};
-            for (const [k, v] of Object.entries(p)) {
-              remapped[k.replace(`_${oldDay}_`, `_${activeDay}_`)] = v;
-            }
-            exerciseLoads = remapped;
-            saveExerciseLoadsToLocal();
-            localStorage.removeItem(oldExKey);
-          }
-        }
-      } catch (_e) {}
-      try {
-        const oldSl = localStorage.getItem(oldSlKey);
-        if (oldSl) {
-          const p = JSON.parse(oldSl);
-          if (p && typeof p === 'object' && Object.keys(p).length > 0) {
-            const remapped = {};
-            for (const [k, v] of Object.entries(p)) {
-              remapped[k.replace(`_${oldDay}_`, `_${activeDay}_`)] = v;
-            }
-            setLoads = remapped;
-            saveSetLoadsToLocal();
-            localStorage.removeItem(oldSlKey);
-          }
-        }
-      } catch (_e) {}
-    }
-  }
-
   // ── Check sessionLoads (real-time kg backup, updated on every input) ──
   try {
     const slSnap = await getDoc(doc(db, 'clients', activeClient.id, 'sessionLoads', activeDay));
@@ -1846,8 +1879,11 @@ async function hydrateExerciseLoadsForActiveDay() {
         saveSetLoadsToLocal();
       }
     } else if (Object.keys(exerciseLoads).length > 0 || Object.keys(setLoads).length > 0) {
-      // sessionLoads not in Firestore yet but localStorage has data → migrate it up now
-      saveLoadsFB();
+      // sessionLoads not in Firestore yet but we have local data → push directly (bypass _loadsHydrated guard)
+      try {
+        await setDoc(doc(db, 'clients', activeClient.id, 'sessionLoads', activeDay),
+          { exerciseLoads, setLoads, updatedAt: serverTimestamp() });
+      } catch(_e) {}
     }
   } catch (_e) {}
 
