@@ -2189,7 +2189,7 @@ function renderExercises() {
     } else {
       html += `<span class="phase-tag ${phaseTagClass[phase.tag]||'phase-warmup'}">${phase.name}</span></div>`;
     }
-    html += phase.note ? `<div class="trainer-note-card"><span class="trainer-note-icon">💡</span><div><div class="trainer-note-label">Trainer Note</div><div class="trainer-note-text">${phase.note}</div></div></div>` : '';
+    // trainer-note-card removed (user request)
     if (!editMode) {
       // (unreachable in edit mode — kept for safety)
       html += `<div class="exercise-flow">`;
