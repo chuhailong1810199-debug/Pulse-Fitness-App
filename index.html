@@ -281,9 +281,10 @@ async function loadUserProfile(user) {
         document.getElementById(id)?.classList.add('hidden');
       });
       slidesEl.classList.remove('hidden');
+      // Auto-dismiss splash after 2.3s
+      setTimeout(() => { if (!window._splashDismissed) skipSlides(); }, 2300);
       // Load app data in background so it's ready when slides finish
       loadApp().then(() => {
-        // App is loaded; skipSlides() will call showScreen('app')
         window._appLoaded = true;
       });
       return;
@@ -4123,8 +4124,22 @@ body{font-family:"Figtree",-apple-system,BlinkMacSystemFont,sans-serif;backgroun
 /* slide-btn-secondary */
 .slide-next-ghost{width:100%;padding:12px;border-radius:999px;background:oklch(100% 0 0/0.05);border:1px solid oklch(100% 0 0/0.10);color:oklch(65% 0 0);font-family:'Figtree',sans-serif;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:1.5px;cursor:pointer;transition:all .2s;margin-top:8px;display:block;text-align:center;}
 .slide-next-ghost:hover{background:oklch(100% 0 0/0.08);color:oklch(80% 0 0);}
-.slides-screen{position:fixed;inset:0;background:oklch(9% 0 0);z-index:300;overflow:hidden;}
+.slides-screen{position:fixed;inset:0;background:#0a0010;z-index:300;overflow:hidden;display:flex;align-items:center;justify-content:center;}
 .slides-screen.hidden{display:none!important;}
+
+/* ── SPLASH ANIMATION ── */
+.splash-bg{position:absolute;inset:0;background:#0a0010;}
+.splash-orb{position:absolute;width:340px;height:340px;border-radius:50%;background:radial-gradient(circle,oklch(45% .25 295/0.35) 0%,transparent 70%);top:50%;left:50%;transform:translate(-50%,-50%);animation:splash-orb-in .9s ease-out forwards;}
+.splash-content{position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;gap:16px;}
+.splash-logo{width:88px;height:88px;object-fit:contain;opacity:0;transform:scale(.55);animation:splash-logo-in .75s cubic-bezier(.22,1,.36,1) .1s forwards;}
+.splash-wordmark{font-family:'Figtree',sans-serif;font-size:38px;font-weight:900;letter-spacing:10px;color:#fff;opacity:0;transform:translateY(14px);animation:splash-text-in .5s ease-out .65s forwards;}
+.splash-sub{font-family:'Figtree',sans-serif;font-size:12px;font-weight:500;letter-spacing:3px;color:oklch(65% .18 295);text-transform:uppercase;opacity:0;animation:splash-text-in .4s ease-out 1s forwards;}
+.splash-fade-out{animation:splash-out .45s ease-in forwards!important;}
+
+@keyframes splash-logo-in{to{opacity:1;transform:scale(1);}}
+@keyframes splash-text-in{to{opacity:1;transform:translateY(0);}}
+@keyframes splash-orb-in{from{opacity:0;transform:translate(-50%,-50%) scale(.6);}to{opacity:1;transform:translate(-50%,-50%) scale(1);}}
+@keyframes splash-out{to{opacity:0;}}
 .slide{display:none;position:absolute;inset:0;flex-direction:column;justify-content:flex-end;align-items:center;padding:0 0 env(safe-area-inset-bottom,24px);}
 .slide.active{display:flex;}
 /* backgrounds */
@@ -5229,7 +5244,10 @@ function pwaTapAddSlide() {
   }
 }
 function skipSlides() {
-  document.getElementById('slides-screen').classList.add('hidden');
+  window._splashDismissed = true;
+  const splash = document.getElementById('slides-screen');
+  splash.classList.add('splash-fade-out');
+  setTimeout(() => splash.classList.add('hidden'), 450);
   showScreen('app');
   // If app data is still loading, show a brief loading state
   if (!window._appLoaded) {
@@ -5333,9 +5351,19 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 </head>
 <body>
 
-<!-- INTRO SLIDES -->
+<!-- SPLASH SCREEN -->
 <div id="slides-screen" class="slides-screen">
+  <div class="splash-bg"></div>
+  <div class="splash-orb"></div>
+  <div class="splash-content">
+    <img src="images/pulse-logo.png" class="splash-logo" alt="Pulse">
+    <div class="splash-wordmark">PULSE</div>
+    <div class="splash-sub">by Long Chu</div>
+  </div>
+</div>
 
+<!-- OLD SLIDES (hidden, kept for skipSlides compatibility) -->
+<div id="slides-screen-old" style="display:none;">
   <!-- Slide 1 -->
   <div class="slide active" id="slide-1">
     <video class="slide-video" autoplay muted loop playsinline>
@@ -5463,6 +5491,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   </div>
 
 </div>
+</div><!-- end slides-screen-old -->
 
 <!-- PWA ONBOARDING SCREEN -->
 <div id="pwa-prompt-screen" class="pwa-screen hidden">
