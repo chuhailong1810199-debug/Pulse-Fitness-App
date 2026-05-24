@@ -103,6 +103,7 @@ let _dashVolumeChart = null;
 let exerciseLoads = {};
 let setLoads = {}; // exerciseKey → [kg_set1, kg_set2, ...]
 let _saveLoadsFBTimer = null;
+let _loadsHydrated = false; // guard: prevent saving empty data before hydration completes
 let strengthHistory = {}; // exerciseKey → [{date, kg}] sorted newest first
 
 function parseSetsCount(setsReps) {
@@ -1763,6 +1764,7 @@ function setSetLoad(key, si, rawValue) {
 }
 
 async function hydrateExerciseLoadsForActiveDay() {
+  _loadsHydrated = false;
   exerciseLoads = {};
   setLoads = {};
   if (!activeClient) return;
@@ -1845,6 +1847,7 @@ async function hydrateExerciseLoadsForActiveDay() {
     saveExerciseLoadsToLocal();
     saveSetLoadsToLocal();
   } catch (_e) {}
+  _loadsHydrated = true;
 }
 
 // ── PERSISTENT LOAD SYNC (Firestore) ───────────────────
@@ -1866,7 +1869,7 @@ window.addEventListener('pagehide', () => {
   saveLoadsFB();
 });
 async function saveLoadsFB() {
-  if (!activeClient || !activeDay) return;
+  if (!activeClient || !activeDay || !_loadsHydrated) return;
   try {
     // Full overwrite (no merge) so deleted/zeroed kg values don't persist as stale data
     await setDoc(
