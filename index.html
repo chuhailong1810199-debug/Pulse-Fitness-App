@@ -89,7 +89,7 @@ let userRole    = null; // "coach" | "client"
 let userClientId = null;
 let clientsData  = [];
 let activeClient = null;
-let activeDay    = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][new Date().getDay()===0?6:new Date().getDay()-1];
+let activeDay    = 'SessionA'; // default; overridden when program loads
 let exerciseState = {};
 let editMode = false;
 let customPrograms = {};
@@ -120,7 +120,7 @@ function parseSetsRepsSplit(setsReps) {
   return { sets: '1', reps: setsReps.trim() || '—' };
 }
 
-const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun','SessionA','SessionB','SessionC','SessionD','SessionE','SessionF','SessionG'];
 const MUSCLE_WEIGHTS = {P:1.0, S:0.5, T:0.333, Q:0.25};
 const phaseTagClass = {warmup:'phase-warmup',core:'phase-core',strength:'phase-strength',accessories:'phase-accessories',circuit:'phase-accessories'};
 
@@ -773,19 +773,28 @@ function loadProgramCache(clientId) {
 }
 
 // ── SESSION LABEL HELPERS ──────────────────────────────
-// Returns "Session A", "Session B", etc. based on position in program
+// Returns "Session A", "Session B", etc.
+// Handles both new-style keys (SessionA) and old-style (Mon/Wed/Fri)
 function getSessionLabel(dayKey, prog) {
+  // New-style key: SessionA → "Session A"
+  if (/^Session[A-G]$/.test(dayKey)) return dayKey.replace('Session', 'Session ');
+  // Old-style: compute position from DAYS order
   const p = prog || getProgram();
   const avail = DAYS.filter(d => p[d]);
   const idx = avail.indexOf(dayKey);
   return idx >= 0 ? `Session ${String.fromCharCode(65 + idx)}` : 'Session ?';
 }
-// Returns "SESSION A — Subtitle" (strips day prefix from stored label)
+// Returns "SESSION A — Subtitle"
 function getSessionHeader(dayKey) {
   const prog = getProgram();
-  const avail = DAYS.filter(d => prog[d]);
-  const idx = avail.indexOf(dayKey);
-  const letter = idx >= 0 ? String.fromCharCode(65 + idx) : '?';
+  let letter;
+  if (/^Session[A-G]$/.test(dayKey)) {
+    letter = dayKey.replace('Session', '');
+  } else {
+    const avail = DAYS.filter(d => prog[d]);
+    const idx = avail.indexOf(dayKey);
+    letter = idx >= 0 ? String.fromCharCode(65 + idx) : '?';
+  }
   const label = prog[dayKey]?.label || '';
   const sub = label.replace(/^SESSION\s+[A-Za-z0-9]+\s*[—\-–]\s*/i, '').trim();
   return sub ? `SESSION ${letter} — ${sub}` : `SESSION ${letter}`;
