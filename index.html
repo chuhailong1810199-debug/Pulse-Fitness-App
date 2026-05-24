@@ -701,8 +701,8 @@ function renderAIProgramPreview(program, clientName) {
     const session = program[day];
     html += `<div style="margin-bottom:20px;">
       <div style="font-weight:700;font-size:11px;color:#fff;padding:6px 12px;background:#111827;border-radius:6px;margin-bottom:8px;letter-spacing:.5px;display:flex;justify-content:space-between;align-items:center;">
-        <span>📅 ${day}</span>
-        <span style="color:rgba(255,255,255,.4);font-weight:400;font-size:10px;">${session.label || ''}</span>
+        <span>${getSessionLabel(day, program)}</span>
+        <span style="color:rgba(255,255,255,.4);font-weight:400;font-size:10px;">${(session.label || '').replace(/^SESSION\s+[A-Za-z0-9]+\s*[—\-–]\s*/i,'').trim()}</span>
       </div>`;
     for (const phase of (session.phases || [])) {
       const col = phaseColors[phase.tag] || '#aaa';
@@ -773,21 +773,22 @@ function loadProgramCache(clientId) {
 }
 
 // ── SESSION LABEL HELPERS ──────────────────────────────
-// Returns "Session 1", "Session 2", etc. based on position in program
-function getSessionLabel(dayKey) {
-  const avail = DAYS.filter(d => getProgram()[d]);
+// Returns "Session A", "Session B", etc. based on position in program
+function getSessionLabel(dayKey, prog) {
+  const p = prog || getProgram();
+  const avail = DAYS.filter(d => p[d]);
   const idx = avail.indexOf(dayKey);
-  return `Session ${idx >= 0 ? idx + 1 : '?'}`;
+  return idx >= 0 ? `Session ${String.fromCharCode(65 + idx)}` : 'Session ?';
 }
-// Returns "SESSION 1 — Subtitle" (strips SESSION A/B/C prefix from stored label)
+// Returns "SESSION A — Subtitle" (strips day prefix from stored label)
 function getSessionHeader(dayKey) {
   const prog = getProgram();
   const avail = DAYS.filter(d => prog[d]);
   const idx = avail.indexOf(dayKey);
-  const n = idx >= 0 ? idx + 1 : '?';
+  const letter = idx >= 0 ? String.fromCharCode(65 + idx) : '?';
   const label = prog[dayKey]?.label || '';
   const sub = label.replace(/^SESSION\s+[A-Za-z0-9]+\s*[—\-–]\s*/i, '').trim();
-  return sub ? `SESSION ${n} — ${sub}` : `SESSION ${n}`;
+  return sub ? `SESSION ${letter} — ${sub}` : `SESSION ${letter}`;
 }
 
 async function saveProgramToFirestore() {
@@ -2823,7 +2824,7 @@ async function renderWorkoutLog() {
       <button class="wl-del-btn" style="display:none" onclick="deleteWorkoutSession('${s.id}')">✕</button>
       <div class="wl-card-header">
         <div class="wl-date">${dateStr}</div>
-        ${s.day ? `<div class="wl-day">${s.day}</div>` : ''}
+        ${s.day ? `<div class="wl-day">${getSessionLabel(s.day, activeClient?.program)}</div>` : ''}
       </div>
       <div class="wl-stats">
         <div class="wl-stat">
@@ -3395,8 +3396,8 @@ function renderFreeProgramPreview(program) {
     const session = program[day];
     html += `<div style="margin-bottom:20px;">
       <div style="font-weight:700;font-size:11px;color:#fff;padding:7px 12px;background:#111827;border-radius:7px;margin-bottom:8px;letter-spacing:.5px;display:flex;justify-content:space-between;align-items:center;">
-        <span>📅 ${day}</span>
-        <span style="color:rgba(255,255,255,.4);font-weight:400;font-size:10px;">${session.label || ''}</span>
+        <span>${getSessionLabel(day, program)}</span>
+        <span style="color:rgba(255,255,255,.4);font-weight:400;font-size:10px;">${(session.label || '').replace(/^SESSION\s+[A-Za-z0-9]+\s*[—\-–]\s*/i,'').trim()}</span>
       </div>`;
     for (const phase of (session.phases || [])) {
       const col = phaseColors[phase.tag] || '#aaa';
