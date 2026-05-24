@@ -531,10 +531,18 @@ async function switchClient(id) {
   activeClient = next;
   _sessionLogged = false; updateFinishBtn();
   document.getElementById('client-level').textContent = activeClient.level || '—';
+
+  // Set activeDay for new client BEFORE hydrating (subscribeProgram fires async during await)
+  const newProg = activeClient.program || {};
+  const newDays = DAYS.filter(d => newProg[d]);
+  if (newDays.length > 0 && !newProg[activeDay]) activeDay = newDays[0];
+
   if (_programUnsub) _programUnsub();
-  subscribeProgram();
-  await hydrateExerciseLoadsForActiveDay();
+  renderDayTabs(); // render tabs with correct day before hydration
+  await hydrateExerciseLoadsForActiveDay(); // hydrate first, then subscribe to avoid snapshot race
+  await loadStrengthHistory();
   renderExercises();
+  subscribeProgram(); // subscribe AFTER hydration so initial snapshot doesn't clear exerciseLoads
   await renderStats();
   renderCoachDashboard();
   if (document.getElementById('log-page')?.classList.contains('active')) {
@@ -1887,6 +1895,11 @@ async function hydrateExerciseLoadsForActiveDay() {
     }
   } catch (_e) {}
 
+  // ── Mark hydrated HERE — localStorage + sessionLoads are fully loaded ──
+  // Must be set before workoutHistory fallback so saveLoadsFB works even if
+  // there is no matching workoutHistory (early return below would skip it otherwise).
+  _loadsHydrated = true;
+
   // ── Fallback: last completed workout from workoutHistory ──
   // Also checks if today's session was already logged → locks the finish button.
   try {
@@ -1897,7 +1910,7 @@ async function hydrateExerciseLoadsForActiveDay() {
     ));
     const todayMidnight = new Date(); todayMidnight.setHours(0,0,0,0);
     const latestDaySession = histSnap.docs.find(d => d.data().day === activeDay);
-    if (!latestDaySession) return;
+    if (!latestDaySession) return; // no history yet — fine, _loadsHydrated already true
 
     // If the latest session for this day was TODAY → mark as already logged
     const sessionDate = latestDaySession.data().date?.toDate?.() || null;
@@ -1928,7 +1941,6 @@ async function hydrateExerciseLoadsForActiveDay() {
     saveExerciseLoadsToLocal();
     saveSetLoadsToLocal();
   } catch (_e) {}
-  _loadsHydrated = true;
 }
 
 // ── PERSISTENT LOAD SYNC (Firestore) ───────────────────
