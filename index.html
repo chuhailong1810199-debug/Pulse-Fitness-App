@@ -4253,23 +4253,39 @@ body{font-family:"Figtree",-apple-system,BlinkMacSystemFont,sans-serif;backgroun
 .slides-screen.hidden{display:none!important;}
 
 /* ── SPLASH ANIMATION ── */
-.splash-bg{position:absolute;inset:0;background:#0a0010;}
-.splash-orb{position:absolute;width:340px;height:340px;border-radius:50%;background:radial-gradient(circle,oklch(45% .25 295/0.35) 0%,transparent 70%);top:50%;left:50%;transform:translate(-50%,-50%);animation:splash-orb-in .9s ease-out forwards;}
-.splash-content{position:relative;z-index:2;display:flex;align-items:center;justify-content:center;}
-.splash-logo{width:180px;height:180px;object-fit:contain;opacity:0;transform:scale(.5);animation:splash-logo-in .6s cubic-bezier(.22,1,.36,1) .15s forwards,splash-heartbeat 0.7s ease-in-out .85s infinite;}
-.splash-fade-out{animation:splash-out .45s ease-in forwards!important;}
+.splash-bg{position:absolute;inset:0;background:#08000f;}
+.splash-ring{position:absolute;top:50%;left:50%;border-radius:50%;border:1px solid rgba(160,100,255,0.20);animation:sp-ring 2.6s ease-out infinite;}
+.splash-ring:nth-child(1){width:220px;height:220px;margin:-110px 0 0 -110px;animation-delay:0s;}
+.splash-ring:nth-child(2){width:320px;height:320px;margin:-160px 0 0 -160px;animation-delay:.45s;}
+.splash-ring:nth-child(3){width:440px;height:440px;margin:-220px 0 0 -220px;animation-delay:.9s;}
+.splash-glow{position:absolute;top:50%;left:50%;width:220px;height:220px;margin:-110px 0 0 -110px;border-radius:50%;background:radial-gradient(circle,rgba(130,55,240,0.28) 0%,transparent 70%);animation:sp-glow 2s ease-in-out infinite alternate;}
+.splash-content{position:relative;z-index:10;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;}
+.splash-logo{width:160px;height:160px;object-fit:contain;opacity:0;transform:scale(.45);animation:sp-logo-in .65s cubic-bezier(.22,1,.36,1) .2s forwards,sp-heartbeat .75s ease-in-out 1s infinite;}
+.splash-brand{opacity:0;transform:translateY(14px);animation:sp-text-in .5s ease-out .65s forwards;}
+.splash-brand-name{font-family:'Figtree','Inter',system-ui,sans-serif;font-size:28px;font-weight:700;letter-spacing:9px;color:#fff;text-align:center;text-transform:uppercase;}
+.splash-brand-sub{font-family:'Figtree','Inter',system-ui,sans-serif;font-size:10px;letter-spacing:4px;color:rgba(170,110,255,0.7);text-align:center;text-transform:uppercase;margin-top:5px;}
+.splash-ekg{position:absolute;bottom:18%;left:50%;transform:translateX(-50%);width:260px;z-index:10;opacity:0;animation:sp-ekg-appear .4s ease-out 1s forwards;}
+.splash-ekg-path{stroke:rgba(150,70,255,0.55);stroke-width:1.5;fill:none;stroke-dasharray:440;stroke-dashoffset:440;animation:sp-ekg-draw 1.1s ease-out 1.05s forwards;}
+.splash-fade-out{animation:sp-out .45s ease-in forwards!important;}
 
-@keyframes splash-logo-in{to{opacity:1;transform:scale(1);}}
-@keyframes splash-heartbeat{
-  0%  {transform:scale(1);}
-  14% {transform:scale(1.18);}
-  28% {transform:scale(1);}
-  42% {transform:scale(1.1);}
-  56% {transform:scale(1);}
-  100%{transform:scale(1);}
+@keyframes sp-logo-in{to{opacity:1;transform:scale(1);}}
+@keyframes sp-heartbeat{
+  0%,100%{transform:scale(1);}
+  15%{transform:scale(1.18);}
+  30%{transform:scale(1.04);}
+  45%{transform:scale(1.12);}
+  60%{transform:scale(1);}
 }
-@keyframes splash-orb-in{from{opacity:0;transform:translate(-50%,-50%) scale(.6);}to{opacity:1;transform:translate(-50%,-50%) scale(1);}}
-@keyframes splash-out{to{opacity:0;}}
+@keyframes sp-text-in{to{opacity:1;transform:translateY(0);}}
+@keyframes sp-ring{
+  0%{transform:scale(.65);opacity:0;}
+  25%{opacity:1;}
+  100%{transform:scale(1.5);opacity:0;}
+}
+@keyframes sp-glow{from{transform:scale(1);}to{transform:scale(1.35);opacity:.6;}}
+@keyframes sp-ekg-appear{to{opacity:1;}}
+@keyframes sp-ekg-draw{to{stroke-dashoffset:0;}}
+@keyframes sp-out{to{opacity:0;}}
 .slide{display:none;position:absolute;inset:0;flex-direction:column;justify-content:flex-end;align-items:center;padding:0 0 env(safe-area-inset-bottom,24px);}
 .slide.active{display:flex;}
 /* backgrounds */
@@ -5488,9 +5504,21 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 <!-- SPLASH SCREEN -->
 <div id="slides-screen" class="slides-screen">
   <div class="splash-bg"></div>
-  <div class="splash-orb"></div>
+  <div class="splash-glow"></div>
+  <div class="splash-ring"></div>
+  <div class="splash-ring"></div>
+  <div class="splash-ring"></div>
   <div class="splash-content">
     <img src="images/pulse-logo.png" class="splash-logo" alt="Pulse">
+    <div class="splash-brand">
+      <div class="splash-brand-name">PULSE</div>
+      <div class="splash-brand-sub">by Long Chu</div>
+    </div>
+  </div>
+  <div class="splash-ekg">
+    <svg width="260" height="44" viewBox="0 0 260 44" overflow="visible">
+      <path class="splash-ekg-path" d="M0,22 L70,22 L82,22 L92,6 L104,38 L114,6 L122,22 L136,22 L260,22"/>
+    </svg>
   </div>
 </div>
 
