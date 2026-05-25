@@ -3676,8 +3676,15 @@ function openExercisePicker(pi) {
   document.getElementById('picker-muscle').value = '';
   document.getElementById('picker-tool').value   = '';
   document.getElementById('picker-diff').value   = '';
+  // Reset muscle chips
+  document.querySelectorAll('.pmc').forEach(c => c.classList.toggle('active', c.dataset.m === ''));
   document.getElementById('exercise-picker-modal').classList.add('open');
   setTimeout(() => document.getElementById('picker-search').focus(), 100);
+}
+function setPickerMuscle(btn, val) {
+  document.getElementById('picker-muscle').value = val;
+  document.querySelectorAll('.pmc').forEach(c => c.classList.toggle('active', c === btn));
+  renderPickerResults();
 }
 
 function closeExercisePicker() {
@@ -3691,7 +3698,13 @@ function renderPickerResults() {
   const diff = document.getElementById('picker-diff').value;
 
   let list = _exerciseCache;
-  if (q)    list = list.filter(e => e.name && e.name.toLowerCase().includes(q));
+  if (q) list = list.filter(e => {
+    if (e.name && e.name.toLowerCase().includes(q)) return true;
+    if (e.category && e.category.toLowerCase().includes(q)) return true;
+    if (e.muscles && Object.keys(e.muscles).some(m => m.toLowerCase().includes(q))) return true;
+    if (e.tool && e.tool.toLowerCase().includes(q)) return true;
+    return false;
+  });
   if (mus)  list = list.filter(e => {
     const musLow = mus.toLowerCase();
     const catLow = (e.category || '').toLowerCase();
@@ -5107,6 +5120,11 @@ h1 span{color:#7665ff;}
 
 /* ── EXERCISE PICKER (Step 6) ─────────────────────── */
 .picker-modal{max-height:85vh;overflow:hidden;display:flex;flex-direction:column;}
+.picker-muscle-chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:4px;scrollbar-width:none;}
+.picker-muscle-chips::-webkit-scrollbar{display:none;}
+.pmc{flex-shrink:0;padding:4px 12px;border-radius:999px;border:1px solid rgba(255,255,255,0.18);background:transparent;color:rgba(255,255,255,0.55);font-size:11px;font-weight:600;letter-spacing:.4px;cursor:pointer;transition:all .15s;}
+.pmc.active{background:oklch(55% .22 295);border-color:oklch(55% .22 295);color:#fff;}
+.pmc:hover:not(.active){border-color:rgba(255,255,255,0.4);color:rgba(255,255,255,0.85);}
 .picker-results{overflow-y:auto;flex:1;max-height:380px;display:flex;flex-direction:column;gap:6px;}
 .picker-loading{color:rgba(255,255,255,0.60);font-size:13px;padding:20px;text-align:center;}
 .picker-item{background:#1a1a1a;border:1px solid rgba(255,255,255,0.16);border-radius:6px;padding:10px;cursor:pointer;transition:border-color .15s;}
@@ -6293,15 +6311,24 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 <div class="modal-overlay" id="exercise-picker-modal" onclick="if(event.target===this)closeExercisePicker()">
   <div class="modal picker-modal">
     <div class="modal-title">Select exercise</div>
-    <input class="form-input" id="picker-search" placeholder="Search exercises..." oninput="renderPickerResults()" style="margin-bottom:10px">
+    <input class="form-input" id="picker-search" placeholder="Search by name or muscle (e.g. chest, glutes)…" oninput="renderPickerResults()" style="margin-bottom:8px">
+    <div class="picker-muscle-chips" id="picker-muscle-chips">
+      <button class="pmc active" data-m="" onclick="setPickerMuscle(this,'')">All</button>
+      <button class="pmc" data-m="Chest" onclick="setPickerMuscle(this,'Chest')">Chest</button>
+      <button class="pmc" data-m="Back" onclick="setPickerMuscle(this,'Back')">Back</button>
+      <button class="pmc" data-m="Lats" onclick="setPickerMuscle(this,'Lats')">Lats</button>
+      <button class="pmc" data-m="Shoulders" onclick="setPickerMuscle(this,'Shoulders')">Shoulders</button>
+      <button class="pmc" data-m="Biceps" onclick="setPickerMuscle(this,'Biceps')">Biceps</button>
+      <button class="pmc" data-m="Triceps" onclick="setPickerMuscle(this,'Triceps')">Triceps</button>
+      <button class="pmc" data-m="Glutes" onclick="setPickerMuscle(this,'Glutes')">Glutes</button>
+      <button class="pmc" data-m="Quads" onclick="setPickerMuscle(this,'Quads')">Quads</button>
+      <button class="pmc" data-m="Hamstrings" onclick="setPickerMuscle(this,'Hamstrings')">Hamstrings</button>
+      <button class="pmc" data-m="Core" onclick="setPickerMuscle(this,'Core')">Core</button>
+      <button class="pmc" data-m="Calves" onclick="setPickerMuscle(this,'Calves')">Calves</button>
+      <button class="pmc" data-m="Traps" onclick="setPickerMuscle(this,'Traps')">Traps</button>
+    </div>
+    <input type="hidden" id="picker-muscle" value="">
     <div style="display:flex;gap:8px;margin-bottom:10px">
-      <select class="form-select" id="picker-muscle" onchange="renderPickerResults()" style="flex:1">
-        <option value="">All muscles</option>
-        <option>Chest</option><option>Back</option><option>Shoulders</option>
-        <option>Biceps</option><option>Triceps</option><option>Glutes</option>
-        <option>Quads</option><option>Hamstrings</option><option>Core</option>
-        <option>Calves</option><option>Traps</option><option>Lats</option>
-      </select>
       <select class="form-select" id="picker-tool" onchange="renderPickerResults()" style="flex:1">
         <option value="">All equipment</option>
         <option>Barbell</option><option>Dumbbell</option><option>Cable</option>
