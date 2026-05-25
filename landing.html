@@ -378,15 +378,9 @@
       position: relative;
     }
     .cert-card:hover { border-color: var(--border-md); }
-    .cert-card img { width: 100%; height: auto; display: block; filter: brightness(0.72); }
-    .cert-card::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: rgba(8, 6, 20, 0.32);
-      pointer-events: none;
-    }
-    .cert-card:hover img { filter: brightness(0.85); }
+    .cert-card img { width: 100%; height: auto; display: block; filter: none; }
+    .cert-card::after { display: none; }
+    .cert-card:hover img { filter: none; }
     .cred-grid {
       margin-top: 20px;
       display: flex;
