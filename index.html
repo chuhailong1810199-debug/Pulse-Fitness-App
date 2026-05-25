@@ -4264,8 +4264,6 @@ body{font-family:"Figtree",-apple-system,BlinkMacSystemFont,sans-serif;backgroun
 .splash-brand{opacity:0;transform:translateY(14px);animation:sp-text-in .5s ease-out .65s forwards;}
 .splash-brand-name{font-family:'Figtree','Inter',system-ui,sans-serif;font-size:28px;font-weight:700;letter-spacing:9px;color:#fff;text-align:center;text-transform:uppercase;}
 .splash-brand-sub{font-family:'Figtree','Inter',system-ui,sans-serif;font-size:10px;letter-spacing:4px;color:rgba(170,110,255,0.7);text-align:center;text-transform:uppercase;margin-top:5px;}
-.splash-ekg{position:absolute;bottom:18%;left:50%;transform:translateX(-50%);width:260px;z-index:10;opacity:0;animation:sp-ekg-appear .4s ease-out 1s forwards;}
-.splash-ekg-path{stroke:rgba(150,70,255,0.55);stroke-width:1.5;fill:none;stroke-dasharray:440;stroke-dashoffset:440;animation:sp-ekg-draw 1.1s ease-out 1.05s forwards;}
 .splash-fade-out{animation:sp-out .45s ease-in forwards!important;}
 
 @keyframes sp-logo-in{to{opacity:1;transform:scale(1);}}
@@ -4286,8 +4284,6 @@ body{font-family:"Figtree",-apple-system,BlinkMacSystemFont,sans-serif;backgroun
   from{transform:translate(-50%,-50%) scale(1);}
   to{transform:translate(-50%,-50%) scale(1.35);opacity:.6;}
 }
-@keyframes sp-ekg-appear{to{opacity:1;}}
-@keyframes sp-ekg-draw{to{stroke-dashoffset:0;}}
 @keyframes sp-out{to{opacity:0;}}
 .slide{display:none;position:absolute;inset:0;flex-direction:column;justify-content:flex-end;align-items:center;padding:0 0 env(safe-area-inset-bottom,24px);}
 .slide.active{display:flex;}
@@ -5513,11 +5509,6 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   <div class="splash-ring"></div>
   <div class="splash-content">
     <img src="images/pulse-logo.png" class="splash-logo" alt="Pulse">
-  </div>
-  <div class="splash-ekg">
-    <svg width="260" height="44" viewBox="0 0 260 44" overflow="visible">
-      <path class="splash-ekg-path" d="M0,22 L70,22 L82,22 L92,6 L104,38 L114,6 L122,22 L136,22 L260,22"/>
-    </svg>
   </div>
 </div>
 
