@@ -1956,8 +1956,26 @@ async function hydrateExerciseLoadsForActiveDay() {
 // ── PERSISTENT LOAD SYNC (Firestore) ───────────────────
 // Debounced save: writes current kg values to clients/{id}/sessionLoads/{day}
 // so they survive localStorage clears, device switches, week rollovers.
+let _syncHideTimer = null;
+function _setSyncUI(state) {
+  const el = document.getElementById('sync-indicator');
+  if (!el) return;
+  clearTimeout(_syncHideTimer);
+  el.className = 'sync-indicator';
+  if (state === 'saving') {
+    el.textContent = '↑ Saving…';
+    el.classList.add('sync-saving');
+  } else if (state === 'saved') {
+    el.textContent = '✓ Saved to cloud';
+    el.classList.add('sync-saved');
+    _syncHideTimer = setTimeout(() => el.classList.add('sync-hidden'), 3000);
+  } else {
+    el.classList.add('sync-hidden');
+  }
+}
 function scheduleSaveLoadsFB() {
   clearTimeout(_saveLoadsFBTimer);
+  _setSyncUI('saving');
   _saveLoadsFBTimer = setTimeout(saveLoadsFB, 2000);
 }
 // Force-save immediately when user hides/closes the tab (mobile browser switch, etc.)
@@ -1983,7 +2001,8 @@ async function saveLoadsFB() {
         updatedAt: serverTimestamp()
       }
     );
-  } catch(_e) {}
+    _setSyncUI('saved');
+  } catch(_e) { _setSyncUI('hidden'); }
 }
 
 // ── STRENGTH PROGRESSION ───────────────────────────────
@@ -4533,6 +4552,10 @@ h1 span{color:#7665ff;}
 .combined-card .stat-num{font-size:18px!important;}
 .combined-card .stat-label{font-size:9px;letter-spacing:1px;}
 .combined-divider{height:1px;background:rgba(255,255,255,0.08);margin:0 14px;}
+.sync-indicator{font-size:11px;font-weight:600;letter-spacing:.5px;text-align:center;padding:4px 0 6px;transition:opacity .3s;}
+.sync-indicator.sync-hidden{opacity:0;pointer-events:none;}
+.sync-indicator.sync-saving{color:rgba(255,255,255,0.45);}
+.sync-indicator.sync-saved{color:oklch(70% .18 160);}
 .day-nav-inner{display:flex;align-items:center;justify-content:space-between;padding:8px 8px 10px;}
 .day-nav-center{text-align:center;flex:1;}
 .day-nav-name{font-family:'Figtree',sans-serif;font-size:18px;font-weight:800;color:#fff;display:block;line-height:1;}
@@ -5776,6 +5799,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
       </div>
       <div class="combined-divider"></div>
       <div id="day-tabs"></div>
+      <div id="sync-indicator" class="sync-indicator sync-hidden"></div>
     </div>
     <!-- Compact edit controls -->
     <div class="ctrl-bar">
