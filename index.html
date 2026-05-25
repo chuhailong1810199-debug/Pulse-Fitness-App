@@ -1928,9 +1928,19 @@ async function hydrateExerciseLoadsForActiveDay() {
     if (!exSnap.docs.length) return;
 
     const restored = {}, restoredSets = {};
+    const OLD_DAY_NAMES = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
     exSnap.forEach(d => {
       const data = d.data() || {};
-      const key = data.exerciseKey || d.id;
+      let key = data.exerciseKey || d.id;
+      // Remap old-style day in exerciseKey → current activeDay
+      // Migration only updated workoutHistory.day, NOT the exerciseKey inside exercises subcollection
+      // e.g. "thaison_Mon_2_0" → "thaison_SessionA_2_0"
+      for (const od of OLD_DAY_NAMES) {
+        if (key.includes(`_${od}_`)) {
+          key = key.replace(`_${od}_`, `_${activeDay}_`);
+          break;
+        }
+      }
       const load = parseFloat(data.loadKg);
       if (Number.isFinite(load) && load > 0) restored[key] = load;
       if (Array.isArray(data.setLoads) && data.setLoads.length > 0) restoredSets[key] = data.setLoads;
