@@ -4255,10 +4255,10 @@ body{font-family:"Figtree",-apple-system,BlinkMacSystemFont,sans-serif;backgroun
 /* ── SPLASH ANIMATION ── */
 .splash-bg{position:absolute;inset:0;background:#08000f;}
 .splash-ring{position:absolute;top:50%;left:50%;border-radius:50%;border:1px solid rgba(160,100,255,0.20);animation:sp-ring 2.6s ease-out infinite;}
-.splash-ring:nth-child(1){width:220px;height:220px;margin:-110px 0 0 -110px;animation-delay:0s;}
-.splash-ring:nth-child(2){width:320px;height:320px;margin:-160px 0 0 -160px;animation-delay:.45s;}
-.splash-ring:nth-child(3){width:440px;height:440px;margin:-220px 0 0 -220px;animation-delay:.9s;}
-.splash-glow{position:absolute;top:50%;left:50%;width:220px;height:220px;margin:-110px 0 0 -110px;border-radius:50%;background:radial-gradient(circle,rgba(130,55,240,0.28) 0%,transparent 70%);animation:sp-glow 2s ease-in-out infinite alternate;}
+.splash-ring:nth-child(3){width:220px;height:220px;animation-delay:0s;}
+.splash-ring:nth-child(4){width:320px;height:320px;animation-delay:.45s;}
+.splash-ring:nth-child(5){width:440px;height:440px;animation-delay:.9s;}
+.splash-glow{position:absolute;top:50%;left:50%;width:220px;height:220px;border-radius:50%;background:radial-gradient(circle,rgba(130,55,240,0.28) 0%,transparent 70%);animation:sp-glow 2s ease-in-out infinite alternate;}
 .splash-content{position:relative;z-index:10;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;}
 .splash-logo{width:160px;height:160px;object-fit:contain;opacity:0;transform:scale(.45);animation:sp-logo-in .65s cubic-bezier(.22,1,.36,1) .2s forwards,sp-heartbeat .75s ease-in-out 1s infinite;}
 .splash-brand{opacity:0;transform:translateY(14px);animation:sp-text-in .5s ease-out .65s forwards;}
@@ -4278,11 +4278,14 @@ body{font-family:"Figtree",-apple-system,BlinkMacSystemFont,sans-serif;backgroun
 }
 @keyframes sp-text-in{to{opacity:1;transform:translateY(0);}}
 @keyframes sp-ring{
-  0%{transform:scale(.65);opacity:0;}
-  25%{opacity:1;}
-  100%{transform:scale(1.5);opacity:0;}
+  0%{transform:translate(-50%,-50%) scale(.65);opacity:0;}
+  20%{opacity:1;}
+  100%{transform:translate(-50%,-50%) scale(1.5);opacity:0;}
 }
-@keyframes sp-glow{from{transform:scale(1);}to{transform:scale(1.35);opacity:.6;}}
+@keyframes sp-glow{
+  from{transform:translate(-50%,-50%) scale(1);}
+  to{transform:translate(-50%,-50%) scale(1.35);opacity:.6;}
+}
 @keyframes sp-ekg-appear{to{opacity:1;}}
 @keyframes sp-ekg-draw{to{stroke-dashoffset:0;}}
 @keyframes sp-out{to{opacity:0;}}
