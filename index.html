@@ -94,6 +94,7 @@ let exerciseState = {};
 let editMode = false;
 let customPrograms = {};
 let _wChart = null, _sChart = null;
+let _historyCache = null; // cached workoutHistory docs — shared between loadStrengthHistory & renderStats
 let _programUnsub = null;
 let _exerciseCache = [];
 let _exerciseCacheLoaded = false;
@@ -230,12 +231,31 @@ function setLoginLoading(on) {
 }
 
 // ── USER PROFILE ───────────────────────────────────────
+const _USER_CACHE_KEY = uid => 'pulse_user_v2_' + uid;
+
 async function loadUserProfile(user) {
+  // ── Fast path: use localStorage cache for returning users ──
+  const cacheRaw = localStorage.getItem(_USER_CACHE_KEY(user.uid));
+  if (cacheRaw) {
+    try {
+      const c = JSON.parse(cacheRaw);
+      if (c.role && (c.role === 'coach' || c.clientId)) {
+        userRole     = c.role;
+        userClientId = c.clientId || null;
+        // Kick off background re-verify (non-blocking)
+        _verifyUserProfileBg(user);
+        // Go straight to app — no Firestore wait
+        return _launchAfterProfile(user);
+      }
+    } catch(_e) { localStorage.removeItem(_USER_CACHE_KEY(user.uid)); }
+  }
+
+  // ── Slow path: first login or cache missing ──
   showScreen('loading');
   const userRef = doc(db, 'users', user.uid);
   const snap    = await getDoc(userRef);
 
-  if (!snap.exists) {
+  if (!snap.exists()) {
     // First time — check if this email is in clients list
     const clientsSnap = await getDocs(collection(db, 'clients'));
     let matchedClientId = null;
@@ -259,7 +279,6 @@ async function loadUserProfile(user) {
     userClientId = snap.data().clientId || null;
 
     // Re-check: if user was previously assigned "coach" but is now in clients list
-    // (happens when coach adds them AFTER their first login)
     if (!userClientId) {
       const clientsSnap = await getDocs(collection(db, 'clients'));
       let matchedClientId = null;
@@ -273,8 +292,25 @@ async function loadUserProfile(user) {
       }
     }
   }
+  // Save to cache for next time
+  localStorage.setItem(_USER_CACHE_KEY(user.uid), JSON.stringify({ role: userRole, clientId: userClientId }));
+  return _launchAfterProfile(user);
+}
 
-  // For clients: show slides immediately, load app in background
+// Background re-verify: silently refresh cache without blocking UI
+async function _verifyUserProfileBg(user) {
+  try {
+    const snap = await getDoc(doc(db, 'users', user.uid));
+    if (!snap.exists()) return;
+    const newRole     = snap.data().role;
+    const newClientId = snap.data().clientId || null;
+    // Update cache; if role changed force a reload next time
+    localStorage.setItem(_USER_CACHE_KEY(user.uid), JSON.stringify({ role: newRole, clientId: newClientId }));
+  } catch(_e) {}
+}
+
+function _launchAfterProfile(user) {
+  // For clients: show splash immediately, load app in background
   if (userRole === 'client') {
     const slidesEl = document.getElementById('slides-screen');
     if (slidesEl) {
@@ -282,16 +318,12 @@ async function loadUserProfile(user) {
         document.getElementById(id)?.classList.add('hidden');
       });
       slidesEl.classList.remove('hidden');
-      // Auto-dismiss splash after 2.3s
       setTimeout(() => { if (!window._splashDismissed) skipSlides(); }, 2300);
-      // Load app data in background so it's ready when slides finish
-      loadApp().then(() => {
-        window._appLoaded = true;
-      });
+      loadApp().then(() => { window._appLoaded = true; });
       return;
     }
   }
-  await loadApp();
+  return loadApp();
 }
 
 // ── LOAD APP ───────────────────────────────────────────
@@ -459,12 +491,15 @@ async function loadApp() {
 
   updateDateDisplay();
   renderDayTabs();
-  await hydrateExerciseLoadsForActiveDay();
-  await loadStrengthHistory();
+  // ── Parallel fetch: loads + strength history run simultaneously ──
+  await Promise.all([
+    hydrateExerciseLoadsForActiveDay(),
+    loadStrengthHistory()
+  ]);
   renderExercises();
   initDaySwipe();
   initNavAutoHide();
-  await renderStats();
+  renderStats(); // non-blocking — stats update in background
   subscribeProgram();
   if (userRole === 'coach') {
     showScreen('app');
@@ -529,6 +564,7 @@ async function switchClient(id) {
 
   // ── Switch data ──
   activeClient = next;
+  _historyCache = null; // clear cache for new client
   _sessionLogged = false; updateFinishBtn();
   document.getElementById('client-level').textContent = activeClient.level || '—';
 
@@ -1364,11 +1400,15 @@ function calcStreak(hist) {
 
 async function getHistory() {
   if (!activeClient) return [];
+  // Use in-memory cache if available for this client — avoids extra Firestore read
+  if (_historyCache && _historyCache.clientId === activeClient.id) return _historyCache.docs;
   try {
     const snap = await getDocs(
       query(collection(db, 'clients', activeClient.id, 'workoutHistory'), orderBy('date', 'desc'))
     );
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    _historyCache = { clientId: activeClient.id, docs };
+    return docs;
   } catch(e) { return []; }
 }
 
@@ -2015,6 +2055,8 @@ async function loadStrengthHistory() {
       orderBy('date', 'desc'),
       limit(40)
     ));
+    // Cache for renderStats to reuse — avoids a second network round-trip
+    _historyCache = { clientId: activeClient.id, docs: histSnap.docs.map(d => ({ id: d.id, ...d.data() })) };
     // Find sessions for this day (up to 8 most recent)
     const dayDocs = histSnap.docs
       .filter(d => d.data().day === activeDay)
