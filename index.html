@@ -255,7 +255,7 @@ async function loadUserProfile(user) {
   const userRef = doc(db, 'users', user.uid);
   const snap    = await getDoc(userRef);
 
-  if (!snap.exists()) {
+  if (!snap.exists) {
     // First time — check if this email is in clients list
     const clientsSnap = await getDocs(collection(db, 'clients'));
     let matchedClientId = null;
