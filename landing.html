@@ -374,6 +374,22 @@
       margin-top: 44px;
       margin-bottom: 44px;
       text-align: left;
+      align-items: stretch;
+    }
+    .photo-col {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      min-height: 0;
+    }
+    .photo-col .mosaic {
+      flex: 1;
+      min-height: 0;
+    }
+    .photo-col .mosaic-btn {
+      flex: 0 0 100%;
+      height: 100%;
+      min-height: 300px;
     }
     .credentials {
       background: var(--surface);
@@ -396,12 +412,13 @@
       overflow: hidden;
       border: 1px solid var(--border);
       width: 100%;
-      max-width: 200px;
+      max-width: 220px;
+      height: 160px;
       transition: border-color 0.2s var(--ease);
       position: relative;
     }
     .cert-card:hover { border-color: var(--border-md); }
-    .cert-card img { width: 100%; height: auto; display: block; filter: none; }
+    .cert-card img { width: 100%; height: 100%; object-fit: contain; display: block; background: #fff; }
     .cert-card::after { display: none; }
     .cert-card:hover img { filter: none; }
     .cred-grid {
@@ -1297,14 +1314,15 @@
           <div class="cred-item reveal reveal-delay-4"><strong>APP-LED</strong><span>Tracking, messaging, and progression in Pulse</span></div>
         </div>
       </article>
-      <div class="mosaic" id="photo-slider" aria-label="Coach portfolio gallery">
-        <button class="mosaic-btn" type="button" data-lightbox-src="/images/about-me.jpg" aria-label="Open about me photo"><img src="/images/about-me.jpg" alt="Long Chu portrait" loading="lazy"/></button>
-        <button class="mosaic-btn" type="button" data-lightbox-src="/images/hyrox-sg-finish.jpg" aria-label="Open Hyrox Singapore finish photo"><img src="/images/hyrox-sg-finish.jpg" alt="Hyrox Singapore finish line" loading="lazy"/></button>
-        <button class="mosaic-btn" type="button" data-lightbox-src="/images/hyrox-sg-farmers.jpg" aria-label="Open Hyrox farmers carry photo"><img src="/images/hyrox-sg-farmers.jpg" alt="Hyrox Singapore farmers carry" loading="lazy"/></button>
-        <button class="mosaic-btn" type="button" data-lightbox-src="/images/hyrox-bkk-finish.jpg" aria-label="Open Hyrox Bangkok finish photo"><img src="/images/hyrox-bkk-finish.jpg" alt="Hyrox Bangkok finish line" loading="lazy"/></button>
-        <button class="mosaic-btn" type="button" data-lightbox-src="/images/boxing-venum.jpg" aria-label="Open boxing photo"><img src="/images/boxing-venum.jpg" alt="Boxing training with Venum gloves" loading="lazy"/></button>
+      <div class="photo-col">
+        <div class="mosaic" id="photo-slider" aria-label="Coach portfolio gallery">
+          <button class="mosaic-btn" type="button" data-lightbox-src="/images/about-me.jpg" aria-label="Open about me photo"><img src="/images/about-me.jpg" alt="Long Chu portrait" loading="lazy"/></button>
+          <button class="mosaic-btn" type="button" data-lightbox-src="/images/hyrox-sg-finish.jpg" aria-label="Open Hyrox Singapore finish photo"><img src="/images/hyrox-sg-finish.jpg" alt="Hyrox Singapore finish line" loading="lazy"/></button>
+          <button class="mosaic-btn" type="button" data-lightbox-src="/images/hyrox-sg-farmers.jpg" aria-label="Open Hyrox farmers carry photo"><img src="/images/hyrox-sg-farmers.jpg" alt="Hyrox Singapore farmers carry" loading="lazy"/></button>
+          <button class="mosaic-btn" type="button" data-lightbox-src="/images/boxing-venum.jpg" aria-label="Open boxing photo"><img src="/images/boxing-venum.jpg" alt="Boxing training with Venum gloves" loading="lazy"/></button>
+        </div>
+        <div class="mosaic-dots" id="photo-dots"></div>
       </div>
-      <div class="mosaic-dots" id="photo-dots"></div>
     </div>
   </div>
 </section>
