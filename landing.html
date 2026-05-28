@@ -444,41 +444,59 @@
     .cred-divider svg { display: block; width: 100%; height: 28px; }
 
 
-    /* ── Mosaic ──────────────────────────────────────── */
-    .mosaic { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
-    .mosaic-btn {
-      position: relative;
-      border: none;
-      border-radius: 0;
-      overflow: hidden;
-      background: transparent;
-      cursor: pointer;
-      min-height: 110px;
-      padding: 0;
-      transition: transform 0.30s var(--ease);
-      /* Edge-fade: photo dissolves into dark background */
-      -webkit-mask-image: radial-gradient(ellipse 84% 88% at 50% 50%, black 42%, transparent 100%);
-      mask-image: radial-gradient(ellipse 84% 88% at 50% 50%, black 42%, transparent 100%);
+    /* ── Photo Slider ────────────────────────────────── */
+    .mosaic {
+      display: flex;
+      gap: 12px;
+      overflow-x: auto;
+      scroll-snap-type: x mandatory;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+      cursor: grab;
+      user-select: none;
+      padding-bottom: 4px;
     }
-    .mosaic-btn:hover { transform: scale(1.04); }
+    .mosaic:active { cursor: grabbing; }
+    .mosaic::-webkit-scrollbar { display: none; }
+    .mosaic-btn {
+      flex: 0 0 100%;
+      height: 560px;
+      scroll-snap-align: start;
+      border: none;
+      border-radius: var(--r-lg);
+      overflow: hidden;
+      background: var(--surface);
+      cursor: pointer;
+      padding: 0;
+      transition: transform 0.28s var(--ease);
+    }
+    .mosaic-btn:hover { transform: scale(1.02); }
     .mosaic-btn img {
       width: 100%;
       height: 100%;
       object-fit: cover;
       display: block;
-      border-radius: 0;
-      filter: brightness(0.72);
-      transition: filter 0.30s var(--ease);
+      filter: brightness(0.85);
+      transition: filter 0.28s var(--ease);
+      pointer-events: none;
     }
-    .mosaic-btn:hover img { filter: brightness(0.92); }
-    .mosaic-btn::before, .mosaic-btn::after { display: none; }
-    .mosaic-btn:nth-child(1) { grid-column: span 3; grid-row: span 2; min-height: 240px; }
-    .mosaic-btn:nth-child(2) { grid-column: span 3; }
-    .mosaic-btn:nth-child(3) { grid-column: span 2; }
-    .mosaic-btn:nth-child(4) { grid-column: span 2; }
-    .mosaic-btn:nth-child(5) { grid-column: span 2; }
-    .mosaic-btn:nth-child(6),
-    .mosaic-btn:nth-child(7) { grid-column: span 3; min-height: 170px; }
+    .mosaic-btn:hover img { filter: brightness(1); }
+    .mosaic-dots {
+      display: flex; gap: 0; justify-content: center; margin-top: 14px;
+    }
+    .mosaic-dot {
+      width: 44px; height: 44px; border-radius: 50%;
+      background: none; border: none;
+      cursor: pointer; flex-shrink: 0;
+      position: relative; display: flex; align-items: center; justify-content: center;
+    }
+    .mosaic-dot::after {
+      content: '';
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--border-md);
+      transition: background 0.2s, width 0.25s, border-radius 0.25s;
+    }
+    .mosaic-dot.active::after { background: var(--accent-lg); width: 18px; border-radius: 3px; }
 
     /* ── Services ──────────────────────────────────────── */
     #services { background: var(--bg2); }
@@ -1126,21 +1144,7 @@
       .form-grid, .services-grid, .pillar-grid, .footer-grid { grid-template-columns: 1fr; }
       .app-panel { padding: 24px; }
       .lead-form { padding: 20px; }
-      .mosaic {
-        display: flex; overflow-x: auto;
-        scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch;
-        scrollbar-width: none; gap: 10px; padding-bottom: 8px;
-      }
-      .mosaic::-webkit-scrollbar { display: none; }
-      .mosaic-btn,
-      .mosaic-btn:nth-child(1), .mosaic-btn:nth-child(2),
-      .mosaic-btn:nth-child(3), .mosaic-btn:nth-child(4),
-      .mosaic-btn:nth-child(5), .mosaic-btn:nth-child(6),
-      .mosaic-btn:nth-child(7) {
-        grid-column: unset; grid-row: unset;
-        flex-shrink: 0; width: 260px; min-height: 200px;
-        scroll-snap-align: start; border-radius: var(--r-md);
-      }
+      .mosaic-btn { flex: 0 0 100%; height: 400px; }
       .footer-bottom { flex-direction: column; text-align: center; }
       .form-actions { flex-direction: column; align-items: stretch; }
       .form-actions .btn-hero { width: 100%; }
@@ -1293,14 +1297,14 @@
           <div class="cred-item reveal reveal-delay-4"><strong>APP-LED</strong><span>Tracking, messaging, and progression in Pulse</span></div>
         </div>
       </article>
-      <div class="mosaic" aria-label="Coach portfolio gallery">
+      <div class="mosaic" id="photo-slider" aria-label="Coach portfolio gallery">
         <button class="mosaic-btn" type="button" data-lightbox-src="/images/about-me.jpg" aria-label="Open about me photo"><img src="/images/about-me.jpg" alt="Long Chu portrait" loading="lazy"/></button>
         <button class="mosaic-btn" type="button" data-lightbox-src="/images/hyrox-sg-finish.jpg" aria-label="Open Hyrox Singapore finish photo"><img src="/images/hyrox-sg-finish.jpg" alt="Hyrox Singapore finish line" loading="lazy"/></button>
         <button class="mosaic-btn" type="button" data-lightbox-src="/images/hyrox-sg-farmers.jpg" aria-label="Open Hyrox farmers carry photo"><img src="/images/hyrox-sg-farmers.jpg" alt="Hyrox Singapore farmers carry" loading="lazy"/></button>
         <button class="mosaic-btn" type="button" data-lightbox-src="/images/hyrox-bkk-finish.jpg" aria-label="Open Hyrox Bangkok finish photo"><img src="/images/hyrox-bkk-finish.jpg" alt="Hyrox Bangkok finish line" loading="lazy"/></button>
-        <button class="mosaic-btn" type="button" data-lightbox-src="/images/hyrox-bkk-indoor.jpg" aria-label="Open Hyrox indoor event photo"><img src="/images/hyrox-bkk-indoor.jpg" alt="Hyrox Bangkok indoor event" loading="lazy"/></button>
         <button class="mosaic-btn" type="button" data-lightbox-src="/images/boxing-venum.jpg" aria-label="Open boxing photo"><img src="/images/boxing-venum.jpg" alt="Boxing training with Venum gloves" loading="lazy"/></button>
       </div>
+      <div class="mosaic-dots" id="photo-dots"></div>
     </div>
   </div>
 </section>
@@ -1997,6 +2001,53 @@
     }
 
     initSlider('services-slider', 'services-dots');
+
+    // Photo slider — reuse same logic, dots styled via .mosaic-dot
+    (function () {
+      var slider = document.getElementById('photo-slider');
+      var dotsEl = document.getElementById('photo-dots');
+      if (!slider || !dotsEl) return;
+      var items = slider.children;
+      var count = items.length;
+      dotsEl.innerHTML = '';
+      var dots = Array.from({ length: count }, function (_, i) {
+        var d = document.createElement('button');
+        d.className = 'mosaic-dot' + (i === 0 ? ' active' : '');
+        d.setAttribute('aria-label', 'Go to photo ' + (i + 1));
+        d.addEventListener('click', function () {
+          items[i].scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'start' });
+        });
+        dotsEl.appendChild(d);
+        return d;
+      });
+      var ticking = false;
+      slider.addEventListener('scroll', function () {
+        if (ticking) return; ticking = true;
+        requestAnimationFrame(function () {
+          var sliderLeft = slider.getBoundingClientRect().left;
+          var closest = 0, minDist = Infinity;
+          Array.from(items).forEach(function (item, i) {
+            var dist = Math.abs(item.getBoundingClientRect().left - sliderLeft);
+            if (dist < minDist) { minDist = dist; closest = i; }
+          });
+          dots.forEach(function (d, i) { d.classList.toggle('active', i === closest); });
+          ticking = false;
+        });
+      }, { passive: true });
+      var isDown = false, startX, scrollLeft;
+      slider.addEventListener('mousedown', function (e) {
+        isDown = true; startX = e.pageX - slider.offsetLeft;
+        scrollLeft = slider.scrollLeft; slider.style.scrollSnapType = 'none';
+      });
+      document.addEventListener('mouseup', function () {
+        if (!isDown) return; isDown = false;
+        slider.style.scrollSnapType = 'x mandatory';
+      });
+      document.addEventListener('mousemove', function (e) {
+        if (!isDown) return; e.preventDefault();
+        slider.scrollLeft = scrollLeft - (e.pageX - slider.offsetLeft - startX);
+      });
+    })();
   })();
 
   // ── Feature showcase — scroll-driven sticky text ──
