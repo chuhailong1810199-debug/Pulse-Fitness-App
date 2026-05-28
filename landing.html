@@ -283,6 +283,26 @@
     @media (prefers-reduced-motion: reduce) {
       .hero-eyebrow, .hero-title, .hero-sub, .hero-btns { animation: none; }
     }
+    .hero-signin-hint {
+      margin-top: 20px;
+      font-size: 13px;
+      color: oklch(1 0 0 / 0.40);
+      animation: heroUp 0.8s var(--ease-out) 1.05s both;
+    }
+    .hero-signin-link {
+      color: oklch(1 0 0 / 0.65);
+      text-decoration: none;
+      border-bottom: 1px solid oklch(1 0 0 / 0.25);
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .hero-signin-link:hover {
+      color: oklch(1 0 0 / 0.90);
+      border-color: oklch(1 0 0 / 0.55);
+    }
+    /* Hide on mobile — nav Sign In is sufficient; mobile menu has it too */
+    @media (max-width: 900px) {
+      .hero-signin-hint { display: none; }
+    }
 
     .hero-eyebrow {
       display: inline-flex;
@@ -516,9 +536,18 @@
       display: flex; gap: 8px; align-items: flex-start;
     }
     .service-list li::before { content: "✓"; color: var(--accent-lg); font-weight: 700; flex-shrink: 0; margin-top: 1px; }
-    /* on desktop: show 3 at once */
+    /* on desktop: static grid — no scroll, no grab */
     @media (min-width: 960px) {
-      .service-card { flex: 0 0 calc((100% - 32px) / 3); }
+      .card-slider {
+        overflow-x: visible;
+        cursor: default;
+        user-select: auto;
+        scroll-snap-type: none;
+        flex-wrap: nowrap;
+      }
+      .card-slider:active { cursor: default; }
+      .slider-dots { display: none; }
+      .service-card { flex: 1 1 0; scroll-snap-align: none; }
     }
 
     /* ── Feature showcase (replaces Philosophy) ─────── */
@@ -536,20 +565,16 @@
 
     /* ── Scroll-driven feature section ──────────────── */
     .feat-scroll-root {
-      display: grid;
-      grid-template-columns: 1fr 1.1fr;
-      gap: 80px;
-      margin-top: 72px;
-      align-items: start;
-    }
-
-    /* Left sticky text column */
-    .feat-sticky-col {
-      position: sticky;
-      top: 100px;
       display: flex;
       flex-direction: column;
-      gap: 48px;
+      align-items: center;
+      margin-top: 72px;
+      gap: 0;
+    }
+
+    /* Left sticky text column — hidden on all sizes, text lives in each panel */
+    .feat-sticky-col {
+      display: none;
     }
     .feat-sticky-text {
       transition: opacity 0.22s ease, transform 0.22s ease;
@@ -564,6 +589,7 @@
       display: flex;
       flex-direction: column;
       gap: 18px;
+      align-items: center;
     }
     .fpd {
       background: none; border: none; cursor: pointer;
@@ -593,18 +619,25 @@
       line-height: 1.18; margin-bottom: 18px;
     }
     .feat-desc {
-      font-size: 15px; color: var(--muted2); line-height: 1.82; max-width: 360px;
+      font-size: 15px; color: var(--muted2); line-height: 1.82; max-width: 400px;
+      margin: 0 auto;
     }
 
     /* Right scroll panels */
-    .feat-scroll-col { display: flex; flex-direction: column; }
+    .feat-scroll-col { display: flex; flex-direction: column; align-items: center; width: 100%; }
     .feat-scroll-panel {
-      min-height: 85vh;
-      display: flex; align-items: center;
+      min-height: auto;
+      display: flex; flex-direction: column; align-items: center;
       padding: 56px 0;
+      width: 100%;
     }
-    .feat-scroll-panel .feat-info { display: none; }  /* desktop: shown in sticky */
-    .feat-mock { width: 100%; }
+    .feat-scroll-panel .feat-info {
+      display: block;
+      text-align: center;
+      margin-bottom: 36px;
+      width: 100%;
+    }
+    .feat-mock { width: 100%; max-width: 680px; }
 
     /* Mock card shell */
     .mock-card {
@@ -792,20 +825,13 @@
     .feat-scroll-panel.anim#feat-sp-2 .mock-sparkline-wrap circle:nth-of-type(6) { animation-delay: 1.00s; }
     .feat-scroll-panel.anim#feat-sp-2 .mock-sparkline-wrap circle:nth-of-type(7) { animation-delay: 1.09s; }
 
-    /* Mobile: stacked layout */
+    /* Mobile: tighten spacing */
     @media (max-width: 860px) {
-      .feat-scroll-root { grid-template-columns: 1fr; gap: 0; margin-top: 48px; }
-      .feat-sticky-col { display: none; }
-      .feat-scroll-panel {
-        min-height: auto; padding: 32px 0 12px;
-        flex-direction: column; align-items: center;
-      }
-      .feat-scroll-panel .feat-info {
-        display: block; margin-bottom: 24px;
-        text-align: center; width: 100%;
-      }
-      .feat-desc { max-width: 340px; font-size: 14px; margin: 0 auto; text-align: center; }
-      .feat-mock { max-width: 420px; width: 100%; }
+      .feat-scroll-root { margin-top: 48px; }
+      .feat-scroll-panel { padding: 32px 0 12px; }
+      .feat-scroll-panel .feat-info { margin-bottom: 24px; }
+      .feat-desc { font-size: 14px; }
+      .feat-mock { max-width: 420px; }
     }
     @media (max-width: 480px) {
       .mock-node { min-width: 82px; padding: 10px; border-radius: 10px; }
@@ -1173,6 +1199,7 @@
   <a href="#services">Services</a>
   <a href="#philosophy">App</a>
   <a href="#cta">Start</a>
+  <a href="https://fitness-app-azure-eight.vercel.app" style="color:var(--accent-lg);border-color:oklch(68% .16 295 / 0.30);">Sign In</a>
 </div>
 
 <section class="hero">
@@ -1220,6 +1247,7 @@
       </a>
       <a class="btn-hero secondary" href="#services">View Services</a>
     </div>
+    <p class="hero-signin-hint">Already a client? <a href="https://fitness-app-azure-eight.vercel.app" class="hero-signin-link">Sign in to Pulse →</a></p>
   </div>
   <!-- Subtle violet bottom gradient -->
   <div style="position:absolute;bottom:0;left:0;right:0;height:120px;background:linear-gradient(to top,oklch(9% 0 0),transparent);z-index:4;pointer-events:none;"></div>
@@ -1668,6 +1696,7 @@
         <li><a href="#cta">Contact</a></li>
         <li><a href="#">FAQ</a></li>
         <li><a href="#">Privacy</a></li>
+        <li><a href="https://fitness-app-azure-eight.vercel.app" style="color:var(--accent-lg);">Client Sign In →</a></li>
       </ul>
     </div>
   </div>
