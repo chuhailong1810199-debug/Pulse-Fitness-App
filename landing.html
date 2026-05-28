@@ -694,12 +694,14 @@
     .mock-label {
       font-size: 9px; font-weight: 700; letter-spacing: 2.5px; text-transform: uppercase;
       color: oklch(68% .16 295 / 0.60); margin-bottom: 18px;
+      text-align: center;
     }
 
     /* Exercise node flow (panel 01) */
     .mock-flow {
       display: flex; align-items: flex-start; gap: 8px;
       margin-bottom: 20px; overflow-x: auto; padding-bottom: 4px;
+      justify-content: center;
     }
     .mock-node {
       background: oklch(17% 0.02 295);
@@ -739,7 +741,7 @@
       background: linear-gradient(90deg, oklch(51% .23 295), oklch(68% .16 295));
       border-radius: 99px;
     }
-    .mock-progress-label { font-size: 10px; color: var(--muted); letter-spacing: 0.4px; }
+    .mock-progress-label { font-size: 10px; color: var(--muted); letter-spacing: 0.4px; text-align: center; }
 
     /* Chart (panel 02) */
     .mock-chart-wrap { margin-bottom: 18px; }
