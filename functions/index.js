@@ -1012,7 +1012,7 @@ exports.pulseGenerateFree = onCall(
     cors: true,
   },
   async (request) => {
-    const { name, email, goal, level, sessionsPerWeek, gender, weight, height, age, limitations } = request.data || {};
+    const { name, email, goal, level, sessionsPerWeek, sessionDuration, gender, weight, height, age, limitations } = request.data || {};
 
     // Validate required fields
     if (!name || !email || !goal || !level || !sessionsPerWeek) {
@@ -1022,6 +1022,13 @@ exports.pulseGenerateFree = onCall(
     if (isNaN(sessionsParsed) || sessionsParsed < 3 || sessionsParsed > 7) {
       throw new HttpsError("invalid-argument", "Sessions per week must be between 3 and 7.");
     }
+    const durationParsed = parseInt(sessionDuration) === 90 ? 90 : 60;
+    if (sessionDuration !== undefined && sessionDuration !== null && ![60, 90].includes(durationParsed)) {
+      console.warn("[pulseGenerateFree] Unexpected sessionDuration value:", sessionDuration, "→ defaulting to 60");
+    }
+    const durationRules = durationParsed === 90
+      ? `SESSION DURATION: 90 minutes. RULES: Warm-up 10–12 min (3 exercises). Main block: 4–5 compounds. Accessories: 3–4 isolation exercises. Add a conditioning finisher (10–15 min) on all non-max-effort days. Total exercises per session: 8–10.`
+      : `SESSION DURATION: 60 minutes. RULES: Warm-up 8–10 min (2 exercises). Main block: 3 compounds. Accessories: 2 isolation exercises. No finisher unless goal is fat loss. Total exercises per session: 6–7 MAX.`;
 
     const db = getFirestore();
     const steps = [];
@@ -1036,7 +1043,7 @@ exports.pulseGenerateFree = onCall(
         goal,
         source: "free_program",
         status: "new",
-        note: `Level: ${level} | Sessions/week: ${sessionsPerWeek}${gender ? ` | Gender: ${gender}` : ""}${age ? ` | Age: ${age}` : ""}${weight ? ` | Weight: ${weight}kg` : ""}${height ? ` | Height: ${height}cm` : ""}`,
+        note: `Level: ${level} | Sessions/week: ${sessionsParsed} | Duration: ${durationParsed}min${gender ? ` | Gender: ${gender}` : ""}${age ? ` | Age: ${age}` : ""}${weight ? ` | Weight: ${weight}kg` : ""}${height ? ` | Height: ${height}cm` : ""}`,
         createdAt: new Date().toISOString(),
       });
     } catch (e) {
@@ -1299,6 +1306,8 @@ ${raceGoalNote}
 ${injuryNote}
 ${experienceNote ? `\nEXPERIENCE NOTE: ${experienceNote}` : ""}
 
+${durationRules}
+
 WEEKLY SESSION SCHEDULE:
 ${daySchedule}
 
@@ -1432,6 +1441,8 @@ Cues: max 6 words each. Use the periodisation rules to make phases genuinely dif
       ? `\nPHYSICAL INFO:${gender ? `\n- Gender: ${gender}` : ""}${age ? `\n- Age: ${age}` : ""}${weight ? `\n- Weight: ${weight}kg` : ""}${height ? `\n- Height: ${height}cm` : ""}`
       : "";
 
+    const durationContext = durationRules;
+
     // ── Phase guidelines per goal ────────────────────────────────────────────
     const phaseGuidanceMap = {
       [GOAL_GUIDANCE.fatLoss]:
@@ -1468,6 +1479,7 @@ ${limitationWarmupNote}
 GOAL: ${goalGuidance}
 LEVEL: ${levelGuidance}
 SPLIT: ${splitGuidance}
+${durationContext}
 ${exerciseLibraryContext}
 PERIODISATION (CRITICAL — phases must be genuinely different):
 ${phaseGuidance}
