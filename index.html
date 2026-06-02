@@ -301,7 +301,11 @@ async function loadUserProfile(user) {
 async function _verifyUserProfileBg(user) {
   try {
     const snap = await getDoc(doc(db, 'users', user.uid));
-    if (!snap.exists()) return;
+    if (!snap.exists) {
+      // users doc missing — wipe cache so next reload triggers slow path (doc re-creation)
+      localStorage.removeItem(_USER_CACHE_KEY(user.uid));
+      return;
+    }
     const newRole     = snap.data().role;
     const newClientId = snap.data().clientId || null;
     // Update cache; if role changed force a reload next time
@@ -439,9 +443,9 @@ async function loadApp() {
         }
       });
       if (userClientId) {
-        // Fix the users doc so next login is instant
-        await updateDoc(doc(db, 'users', currentUser.uid), { role: 'client', clientId: userClientId });
-        console.log('[loadApp] Fixed clientId =', userClientId);
+        // Fix the users doc so next login is instant (use setDoc+merge in case doc doesn't exist yet)
+        await setDoc(doc(db, 'users', currentUser.uid), { email: currentUser.email, name: currentUser.displayName || currentUser.email, role: 'client', clientId: userClientId }, { merge: true });
+        console.log('[loadApp] Fixed/created users doc, clientId =', userClientId);
       } else {
         showNoClientError('email=' + (currentUser?.email || '?') + ' not found in /clients');
         return;
