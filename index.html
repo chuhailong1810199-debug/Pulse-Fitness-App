@@ -234,6 +234,12 @@ function setLoginLoading(on) {
 const _USER_CACHE_KEY = uid => 'pulse_user_v2_' + uid;
 
 async function loadUserProfile(user) {
+  // ── ?reset=1 param: wipe cache so slow path re-creates users doc ──
+  if (new URLSearchParams(window.location.search).get('reset') === '1') {
+    localStorage.removeItem(_USER_CACHE_KEY(user.uid));
+    window.history.replaceState({}, '', window.location.pathname);
+  }
+
   // ── Fast path: use localStorage cache for returning users ──
   const cacheRaw = localStorage.getItem(_USER_CACHE_KEY(user.uid));
   if (cacheRaw) {
