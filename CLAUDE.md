@@ -1,4 +1,70 @@
 
+## Current clients (as of 2026-06-02)
+| Name | Client ID | Gmail | Level | Sessions/week |
+|------|-----------|-------|-------|---------------|
+| Thai Son | thaison | sonnguyen109992@gmail.com | Advanced | 7 |
+| Sang | sang | (no email) | Beginner | 3 |
+| Cindy | cindy | dollykim1401@gmail.com | Intermediate | 3 |
+| Lee | lee | kuanyu@gmail.com | Intermediate | 3 |
+| Joost | joost | joost123@gmail.com | — | — |
+| Long Chu | longchu | coach@fitwithlongchu.com | — | — |
+| Chị Nguyệt | chị_nguyệt_1776562700235 | nguyet.cm83@gmail.com | — | 3 |
+| Chị Nhi | chị_nhi_1776781030318 | lp.khanh.nhi@gmail.com | — | — |
+| Ngọc Anh | ngọc_anh_phạm_1780385374016 | ngocanhispunk@gmail.com | Intermediate | 5 |
+| anh Soobin | soobin | sonnguyen109992@gmail.com | — | — |
+| Vy | vy_1777337601716 | lin135@gmail.com | — | — |
+| An | an | placeholder@gmail.com | — | — |
+
+---
+
+## Program key format — ALWAYS use SessionA/B/C (never Mon/Wed/Fri)
+- Program days MUST be stored as `SessionA`, `SessionB`, `SessionC`, `SessionD`, `SessionE`...
+- Old format `Mon/Tue/Wed/Thu/Fri` → app hangs on loading screen (can't find any days)
+- When pushing a new program, always use Session keys
+- Migration query to fix old clients:
+```javascript
+const DAY_ORDER = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+const oldKeys = Object.keys(prog).filter(k => DAY_ORDER.includes(k))
+  .sort((a,b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
+const newProg = {};
+oldKeys.forEach((day, i) => { newProg[`Session${String.fromCharCode(65+i)}`] = prog[day]; });
+await updateDoc(ref, { program: newProg });
+```
+
+---
+
+## Firebase Modular SDK gotchas (v9+)
+- `snap.exists` is a **property** (boolean), NOT a method — never write `snap.exists()`
+- `snap.exists()` → `TypeError: snap.exists is not a function` → login crashes
+- Correct: `if (!snap.exists) { ... }`
+
+---
+
+## Performance: user profile cache
+- `loadUserProfile` now caches `{role, clientId}` in localStorage under key `pulse_user_v2_{uid}`
+- Returning users skip Firestore read → near-instant app load
+- Background verify runs async via `_verifyUserProfileBg()`
+- If login loops or role is wrong → clear cache: `localStorage.removeItem('pulse_user_v2_' + uid)`
+
+---
+
+## Performance: parallel Firestore reads in loadApp()
+```javascript
+// CORRECT — parallel
+await Promise.all([hydrateExerciseLoadsForActiveDay(), loadStrengthHistory()]);
+renderExercises();
+renderStats(); // non-blocking
+
+// WRONG — sequential (slow)
+await hydrateExerciseLoadsForActiveDay();
+await loadStrengthHistory();
+await renderStats();
+```
+- `_historyCache` object caches workoutHistory so `renderStats` reuses it without extra query
+- Clear cache on client switch: `_historyCache = null`
+
+---
+
 ## Excel → migrate.html: known gotchas (learned the hard way)
 
 ### 1. Emoji encoding — only use ⚡ (U+26A1) in openpyxl build scripts
