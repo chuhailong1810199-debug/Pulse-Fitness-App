@@ -1314,87 +1314,6 @@ function wsmTip(el) {
   if (!isOpen) el.classList.add('tip-open');
 }
 
-// ── REST TIMER ──────────────────────────────────────────────────────
-const RT_CIRC = 2 * Math.PI * 48; // 301.59
-let _rtInterval = null;
-let _rtTotal    = 0;
-let _rtRemaining = 0;
-
-function _rtGetSeconds(key) {
-  const prog = getProgram(), day = prog[activeDay];
-  if (!day) return 90;
-  const parts = key.split('_');
-  const ei = parseInt(parts[parts.length - 1]);
-  const pi = parseInt(parts[parts.length - 2]);
-  const phase = day.phases[pi];
-  const ex    = phase?.exercises[ei];
-  if (!phase || !ex) return 90;
-  // Rest by phase tag
-  return { warmup: 30, strength: 90, accessories: 60, core: 60 }[phase.tag] ?? 60;
-}
-
-function _rtGetName(key) {
-  const prog = getProgram(), day = prog[activeDay];
-  if (!day) return '';
-  const parts = key.split('_');
-  return day.phases[parseInt(parts[parts.length-2])]?.exercises[parseInt(parts[parts.length-1])]?.name || '';
-}
-
-function showRestTimer(key) {
-  const secs = _rtGetSeconds(key);
-  const name = _rtGetName(key);
-  _rtTotal = secs;
-  _rtRemaining = secs;
-  document.getElementById('rt-ex-name').textContent = name;
-  _rtRefreshDisplay();
-  document.getElementById('rest-timer-sheet').classList.add('show');
-  if (_rtInterval) clearInterval(_rtInterval);
-  _rtInterval = setInterval(() => {
-    _rtRemaining--;
-    _rtRefreshDisplay();
-    if (_rtRemaining > 0 && _rtRemaining <= 3) _rtBeep(880);
-    if (_rtRemaining <= 0) {
-      clearInterval(_rtInterval); _rtInterval = null;
-      _rtBeep(1200);
-      if (navigator.vibrate) navigator.vibrate([80, 60, 80]);
-      setTimeout(rtSkip, 1800);
-    }
-  }, 1000);
-}
-
-function _rtRefreshDisplay() {
-  const m = Math.floor(_rtRemaining / 60);
-  const s = _rtRemaining % 60;
-  document.getElementById('rt-mins').textContent = m;
-  document.getElementById('rt-secs').textContent = String(s).padStart(2, '0');
-  const pct    = Math.max(0, _rtRemaining / _rtTotal);
-  const offset = RT_CIRC * (1 - pct);
-  const arc    = document.getElementById('rt-arc');
-  arc.style.strokeDashoffset = offset;
-}
-
-function rtAddTime(s) {
-  _rtRemaining = Math.min(_rtRemaining + s, _rtTotal + 60);
-  _rtRefreshDisplay();
-}
-
-function rtSkip() {
-  if (_rtInterval) { clearInterval(_rtInterval); _rtInterval = null; }
-  document.getElementById('rest-timer-sheet').classList.remove('show');
-}
-
-function _rtBeep(freq) {
-  try {
-    const ctx  = new (window.AudioContext || window.webkitAudioContext)();
-    const osc  = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain); gain.connect(ctx.destination);
-    osc.frequency.value = freq;
-    gain.gain.setValueAtTime(0.14, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.28);
-    osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.28);
-  } catch(e) {}
-}
 // ────────────────────────────────────────────────────────────
 
 function showToast(message, duration = 3000) {
@@ -2351,12 +2270,6 @@ function initDaySwipe() {
     if (ignored || !isSwiping) return;
     isSwiping = false;
     if (editMode) { list.style.transition = 'transform .25s cubic-bezier(0.34,1.56,0.64,1)'; list.style.transform = 'translateX(0)'; return; }
-    // Rest timer visible — block navigation
-    if (document.getElementById('rest-timer-sheet')?.classList.contains('show')) {
-      list.style.transition = 'transform .25s cubic-bezier(0.34,1.56,0.64,1)';
-      list.style.transform = 'translateX(0)';
-      return;
-    }
     const direction = curX < 0 ? 'left' : 'right';
     if (Math.abs(curX) >= THRESHOLD) {
       await swipeDayNav(direction);
@@ -2871,8 +2784,6 @@ function toggleExercise(key) {
       const total = day ? day.phases.reduce((a,p) => a + p.exercises.length, 0) : 0;
       const doneN = Object.values(exerciseState[activeClient.id] || {}).filter(Boolean).length;
       const isLast = doneN >= total && total > 0;
-      // Show rest timer for every exercise except the very last one
-      if (!isLast) showRestTimer(key);
       setTimeout(() => {
         updateProgress();
         if (isLast) {
@@ -5013,24 +4924,7 @@ h1 span{color:#7665ff;}
 .btn-save{flex:1;padding:9px;border-radius:4px;background:#1e90ff;color:#0a0e1a;border:none;font-family:'Figtree',sans-serif;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:1px;cursor:pointer;}
 .btn-discard{padding:9px 14px;border-radius:4px;background:transparent;border:1px solid rgba(255,255,255,0.16);color:rgba(255,255,255,0.60);font-family:'Figtree',sans-serif;font-size:13px;font-weight:700;text-transform:uppercase;cursor:pointer;}
 .btn-discard:hover{color:rgba(255,255,255,0.82);}
-/* ── REST TIMER ─────────────────────────────────────── */
-#rest-timer-sheet{position:fixed;bottom:0;left:0;right:0;background:#0f0e1a;border-top:1px solid rgba(255,255,255,0.09);border-radius:22px 22px 0 0;padding:18px 24px 36px;z-index:1100;transform:translateY(100%);transition:transform .38s cubic-bezier(0.34,1.15,0.64,1);box-shadow:0 -10px 50px rgba(0,0,0,0.7);}
-#rest-timer-sheet.show{transform:translateY(0);}
-#rt-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}
-#rt-label{font-size:10px;font-weight:800;letter-spacing:2.5px;color:rgba(255,255,255,0.35);text-transform:uppercase;}
-#rt-close-btn{background:none;border:none;color:rgba(255,255,255,0.3);font-size:16px;cursor:pointer;padding:4px 8px;line-height:1;}
-#rt-ex-name{font-size:14px;font-weight:700;color:rgba(255,255,255,0.75);text-align:center;margin-bottom:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-#rt-ring-wrap{position:relative;width:148px;height:148px;margin:0 auto 22px;}
-#rt-svg{width:148px;height:148px;transform:rotate(-90deg);}
-.rt-arc{fill:none;stroke:#7665ff;stroke-width:7;stroke-linecap:round;stroke-dasharray:301.59;stroke-dashoffset:0;transition:stroke-dashoffset .9s linear;}
-.rt-track{fill:none;stroke:rgba(118,101,255,0.18);stroke-width:7;}
-#rt-time-display{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:'Figtree',sans-serif;font-size:38px;font-weight:800;color:#fff;letter-spacing:-1px;}
-.rt-colon{opacity:.7;}
-#rt-actions{display:flex;gap:12px;justify-content:center;}
-.rt-btn{flex:1;max-width:150px;padding:13px;border-radius:13px;border:1px solid rgba(255,255,255,0.13);background:rgba(255,255,255,0.06);color:#fff;font-family:'Figtree',sans-serif;font-size:15px;font-weight:700;cursor:pointer;transition:background .15s, transform .1s;}
-.rt-btn:active{background:rgba(255,255,255,0.14);transform:scale(.97);}
-.rt-btn-skip{border-color:rgba(255,80,80,0.25);color:rgba(255,130,120,0.9);}
-/* Bump toast above timer when both visible */
+/* ── TOAST ─────────────────────────────────────── */
 #workout-toast{position:fixed;bottom:32px;left:50%;transform:translateX(-50%) translateY(20px);background:#1e1b3a;color:#fff;padding:14px 24px;border-radius:14px;font-family:'Figtree',sans-serif;font-size:15px;font-weight:600;box-shadow:0 6px 32px rgba(0,0,0,0.45);z-index:9999;opacity:0;transition:opacity .35s,transform .35s;pointer-events:none;white-space:nowrap;border:1px solid rgba(118,101,255,0.35);}
 #workout-toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 .finish-btn{width:100%;padding:16px;border-radius:50px;background:linear-gradient(135deg,#7665ff,#9b8dff);color:#fff;border:none;font-family:'Figtree',sans-serif;font-size:18px;font-weight:800;cursor:pointer;margin-top:1.25rem;text-transform:uppercase;letter-spacing:2px;transition:all .2s;box-shadow:0 4px 24px rgba(118,101,255,0.4);animation:pulseGlow 2.6s ease-in-out infinite;}
@@ -6962,25 +6856,5 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 </div>
 
 <!-- ── REST TIMER ─────────────────────────────────────── -->
-<div id="rest-timer-sheet">
-  <div id="rt-header">
-    <span id="rt-label">NGHỈ GIỮA SET</span>
-    <button id="rt-close-btn" onclick="rtSkip()">✕</button>
-  </div>
-  <div id="rt-ex-name"></div>
-  <div id="rt-ring-wrap">
-    <svg id="rt-svg" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
-      <circle class="rt-track" cx="60" cy="60" r="48"/>
-      <circle class="rt-arc" id="rt-arc" cx="60" cy="60" r="48"/>
-    </svg>
-    <div id="rt-time-display">
-      <span id="rt-mins">1</span><span class="rt-colon">:</span><span id="rt-secs">30</span>
-    </div>
-  </div>
-  <div id="rt-actions">
-    <button class="rt-btn" onclick="rtAddTime(15)">+15s</button>
-    <button class="rt-btn rt-btn-skip" onclick="rtSkip()">Skip</button>
-  </div>
-</div>
 </body>
 </html>
