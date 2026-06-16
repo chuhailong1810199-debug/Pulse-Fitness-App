@@ -231,6 +231,7 @@ function setLoginLoading(on) {
 }
 
 // ── USER PROFILE ───────────────────────────────────────
+const COACH_EMAILS = ['chuhailong1810199@gmail.com', 'coach@fitwithlongchu.com'];
 const _USER_CACHE_KEY = uid => 'pulse_user_v2_' + uid;
 
 async function loadUserProfile(user) {
@@ -268,18 +269,39 @@ async function loadUserProfile(user) {
     clientsSnap.forEach(d => {
       if ((d.data().email || '').toLowerCase().trim() === (user.email || '').toLowerCase().trim()) matchedClientId = d.id;
     });
-    const role = matchedClientId ? 'client' : 'coach';
+    let role, assignedClientId;
+    if (matchedClientId) {
+      // Known client added by coach
+      role = 'client'; assignedClientId = matchedClientId;
+    } else if (COACH_EMAILS.includes((user.email || '').toLowerCase())) {
+      // Coach account
+      role = 'coach'; assignedClientId = null;
+    } else {
+      // New self-signup — create client doc with empty program
+      const newClientId = (user.displayName || user.email || 'user')
+        .toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'')
+        .replace(/[^a-z0-9]/g,'_').replace(/_+/g,'_').replace(/^_|_$/g,'')
+        + '_' + Date.now();
+      await setDoc(doc(db, 'clients', newClientId), {
+        name: user.displayName || user.email,
+        email: user.email,
+        program: {},
+        goal: '', level: '', sessionsPerWeek: 0,
+        createdAt: serverTimestamp()
+      });
+      role = 'client'; assignedClientId = newClientId;
+    }
     const profileData = {
       email: user.email,
       name: user.displayName || user.email,
       photoURL: user.photoURL || '',
       role,
-      clientId: matchedClientId || null,
+      clientId: assignedClientId || null,
       createdAt: serverTimestamp()
     };
     await setDoc(userRef, profileData);
     userRole     = role;
-    userClientId = matchedClientId;
+    userClientId = assignedClientId;
   } else {
     userRole     = snap.data().role;
     userClientId = snap.data().clientId || null;
@@ -483,6 +505,13 @@ async function loadApp() {
     activeClient = clientsData[0];
     console.log('[clientId-debug] activeClient.id =', activeClient.id, '| userClientId =', userClientId);
     renderClientBar(false);
+
+    // ── Onboarding: no program yet → show intake form ──
+    if (!activeClient.program || Object.keys(activeClient.program).length === 0) {
+      showOnboarding();
+      return;
+    }
+
     await checkAndShowBaseline();
   }
 
@@ -3348,11 +3377,11 @@ function pwaDismiss(save = true) {
 }
 
 function showScreen(name) {
-  ['login-screen','loading-screen','app-screen','no-client-screen'].forEach(id => {
+  ['login-screen','loading-screen','app-screen','no-client-screen','onboarding-screen'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.classList.add('hidden');
   });
-  const target = document.getElementById(name + '-screen');
+  const target = document.getElementById(name + '-screen') || document.getElementById(name);
   if (target) target.classList.remove('hidden');
 }
 
@@ -3388,6 +3417,113 @@ function dismissIntro() {
   el.style.opacity = '0';
   setTimeout(() => el.classList.add('hidden'), 420);
   if (window._introDone) { window._introDone(); window._introDone = null; }
+}
+
+// ── ONBOARDING ──────────────────────────────────────────
+function showOnboarding() {
+  showScreen('onboarding');
+}
+
+async function submitOnboarding() {
+  const goal     = document.getElementById('onb-goal').value.trim();
+  const level    = document.getElementById('onb-level').value;
+  const sessions = document.getElementById('onb-sessions').value;
+  const duration = document.getElementById('onb-duration').value || '60';
+  const age      = document.getElementById('onb-age').value;
+  const gender   = document.getElementById('onb-gender').value;
+  const weight   = document.getElementById('onb-weight').value;
+  const height   = document.getElementById('onb-height').value;
+  const injuries = document.getElementById('onb-injuries').value.trim();
+  const errEl    = document.getElementById('onb-err');
+
+  if (!goal || !level || !sessions) {
+    errEl.textContent = 'Vui lòng điền mục tiêu, trình độ và số buổi/tuần.';
+    errEl.style.display = 'block';
+    return;
+  }
+  errEl.style.display = 'none';
+
+  // Show generating state
+  document.getElementById('onb-form').style.display = 'none';
+  document.getElementById('onb-generating').style.display = 'block';
+
+  const steps = [
+    'Pulse đang phân tích mục tiêu của bạn…',
+    'Đang xây dựng cấu trúc chương trình…',
+    'Cá nhân hóa từng bài tập…',
+    'Gần xong rồi! ✨',
+  ];
+  let si = 0;
+  const stepsInterval = setInterval(() => {
+    if (si < steps.length) document.getElementById('onb-gen-text').textContent = steps[si++];
+  }, 3000);
+
+  try {
+    const fn = firebase.app().functions('asia-southeast1').httpsCallable('pulseGenerateFree');
+    const result = await fn({
+      name:            currentUser.displayName || currentUser.email,
+      email:           currentUser.email,
+      goal,
+      level,
+      sessionsPerWeek: parseInt(sessions),
+      sessionDuration: parseInt(duration),
+      gender:          gender || null,
+      age:             age    ? parseInt(age)      : null,
+      weight:          weight ? parseFloat(weight) : null,
+      height:          height ? parseFloat(height) : null,
+      injuries:        injuries || null,
+    });
+    clearInterval(stepsInterval);
+
+    const rawProg = result.data?.program;
+    if (!rawProg) throw new Error('No program returned');
+
+    // Convert to SessionA/B/C format
+    // rawProg may be flat {Mon:{phases:[]}, Wed:...} or 4-week {phase1:{Mon:...}, _type:...}
+    let sessionMap = {};
+    if (rawProg.phase1) {
+      // 4-week format from landing.html — use phase1 as base
+      const phase1 = rawProg.phase1;
+      const days = Object.keys(phase1).filter(k => k !== 'label');
+      days.forEach((d, i) => { sessionMap[`Session${String.fromCharCode(65+i)}`] = phase1[d]; });
+    } else {
+      // Flat format — keys are already day names or SessionA/B/C
+      const keys = Object.keys(rawProg).filter(k => k !== '_type');
+      keys.forEach((k, i) => {
+        const sessionKey = /^Session[A-G]$/.test(k) ? k : `Session${String.fromCharCode(65+i)}`;
+        sessionMap[sessionKey] = rawProg[k];
+      });
+    }
+
+    // Save program + profile info to Firestore
+    await setDoc(doc(db, 'clients', userClientId), {
+      goal, level,
+      sessionsPerWeek: parseInt(sessions),
+      age:    age    ? parseInt(age)      : null,
+      gender: gender || null,
+      weight: weight ? parseFloat(weight) : null,
+      height: height ? parseFloat(height) : null,
+      program: sessionMap,
+    }, { merge: true });
+
+    // Update localStorage cache & reload app
+    document.getElementById('onb-gen-text').textContent = 'Chương trình đã sẵn sàng! 🎉';
+    await new Promise(r => setTimeout(r, 800));
+
+    // Reload app with the new program
+    activeClient.program = sessionMap;
+    activeClient.goal    = goal;
+    activeClient.level   = level;
+    document.getElementById('onboarding-screen').classList.add('hidden');
+    await loadApp();
+
+  } catch (err) {
+    clearInterval(stepsInterval);
+    document.getElementById('onb-generating').style.display = 'none';
+    document.getElementById('onb-form').style.display = 'block';
+    errEl.textContent = 'Có lỗi xảy ra: ' + (err.message || 'unknown') + '. Thử lại nhé!';
+    errEl.style.display = 'block';
+  }
 }
 
 function showNoClientError(debugMsg = '') {
@@ -5800,6 +5936,109 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 <!-- LOADING SCREEN -->
 <div id="loading-screen" class="loading-screen hidden">
   <div class="loading-spinner"></div>
+</div>
+
+<!-- ONBOARDING SCREEN -->
+<div id="onboarding-screen" class="hidden" style="position:fixed;inset:0;background:#0a0e1a;z-index:200;overflow-y:auto;-webkit-overflow-scrolling:touch;">
+  <style>
+    .onb-wrap{max-width:420px;margin:0 auto;padding:28px 20px 48px;}
+    .onb-logo{font-family:'Figtree',sans-serif;font-size:12px;font-weight:800;letter-spacing:1.5px;color:#7665ff;text-transform:uppercase;margin-bottom:28px;display:flex;align-items:center;gap:8px;}
+    .onb-logo img{width:24px;height:24px;object-fit:contain;}
+    .onb-title{font-family:'Figtree',sans-serif;font-size:22px;font-weight:800;color:#fff;margin-bottom:6px;line-height:1.2;}
+    .onb-sub{font-size:13px;color:rgba(255,255,255,.45);margin-bottom:28px;line-height:1.5;}
+    .onb-section{margin-bottom:20px;}
+    .onb-label{font-size:11px;font-weight:700;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;}
+    .onb-input,.onb-select,.onb-textarea{width:100%;padding:11px 14px;background:#111827;border:1px solid rgba(255,255,255,.08);border-radius:10px;color:#fff;font-size:14px;outline:none;box-sizing:border-box;transition:border-color .15s;-webkit-appearance:none;}
+    .onb-input:focus,.onb-select:focus,.onb-textarea:focus{border-color:#7665ff;}
+    .onb-select option{background:#111827;}
+    .onb-textarea{min-height:72px;resize:vertical;font-family:inherit;}
+    .onb-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+    .onb-btn{width:100%;padding:14px;border-radius:50px;border:none;background:linear-gradient(135deg,#7665ff,#5b45e0);color:#fff;font-size:15px;font-weight:700;cursor:pointer;margin-top:8px;font-family:'Figtree',sans-serif;letter-spacing:.2px;transition:opacity .15s;}
+    .onb-btn:hover{opacity:.9;}
+    .onb-btn:disabled{opacity:.4;cursor:not-allowed;}
+    .onb-generating{display:none;text-align:center;padding:32px 0;}
+    .onb-gen-icon{font-size:36px;margin-bottom:12px;animation:onb-pulse 1.5s ease-in-out infinite;}
+    .onb-gen-text{font-size:14px;color:rgba(255,255,255,.6);margin-bottom:4px;}
+    .onb-gen-sub{font-size:12px;color:rgba(255,255,255,.3);}
+    @keyframes onb-pulse{0%,100%{transform:scale(1);opacity:1;}50%{transform:scale(1.15);opacity:.7;}}
+  </style>
+  <div class="onb-wrap">
+    <div class="onb-logo"><img src="/images/pulse-logo.png" alt="Pulse"> Pulse</div>
+    <div class="onb-title">Chào mừng! 👋</div>
+    <div class="onb-sub">Cho Pulse biết thêm về bạn để tạo chương trình tập luyện cá nhân hóa.</div>
+
+    <div id="onb-form">
+      <div class="onb-section">
+        <div class="onb-label">Mục tiêu *</div>
+        <input id="onb-goal" class="onb-input" placeholder="Fat loss, tăng cơ, HYROX, sức mạnh…" type="text">
+      </div>
+      <div class="onb-section">
+        <div class="onb-label">Trình độ *</div>
+        <select id="onb-level" class="onb-select">
+          <option value="">— Chọn —</option>
+          <option value="Beginner">Beginner (mới bắt đầu)</option>
+          <option value="Intermediate">Intermediate (đã tập 1–2 năm)</option>
+          <option value="Advanced">Advanced (3+ năm)</option>
+        </select>
+      </div>
+      <div class="onb-row">
+        <div class="onb-section">
+          <div class="onb-label">Buổi / tuần *</div>
+          <select id="onb-sessions" class="onb-select">
+            <option value="">—</option>
+            <option value="2">2 buổi</option>
+            <option value="3">3 buổi</option>
+            <option value="4">4 buổi</option>
+            <option value="5">5 buổi</option>
+            <option value="6">6 buổi</option>
+          </select>
+        </div>
+        <div class="onb-section">
+          <div class="onb-label">Thời lượng</div>
+          <select id="onb-duration" class="onb-select">
+            <option value="60">60 phút</option>
+            <option value="90">90 phút</option>
+          </select>
+        </div>
+      </div>
+      <div class="onb-row">
+        <div class="onb-section">
+          <div class="onb-label">Tuổi</div>
+          <input id="onb-age" class="onb-input" type="number" placeholder="25">
+        </div>
+        <div class="onb-section">
+          <div class="onb-label">Giới tính</div>
+          <select id="onb-gender" class="onb-select">
+            <option value="">—</option>
+            <option value="Male">Nam</option>
+            <option value="Female">Nữ</option>
+          </select>
+        </div>
+      </div>
+      <div class="onb-row">
+        <div class="onb-section">
+          <div class="onb-label">Cân nặng (kg)</div>
+          <input id="onb-weight" class="onb-input" type="number" placeholder="65">
+        </div>
+        <div class="onb-section">
+          <div class="onb-label">Chiều cao (cm)</div>
+          <input id="onb-height" class="onb-input" type="number" placeholder="170">
+        </div>
+      </div>
+      <div class="onb-section">
+        <div class="onb-label">Chấn thương / Hạn chế</div>
+        <textarea id="onb-injuries" class="onb-textarea" placeholder="Đau gối, cột sống thắt lưng… (để trống nếu không có)"></textarea>
+      </div>
+      <div id="onb-err" style="display:none;color:#ff6b6b;font-size:12px;margin-bottom:12px;padding:10px 14px;background:rgba(255,100,100,.1);border-radius:8px;"></div>
+      <button class="onb-btn" onclick="submitOnboarding()">⚡ Tạo chương trình của tôi</button>
+    </div>
+
+    <div class="onb-generating" id="onb-generating">
+      <div class="onb-gen-icon">⚡</div>
+      <div class="onb-gen-text" id="onb-gen-text">Pulse đang phân tích mục tiêu của bạn…</div>
+      <div class="onb-gen-sub">Thường mất 10–20 giây</div>
+    </div>
+  </div>
 </div>
 
 <!-- NO CLIENT SCREEN -->
