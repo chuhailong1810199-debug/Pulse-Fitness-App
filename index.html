@@ -1865,12 +1865,16 @@ function renderDayTabs() {
   const idx = avail.indexOf(activeDay);
   const hasPrev = idx > 0;
   const hasNext = idx < avail.length - 1;
+  const deleteBtn = userRole === 'coach' && avail.length > 1
+    ? `<button class="day-delete-btn" onclick="deleteDay()" title="Xoá session này">🗑</button>`
+    : '';
   document.getElementById('day-tabs').innerHTML =
     `<div class="day-nav-inner">
        <button class="day-chev${hasPrev?'':' invis'}" onclick="swipeDayNav('right')" aria-label="Previous day">‹</button>
        <div class="day-nav-center">
          <span class="day-nav-name">${getSessionLabel(activeDay)}</span>
          <span class="day-nav-pos">${idx + 1} / ${avail.length}</span>
+         ${deleteBtn}
        </div>
        <button class="day-chev${hasNext?'':' invis'}" onclick="swipeDayNav('left')" aria-label="Next day">›</button>
      </div>`;
@@ -2758,6 +2762,22 @@ async function addDay() {
     setDay(day);
   }
   closeModal('add-day-modal');
+}
+
+async function deleteDay() {
+  const label = getSessionLabel(activeDay);
+  if (!confirm(`Xoá "${label}" khỏi chương trình?\n\nHành động này không thể hoàn tác.`)) return;
+  const prog = getOrCreateProgram();
+  const avail = DAYS.filter(d => prog[d]);
+  const idx   = avail.indexOf(activeDay);
+  delete prog[activeDay];
+  // Move to adjacent session
+  const remaining = DAYS.filter(d => prog[d]);
+  activeDay = remaining[Math.min(idx, remaining.length - 1)] || remaining[0];
+  await saveProgramToFirestore();
+  renderDayTabs();
+  await hydrateExerciseLoadsForActiveDay();
+  renderExercises();
 }
 
 // ── EXERCISE MODAL ─────────────────────────────────────
@@ -3844,6 +3864,7 @@ window._toggleAddPhaseForm = toggleAddPhaseForm;
 window._addExercise = addExercise;
 window._addPhase = addPhase;
 window._addDay = addDay;
+window._deleteDay = deleteDay;
 window._finishWorkout = finishWorkout;
 window.__finishWorkout = finishWorkout;
 
@@ -4789,6 +4810,8 @@ h1 span{color:#7665ff;}
 .day-chev{background:none;border:none;color:rgba(255,255,255,0.30);font-size:20px;font-weight:700;cursor:pointer;padding:4px 10px;line-height:1;transition:color .15s,transform .12s;user-select:none;}
 .day-chev:active{color:#fff;transform:scale(1.2);}
 .day-chev.invis{visibility:hidden;pointer-events:none;}
+.day-delete-btn{background:none;border:none;font-size:13px;cursor:pointer;opacity:0.35;padding:2px 4px;line-height:1;display:inline-block;margin-top:4px;transition:opacity .15s;}
+.day-delete-btn:hover{opacity:0.8;}
 /* Compact edit controls */
 .ctrl-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;padding:2px 0;}
 .ctrl-label{font-size:10px;color:rgba(255,255,255,0.30);text-transform:uppercase;letter-spacing:1.5px;font-weight:700;}
@@ -5673,6 +5696,7 @@ window.toggleAddPhaseForm= function() { _q('_toggleAddPhaseForm',[]); };
 window.addExercise       = function(pi){ _q('_addExercise',[pi]); };
 window.addPhase          = function() { _q('_addPhase',[]); };
 window.addDay            = function() { _q('_addDay',[]); };
+window.deleteDay         = function() { _q('_deleteDay',[]); };
 window.finishWorkout     = function() { _q('_finishWorkout',[]); };
 window.blGender          = function(g){ _q('_blGender',[g]); };
 window.blCalc            = function() { _q('_blCalc',[]); };
