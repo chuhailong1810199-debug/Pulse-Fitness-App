@@ -351,7 +351,13 @@ function _launchAfterProfile(user) {
       });
       slidesEl.classList.remove('hidden');
       setTimeout(() => { if (!window._splashDismissed) skipSlides(); }, 2300);
-      loadApp().then(() => { window._appLoaded = true; });
+      loadApp()
+        .then(() => { window._appLoaded = true; })
+        .catch(err => {
+          console.error('[loadApp] fatal error:', err);
+          window._appLoaded = true;
+          showScreen('app');
+        });
       return;
     }
   }
@@ -5541,6 +5547,15 @@ function skipSlides() {
         showScreen('app');
       }
     }, 100);
+    // Safety net: force-show app after 10s to break infinite loading loops
+    setTimeout(() => {
+      if (!window._appLoaded) {
+        console.warn('[skipSlides] 10s timeout — forcing app screen');
+        clearInterval(waitForApp);
+        window._appLoaded = true;
+        showScreen('app');
+      }
+    }, 10000);
   }
 }
 // All other functions are set by the module on window.*
