@@ -2332,12 +2332,13 @@ function renderExercises() {
         <button class="phase-rename-cancel" onclick="cancelRenamePhase(${pi})">✕</button>
       </div></div>`;
     } else {
-      html += `<span class="phase-tag ${phaseTagClass[phase.tag]||'phase-warmup'}">${phase.name}</span></div>`;
+      const exCount = phase.exercises?.length || 0;
+      html += `<span class="phase-tag ${phaseTagClass[phase.tag]||'phase-warmup'}">${phase.name}</span><span class="phase-count">${exCount} exercise${exCount!==1?'s':''}</span></div>`;
     }
     // trainer-note-card removed (user request)
     if (!editMode) {
       // (unreachable in edit mode — kept for safety)
-      html += `<div class="exercise-flow">`;
+      html += `<div class="exercise-flow phase-flow-${phase.tag||'warmup'}">`;
       phase.exercises.forEach((ex, ei) => {
         const key  = activeClient.id+'_'+activeDay+'_'+pi+'_'+ei;
         const done = !!(exerciseState[activeClient.id] && exerciseState[activeClient.id][key]);
@@ -4767,12 +4768,18 @@ h1 span{color:#7665ff;}
 .progress-fill::after{content:'';position:absolute;top:0;left:-100%;width:50%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,0.25),transparent);animation:pb-shimmer 2s infinite;}
 @keyframes pb-shimmer{0%{left:-60%}100%{left:150%}}
 .progress-fill.done-100{background:linear-gradient(90deg,#7665ff,#b8aaff);}
-.phase-header{display:flex;align-items:center;gap:10px;margin:1.25rem 0 .75rem;}
-.phase-tag{font-family:'Figtree',sans-serif;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1.5px;padding:4px 10px;border-radius:3px;}
-.phase-warmup{background:#1a2e1a;color:#44cc66;border:1px solid #2a4e2a;}
-.phase-core{background:#1a1a2e;color:#6688ff;border:1px solid #2a2a4e;}
-.phase-strength{background:#2e1a00;color:#ff9933;border:1px solid #4e3000;}
-.phase-accessories{background:#222222;color:#bbbbbb;border:1px solid #3a3a3a;}
+.phase-header{display:flex;align-items:center;gap:10px;margin:1.75rem 0 .9rem;}
+.phase-tag{font-family:'Figtree',sans-serif;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1.2px;padding:5px 12px;border-radius:6px;}
+.phase-count{font-size:11px;color:rgba(255,255,255,0.3);font-weight:600;letter-spacing:.5px;text-transform:uppercase;}
+.phase-warmup{background:rgba(68,204,102,0.12);color:#44cc66;border:1px solid rgba(68,204,102,0.28);}
+.phase-core{background:rgba(102,136,255,0.12);color:#7a9aff;border:1px solid rgba(102,136,255,0.28);}
+.phase-strength{background:rgba(118,101,255,0.15);color:#9b8dff;border:1px solid rgba(118,101,255,0.35);}
+.phase-accessories{background:rgba(100,200,220,0.1);color:#64cce0;border:1px solid rgba(100,200,220,0.22);}
+/* Left accent border on nodes per phase */
+.phase-flow-warmup .exercise-node{border-left:2px solid rgba(68,204,102,0.55);}
+.phase-flow-strength .exercise-node{border-left:2px solid rgba(118,101,255,0.65);}
+.phase-flow-accessories .exercise-node{border-left:2px solid rgba(100,200,220,0.45);}
+.phase-flow-core .exercise-node{border-left:2px solid rgba(102,136,255,0.55);}
 .phase-note{font-size:11px;color:rgba(255,255,255,0.35);flex:1;}
 /* ── Trainer Note card ── */
 .trainer-note-card{display:flex;gap:10px;align-items:flex-start;background:oklch(20% .08 60/0.18);border:1px solid oklch(75% .15 60/0.25);border-radius:10px;padding:12px 14px;margin-top:8px;margin-bottom:4px;}
