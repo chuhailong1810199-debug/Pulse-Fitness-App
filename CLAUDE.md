@@ -5,7 +5,7 @@
 | Thai Son | thaison | sonnguyen109992@gmail.com | Advanced | 7 |
 | Sang | sang | (no email) | Beginner | 3 |
 | Cindy | cindy | dollykim1401@gmail.com | Intermediate | 3 |
-| Lee | lee | kuanyu@gmail.com | Intermediate | 3 |
+| Lee | lee | kuanyu41@gmail.com | Intermediate | 3 |
 | Joost | joost | joost123@gmail.com | — | — |
 | Long Chu | longchu | coach@fitwithlongchu.com | — | — |
 | Chị Nguyệt | chị_nguyệt_1776562700235 | nguyet.cm83@gmail.com | — | 3 |
