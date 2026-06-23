@@ -193,7 +193,14 @@ onAuthStateChanged(auth, async user => {
     currentUser = user;
     document.getElementById('slides-screen')?.classList.add('hidden');
     document.getElementById('login-screen')?.classList.add('hidden');
-    await loadUserProfile(user);
+    try {
+      await loadUserProfile(user);
+    } catch (err) {
+      console.error('[onAuthStateChanged] loadUserProfile failed:', err);
+      // Clear stale cache and show login so user can retry
+      localStorage.removeItem(_USER_CACHE_KEY(user.uid));
+      showScreen('login');
+    }
   } else {
     currentUser = null;
     userRole = null;
