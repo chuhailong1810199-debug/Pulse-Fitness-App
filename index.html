@@ -2824,9 +2824,15 @@ function updateProgress() {
   const cards = document.querySelectorAll('.exercise-card, .exercise-node');
   const done  = document.querySelectorAll('.exercise-card.done-card, .exercise-node.done-node').length;
   const total = cards.length, pct = total ? Math.round(done/total*100) : 0;
-  document.getElementById('progress').style.width        = pct + '%';
-  document.getElementById('progress-label').textContent  = pct + '% complete';
-  document.getElementById('done-count').textContent      = done + '/' + total;
+  const fill  = document.getElementById('progress');
+  fill.style.width = pct + '%';
+  fill.classList.toggle('done-100', pct === 100);
+  const label = document.getElementById('progress-label');
+  label.textContent = pct === 100 ? '🎉 Workout done!' : pct + '% complete';
+  label.classList.toggle('done', pct === 100);
+  document.getElementById('done-count').textContent = done + '/' + total;
+  const exCount = document.getElementById('progress-ex-count');
+  if (exCount) exCount.textContent = done + ' / ' + total + ' exercises';
 }
 
 async function renderStats() {
@@ -4752,9 +4758,15 @@ h1 span{color:#7665ff;}
 #exercise-list{will-change:transform;}
 .day-tab:hover{border-color:rgba(118,101,255,0.5);color:rgba(255,255,255,0.82);}
 .progress-wrap{margin-bottom:1.5rem;}
-.progress-bar{height:3px;background:#1e1e1e;border-radius:2px;overflow:hidden;}
-.progress-fill{height:100%;background:linear-gradient(90deg,#7665ff,#9b8dff);border-radius:2px;transition:width .4s cubic-bezier(.4,0,.2,1);}
-.progress-label{font-size:11px;color:rgba(255,255,255,0.35);text-align:right;margin-top:4px;text-transform:uppercase;letter-spacing:.5px;font-weight:700;}
+.progress-label-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
+.progress-label{font-size:13px;color:rgba(255,255,255,0.85);font-weight:700;letter-spacing:.3px;}
+.progress-label.done{color:#b8aaff;}
+.progress-ex-count{font-size:11px;color:rgba(255,255,255,0.35);text-transform:uppercase;letter-spacing:.5px;font-weight:600;}
+.progress-bar{height:8px;background:rgba(255,255,255,0.07);border-radius:8px;overflow:hidden;}
+.progress-fill{height:100%;background:linear-gradient(90deg,#7665ff,#9b8dff);border-radius:8px;transition:width .6s cubic-bezier(.4,0,.2,1);position:relative;overflow:hidden;}
+.progress-fill::after{content:'';position:absolute;top:0;left:-100%;width:50%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,0.25),transparent);animation:pb-shimmer 2s infinite;}
+@keyframes pb-shimmer{0%{left:-60%}100%{left:150%}}
+.progress-fill.done-100{background:linear-gradient(90deg,#7665ff,#b8aaff);}
 .phase-header{display:flex;align-items:center;gap:10px;margin:1.25rem 0 .75rem;}
 .phase-tag{font-family:'Figtree',sans-serif;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1.5px;padding:4px 10px;border-radius:3px;}
 .phase-warmup{background:#1a2e1a;color:#44cc66;border:1px solid #2a4e2a;}
@@ -6100,8 +6112,11 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
       </div>
     </div>
     <div class="progress-wrap">
+      <div class="progress-label-row">
+        <span class="progress-label" id="progress-label">0% complete</span>
+        <span class="progress-ex-count" id="progress-ex-count">0 / 0 exercises</span>
+      </div>
       <div class="progress-bar"><div class="progress-fill" id="progress" style="width:0%"></div></div>
-      <div class="progress-label" id="progress-label">0% complete</div>
     </div>
     <div id="exercise-list"><div class="loading">Loading program...</div></div>
     <button class="finish-btn" onclick="finishWorkout()">Complete Workout ✓</button>
