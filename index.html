@@ -355,8 +355,17 @@ function _launchAfterProfile(user) {
         .then(() => { window._appLoaded = true; })
         .catch(err => {
           console.error('[loadApp] fatal error:', err);
-          window._appLoaded = true;
-          showScreen('app');
+          // First failure: wipe cache and retry once with a clean load
+          const _retryKey = 'pulse_loadapp_retried_' + (currentUser?.uid || '');
+          if (!sessionStorage.getItem(_retryKey)) {
+            sessionStorage.setItem(_retryKey, '1');
+            if (currentUser) localStorage.removeItem(_USER_CACHE_KEY(currentUser.uid));
+            window.location.reload();
+          } else {
+            // Already retried — just show the app (better than infinite loop)
+            window._appLoaded = true;
+            showScreen('app');
+          }
         });
       return;
     }
