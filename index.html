@@ -4027,7 +4027,7 @@ async function renderCoachDashboard() {
         datasets: [{
           label: 'Sessions',
           data: weeks.map(w => w.sessions),
-          backgroundColor: weeks.map((w, i) => i === weeks.length-1 ? '#ffffff' : 'rgba(255,255,255,0.40)'),
+          backgroundColor: weeks.map((w, i) => i === weeks.length-1 ? '#8b6cff' : 'rgba(139,108,255,0.32)'),
           borderRadius: 4,
         }]
       },
@@ -7180,6 +7180,21 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 #progress-page .reset-option-btn{background:linear-gradient(150deg,#1c1338,#15102b) !important;border:1px solid rgba(167,139,250,.12) !important;border-radius:13px !important;}
 #progress-page .reset-option-title{color:#F4F1FB !important;}
 #progress-page .reset-option-sub{color:rgba(188,168,255,.45) !important;}
+/* coach dashboard */
+#progress-page .cd-section-title{color:var(--ac-hi) !important;}
+#progress-page .cd-stat{
+  background:linear-gradient(150deg,#1c1338,#15102b) !important;border:1px solid rgba(167,139,250,.14) !important;border-radius:14px !important;padding:13px 10px !important;}
+#progress-page .cd-stat-num{color:#F4F1FB !important;}
+#progress-page .cd-stat-lbl{color:rgba(188,168,255,.5) !important;}
+#progress-page .cd-card{
+  background:linear-gradient(150deg,#1c1338,#15102b) !important;border:1px solid rgba(167,139,250,.13) !important;
+  border-left:1px solid rgba(167,139,250,.13) !important;border-radius:16px !important;padding:1.1rem 1.25rem !important;}
+#progress-page .cd-card-title{color:var(--ac-hi) !important;}
+#progress-page .cd-muscle-name{color:#F4F1FB !important;}
+#progress-page .cd-muscle-rank{color:rgba(188,168,255,.45) !important;}
+#progress-page .cd-muscle-vol{color:var(--ac-hi) !important;}
+#progress-page .cd-hist-table th{color:rgba(188,168,255,.5) !important;border-bottom:1px solid rgba(167,139,250,.16) !important;}
+#progress-page .cd-hist-table td{color:#E7E0FB !important;border-bottom:1px solid rgba(167,139,250,.08) !important;}
 </style>
 </body>
 </html>
