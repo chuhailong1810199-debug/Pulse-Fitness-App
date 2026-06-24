@@ -2672,8 +2672,22 @@ async function addExercise(pi) {
     exData.difficulty  = _lastPickedExercise.difficulty  || '';
     _lastPickedExercise = null;
   }
-  getOrCreateProgram()[activeDay].phases[pi].exercises.push(exData);
-  await saveProgramToFirestore(); renderExercises();
+  const day = getOrCreateProgram()[activeDay];
+  if (!day || !day.phases || !day.phases[pi]) {
+    console.error('[addExercise] invalid day/phase', activeDay, pi);
+    return;
+  }
+  day.phases[pi].exercises.push(exData);
+  renderExercises(); // optimistic render trước khi await
+  try {
+    await saveProgramToFirestore();
+  } catch(e) {
+    console.error('[addExercise] save failed', e);
+    // revert local change nếu Firestore từ chối
+    day.phases[pi].exercises.pop();
+    renderExercises();
+    alert('Không lưu được bài tập. Vui lòng thử lại.');
+  }
 }
 async function addPhase() {
   const name = document.getElementById('new-phase-name').value.trim();
