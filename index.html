@@ -2837,6 +2837,22 @@ function toggleExercise(key) {
     renderExercises(); updateProgress();
   }
 }
+function markAllDone() {
+  const prog = getProgram(), day = prog[activeDay];
+  if (!day || !activeClient) return;
+  if (!exerciseState[activeClient.id]) exerciseState[activeClient.id] = {};
+  const total = day.phases.reduce((a, p) => a + p.exercises.length, 0);
+  if (!total) return;
+  day.phases.forEach((phase, pi) => {
+    phase.exercises.forEach((_, ei) => {
+      exerciseState[activeClient.id][activeClient.id + '_' + activeDay + '_' + pi + '_' + ei] = true;
+    });
+  });
+  if (!window._workoutStartTime) window._workoutStartTime = Date.now();
+  updateProgress();
+  setTimeout(() => showCelebration(total), 200);
+}
+
 function updateProgress() {
   const cards = document.querySelectorAll('.exercise-card, .exercise-node');
   const done  = document.querySelectorAll('.exercise-card.done-card, .exercise-node.done-node').length;
@@ -5270,7 +5286,9 @@ h1 span{color:#7665ff;}
 /* ── TOAST ─────────────────────────────────────── */
 #workout-toast{position:fixed;bottom:32px;left:50%;transform:translateX(-50%) translateY(20px);background:#1e1b3a;color:#fff;padding:14px 24px;border-radius:14px;font-family:'Figtree',sans-serif;font-size:15px;font-weight:600;box-shadow:0 6px 32px rgba(0,0,0,0.45);z-index:9999;opacity:0;transition:opacity .35s,transform .35s;pointer-events:none;white-space:nowrap;border:1px solid rgba(118,101,255,0.35);}
 #workout-toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
-.finish-btn{width:100%;padding:16px;border-radius:50px;background:linear-gradient(135deg,#7665ff,#9b8dff);color:#fff;border:none;font-family:'Figtree',sans-serif;font-size:18px;font-weight:800;cursor:pointer;margin-top:1.25rem;text-transform:uppercase;letter-spacing:2px;transition:all .2s;box-shadow:0 4px 24px rgba(118,101,255,0.4);animation:pulseGlow 2.6s ease-in-out infinite;}
+.mark-all-btn{width:100%;padding:11px;border-radius:50px;background:transparent;border:1.5px solid rgba(118,101,255,0.45);color:rgba(188,168,255,0.85);font-family:'Figtree',sans-serif;font-size:13px;font-weight:700;cursor:pointer;margin-top:1.25rem;text-transform:uppercase;letter-spacing:1.5px;transition:all .18s;}
+.mark-all-btn:active{background:rgba(118,101,255,0.12);transform:scale(.98);}
+.finish-btn{width:100%;padding:16px;border-radius:50px;background:linear-gradient(135deg,#7665ff,#9b8dff);color:#fff;border:none;font-family:'Figtree',sans-serif;font-size:18px;font-weight:800;cursor:pointer;margin-top:.6rem;text-transform:uppercase;letter-spacing:2px;transition:all .2s;box-shadow:0 4px 24px rgba(118,101,255,0.4);animation:pulseGlow 2.6s ease-in-out infinite;}
 .finish-btn:hover{transform:translateY(-2px);box-shadow:0 8px 32px rgba(118,101,255,0.55);}
 .add-phase-section{margin:1.5rem 0 .5rem;}
 .add-phase-btn{width:100%;padding:10px;border-radius:6px;background:transparent;border:1px dashed rgba(255,255,255,0.35);color:rgba(255,255,255,0.72);font-family:'Figtree',sans-serif;font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:1px;cursor:pointer;transition:all .15s;}
@@ -6429,6 +6447,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
       <div class="progress-bar"><div class="progress-fill" id="progress" style="width:0%"></div></div>
     </div>
     <div id="exercise-list"><div class="loading">Loading program...</div></div>
+    <button class="mark-all-btn" onclick="markAllDone()">✓ Mark All Done</button>
     <button class="finish-btn" onclick="finishWorkout()">Complete Workout ✓</button>
   </div>
 
