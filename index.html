@@ -3915,20 +3915,48 @@ async function schedDeleteEvt(id) {
 async function _schedLoadSummary() {
   const now=new Date(), y=now.getFullYear(), mo=now.getMonth();
   const ms=String(mo+1).padStart(2,'0');
-  const snap=await getDocs(query(collection(db,'bookings'),where('date','>=',`${y}-${ms}-01`),where('date','<=',`${y}-${ms}-31`),where('status','==','done')));
+  // Load all bookings for month, filter done in JS (avoids composite index requirement)
+  const snap=await getDocs(query(
+    collection(db,'bookings'),
+    where('date','>=',`${y}-${ms}-01`),
+    where('date','<=',`${y}-${ms}-31`)
+  ));
   const byTitle={}; let total=0;
-  snap.forEach(d => { const t=d.data().title||'Session'; byTitle[t]=(byTitle[t]||0)+1; total++; });
+  snap.forEach(d => {
+    const data = d.data();
+    if (data.status === 'done') {
+      const t = data.title || 'Session';
+      byTitle[t] = (byTitle[t]||0)+1;
+      total++;
+    }
+  });
   return {byTitle, total};
 }
 
 function _schedRenderSummary(byTitle, total) {
   const wrap = document.getElementById('sch-summary-body');
   if (!wrap) return;
-  if (total === 0) { wrap.innerHTML='<p class="sch-empty">Chưa có session nào tháng này</p>'; return; }
+  if (total === 0) {
+    wrap.innerHTML = '<p class="sch-empty">Chưa có session nào được đánh dấu Xong tháng này</p>';
+    return;
+  }
   const entries = Object.entries(byTitle).sort((a,b) => b[1]-a[1]);
-  let html = `<div class="sch-total-badge">${total} sessions</div><div class="sch-sum-grid">`;
-  entries.forEach(([t,n]) => { html+=`<div class="sch-sum-item"><span class="sch-sum-name">${t}</span><span class="sch-sum-n">${n}</span></div>`; });
-  html += '</div>';
+  const maxN    = entries[0][1];
+  let html = `
+    <div class="sch-sum-hero">
+      <div class="sch-sum-hero-num">${total}</div>
+      <div class="sch-sum-hero-lbl">sessions tháng này</div>
+    </div>
+    <div class="sch-sum-rows">
+      ${entries.map(([t,n]) => `
+        <div class="sch-sum-row">
+          <span class="sch-sum-rname">${t}</span>
+          <div class="sch-sum-bar-wrap">
+            <div class="sch-sum-bar" style="width:${Math.round(n/maxN*100)}%"></div>
+          </div>
+          <span class="sch-sum-rn">${n}</span>
+        </div>`).join('')}
+    </div>`;
   wrap.innerHTML = html;
 }
 
@@ -7543,13 +7571,19 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .sch-modal-btn-s:active{opacity:.85;}
 
 /* Summary */
-.sch-sum-wrap{margin:18px 8px 0;padding:16px;border-radius:14px;background:linear-gradient(150deg,#1c1338,#15102b);border:1px solid rgba(167,139,250,.14);}
-.sch-sum-title{font-size:10px;font-weight:700;color:var(--ac-hi);text-transform:uppercase;letter-spacing:2px;margin-bottom:12px;}
-.sch-total-badge{display:inline-block;padding:4px 14px;border-radius:99px;background:linear-gradient(135deg,#8b6cff,#6d45e0);color:#fff;font-size:13px;font-weight:800;margin-bottom:12px;}
-.sch-sum-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:7px;}
-.sch-sum-item{display:flex;align-items:center;justify-content:space-between;padding:8px 11px;border-radius:10px;background:rgba(139,108,255,.08);border:1px solid rgba(139,108,255,.15);}
-.sch-sum-name{font-size:12px;font-weight:600;color:#F4F1FB;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.sch-sum-n{font-size:18px;font-weight:800;color:#8b6cff;flex-shrink:0;margin-left:4px;}
+.sch-sum-wrap{margin:18px 8px 0;padding:20px;border-radius:16px;background:linear-gradient(150deg,#1c1338,#15102b);border:1px solid rgba(167,139,250,.16);}
+.sch-sum-title{font-size:11px;font-weight:700;color:var(--ac-hi);text-transform:uppercase;letter-spacing:2px;margin-bottom:16px;}
+/* Hero total */
+.sch-sum-hero{display:flex;align-items:baseline;gap:8px;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid rgba(167,139,250,.12);}
+.sch-sum-hero-num{font-size:52px;font-weight:800;color:#fff;line-height:1;background:linear-gradient(135deg,#fff,var(--ac-hi));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
+.sch-sum-hero-lbl{font-size:15px;font-weight:600;color:rgba(188,168,255,.6);}
+/* Per-client rows */
+.sch-sum-rows{display:flex;flex-direction:column;gap:10px;}
+.sch-sum-row{display:grid;grid-template-columns:90px 1fr 28px;align-items:center;gap:10px;}
+.sch-sum-rname{font-size:13px;font-weight:600;color:#F4F1FB;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sch-sum-bar-wrap{background:rgba(139,108,255,.12);border-radius:99px;height:6px;overflow:hidden;}
+.sch-sum-bar{height:100%;border-radius:99px;background:linear-gradient(90deg,#8b6cff,#bca8ff);transition:width .4s ease;}
+.sch-sum-rn{font-size:14px;font-weight:700;color:#8b6cff;text-align:right;}
 .sch-empty{font-size:12px;color:rgba(188,168,255,.4);text-align:center;padding:8px 0;margin:0;}
 </style>
 </body>
