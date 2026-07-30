@@ -3863,10 +3863,21 @@ async function renderSchedulePage() {
   `;
   _schedUpdateLabel();
 
-  _schedBookings = await _schedLoad(_schedWeekStart);
+  try {
+    _schedBookings = await _schedLoad(_schedWeekStart);
+  } catch(e) {
+    console.error('[schedule] load week failed', e);
+    _schedBookings = {};
+  }
   _schedRenderGrid();
 
-  _schedLoadSummary().then(({byClient,total}) => _schedRenderSummary(byClient,total));
+  _schedLoadSummary()
+    .then(({byClient,total}) => _schedRenderSummary(byClient,total))
+    .catch(e => {
+      console.error('[schedule] summary failed', e);
+      const w = document.getElementById('sch-summary-body');
+      if (w) w.innerHTML = '<p class="sch-empty">Không tải được dữ liệu</p>';
+    });
 }
 
 function _schedUpdateLabel() {
