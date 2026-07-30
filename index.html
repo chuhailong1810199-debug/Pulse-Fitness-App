@@ -3758,9 +3758,10 @@ async function _schedLoadWeek(weekStart) {
   return evts;
 }
 
-function _schedRenderCalendar() {
+function _schedRenderCalendar(keepScroll = false) {
   const wrap = document.getElementById('sch-cal-wrap');
   if (!wrap) return;
+  const savedScroll = keepScroll ? (document.getElementById('sch-grid-scroll')?.scrollTop ?? null) : null;
   const today  = _schedFmt(new Date());
   const days   = Array.from({length:7}, (_,i) => _schedAddDays(_schedWeekStart, i));
   const SLOT_H = 30; // px per 30-min slot
@@ -3817,9 +3818,13 @@ function _schedRenderCalendar() {
 
   const scrollEl = document.getElementById('sch-grid-scroll');
   if (scrollEl) {
-    const now = new Date();
-    const inWk = _schedFmt(now) >= _schedFmt(_schedWeekStart) && _schedFmt(now) <= _schedFmt(_schedAddDays(_schedWeekStart,6));
-    scrollEl.scrollTop = (inWk ? Math.max(0, now.getHours()-1) : 7) * 2 * SLOT_H;
+    if (savedScroll !== null) {
+      scrollEl.scrollTop = savedScroll;
+    } else {
+      const now = new Date();
+      const inWk = _schedFmt(now) >= _schedFmt(_schedWeekStart) && _schedFmt(now) <= _schedFmt(_schedAddDays(_schedWeekStart,6));
+      scrollEl.scrollTop = (inWk ? Math.max(0, now.getHours()-1) : 7) * 2 * SLOT_H;
+    }
   }
 }
 
@@ -3864,13 +3869,13 @@ async function schedSaveNew(date) {
   const evt = { id, date, startTime:start, endTime:end, title, status:'booked' };
   _schedEvents.push(evt);
   schedCloseModal();
-  _schedRenderCalendar();
+  _schedRenderCalendar(true);
   try {
     await setDoc(doc(db,'bookings',id), { date, startTime:start, endTime:end, title, status:'booked', updatedAt:serverTimestamp() });
   } catch(err) {
     console.error('[schedule] save failed', err);
     _schedEvents = _schedEvents.filter(e => e.id !== id);
-    _schedRenderCalendar();
+    _schedRenderCalendar(true);
     alert('Không lưu được. Vui lòng thử lại.');
   }
 }
@@ -3899,15 +3904,15 @@ async function schedToggleDone(id) {
   const evt = _schedEvents.find(e => e.id === id);
   if (!evt) return;
   const ns = evt.status === 'done' ? 'booked' : 'done';
-  evt.status = ns; schedCloseModal(); _schedRenderCalendar();
+  evt.status = ns; schedCloseModal(); _schedRenderCalendar(true);
   _schedLoadSummary().then(({byTitle,total}) => _schedRenderSummary(byTitle,total)).catch(()=>{});
   try { await updateDoc(doc(db,'bookings',id), {status:ns, updatedAt:serverTimestamp()}); }
-  catch(err) { evt.status = ns === 'done' ? 'booked' : 'done'; _schedRenderCalendar(); }
+  catch(err) { evt.status = ns === 'done' ? 'booked' : 'done'; _schedRenderCalendar(true); }
 }
 
 async function schedDeleteEvt(id) {
   _schedEvents = _schedEvents.filter(e => e.id !== id);
-  schedCloseModal(); _schedRenderCalendar();
+  schedCloseModal(); _schedRenderCalendar(true);
   _schedLoadSummary().then(({byTitle,total}) => _schedRenderSummary(byTitle,total)).catch(()=>{});
   try { await deleteDoc(doc(db,'bookings',id)); } catch(err) { console.error('[schedule] delete failed', err); }
 }
