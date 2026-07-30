@@ -3788,8 +3788,9 @@ function _schedRenderCalendar() {
         <div class="sch-tgutter">
           ${slots.map(m => {
             const isHour = m % 60 === 0;
+            const isFirst = m === SCH_START*60;
             return `<div class="sch-tslot${isHour?'':' sch-tslot-half'}">
-              ${isHour ? `<span class="sch-tlbl">${String(Math.floor(m/60)).padStart(2,'0')}:00</span>` : ''}
+              ${isHour ? `<span class="sch-tlbl${isFirst?' sch-tlbl-first':''}">${String(Math.floor(m/60)).padStart(2,'0')}:00</span>` : ''}
             </div>`;
           }).join('')}
         </div>
@@ -7497,6 +7498,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .sch-tslot{height:30px;position:relative;}
 .sch-tslot,.sch-tslot-half{height:30px;position:relative;}
 .sch-tlbl{position:absolute;top:-8px;right:6px;font-size:10px;color:rgba(255,255,255,.28);white-space:nowrap;font-weight:500;}
+.sch-tlbl-first{top:3px;}
 
 /* Day columns */
 .sch-dcol{position:relative;border-left:1px solid rgba(255,255,255,.05);}
@@ -7518,7 +7520,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 }
 .sch-evt:active{opacity:.7;}
 .sch-evt-done{background:linear-gradient(145deg,rgba(109,40,217,.45),rgba(91,33,182,.35));opacity:.55;}
-.sch-evt-ttl{font-size:12px;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;}
+.sch-evt-ttl{font-size:12px;font-weight:700;color:#fff;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;}
 .sch-evt-sub{font-size:10px;color:rgba(255,255,255,.75);white-space:nowrap;overflow:hidden;}
 
 /* Modal backdrop */
