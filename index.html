@@ -466,6 +466,8 @@ async function loadApp() {
   if (userRole === 'coach') {
     await loadAllClients();
     renderClientBar(true);
+    const schTab = document.getElementById('schedule-nav-tab');
+    if (schTab) schTab.style.display = '';
     // Coach with no clients yet — show empty state
     if (clientsData.length === 0) {
       activeClient = null;
@@ -3239,7 +3241,7 @@ function centerActiveNavTab() {
 
 function showPage(page) {
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
-  const tabMap = { workout: 0, progress: 1, log: 2 };
+  const tabMap = { workout: 0, progress: 1, log: 2, schedule: 3 };
   if (tabMap[page] !== undefined) {
     document.querySelectorAll('.nav-tab')[tabMap[page]]?.classList.add('active');
   }
@@ -3247,6 +3249,7 @@ function showPage(page) {
   document.getElementById('workout-page').classList.toggle('hidden', page !== 'workout');
   document.getElementById('progress-page').classList.toggle('active', page === 'progress');
   document.getElementById('log-page').classList.toggle('active', page === 'log');
+  document.getElementById('schedule-page').classList.toggle('active', page === 'schedule');
   if (page === 'progress') {
     ensureChartJS().then(() => {
       checkCheckpointReminder();
@@ -3258,6 +3261,9 @@ function showPage(page) {
   }
   if (page === 'log') {
     renderWorkoutLog();
+  }
+  if (page === 'schedule') {
+    renderSchedulePage();
   }
 }
 
@@ -3721,6 +3727,171 @@ window.closePulseFreeModal = closePulseFreeModal;
 window.submitPulseFreeForm = submitPulseFreeForm;
 window._openEditClientModal = openEditClientModal;
 window._saveClientInfo = saveClientInfo;
+// ── SCHEDULE PAGE ────────────────────────────────────────────────────────────
+let _schedWeekStart = null;
+let _schedBookings  = {};
+let _schedLoading   = false;
+
+const SCH_DAYS_VI = ['T2','T3','T4','T5','T6','T7','CN'];
+
+function _schedMonday(d) {
+  const dt = new Date(d); dt.setHours(0,0,0,0);
+  const day = dt.getDay();
+  dt.setDate(dt.getDate() - (day === 0 ? 6 : day - 1));
+  return dt;
+}
+function _schedAddDays(d, n) { const dt = new Date(d); dt.setDate(dt.getDate() + n); return dt; }
+function _schedFmt(d)        { return d.toISOString().slice(0,10); }
+function _schedFmtLabel(d)   { return d.toLocaleDateString('vi-VN',{day:'2-digit',month:'2-digit'}); }
+
+async function _schedLoad(weekStart) {
+  const dates = Array.from({length:7}, (_,i) => _schedFmt(_schedAddDays(weekStart,i)));
+  const snap = await getDocs(query(collection(db,'bookings'), where('date','in',dates)));
+  const res = {};
+  snap.forEach(d => { res[d.id] = d.data().status; });
+  return res;
+}
+
+async function toggleBookingCell(date, clientId) {
+  const key   = `${date}_${clientId}`;
+  const curr  = _schedBookings[key] || 'empty';
+  const next  = curr === 'empty' ? 'booked' : curr === 'booked' ? 'done' : 'empty';
+  _schedBookings[key] = next === 'empty' ? undefined : next;
+  if (next === 'empty') delete _schedBookings[key];
+  _schedRenderGrid();
+  try {
+    const ref2 = doc(db,'bookings',key);
+    if (next === 'empty') { await deleteDoc(ref2); }
+    else { await setDoc(ref2, { date, clientId, status: next, updatedAt: serverTimestamp() }); }
+  } catch(e) {
+    console.error('[schedule] save failed', e);
+    _schedBookings[key] = curr === 'empty' ? undefined : curr;
+    if (curr === 'empty') delete _schedBookings[key];
+    _schedRenderGrid();
+  }
+}
+
+function _schedRenderGrid() {
+  const wrap = document.getElementById('sch-grid-wrap');
+  if (!wrap) return;
+  const today = _schedFmt(new Date());
+  const days  = Array.from({length:7}, (_,i) => _schedAddDays(_schedWeekStart, i));
+  const cls   = clientsData || [];
+
+  let html = `<div class="sch-grid">
+    <div class="sch-hrow">
+      <div class="sch-clcol"></div>
+      ${days.map((d,i) => {
+        const ds = _schedFmt(d);
+        return `<div class="sch-dhdr${ds===today?' sch-today':''}">
+          <span class="sch-dname">${SCH_DAYS_VI[i]}</span>
+          <span class="sch-dnum">${d.getDate()}</span>
+        </div>`;
+      }).join('')}
+    </div>`;
+
+  cls.forEach(c => {
+    html += `<div class="sch-row">
+      <div class="sch-clcol"><span class="sch-clname" title="${c.name}">${c.name}</span></div>
+      ${days.map(d => {
+        const ds  = _schedFmt(d);
+        const key = `${ds}_${c.id}`;
+        const st  = _schedBookings[key] || 'empty';
+        const inner = st === 'done'   ? '<span class="sch-check">✓</span>'
+                    : st === 'booked' ? '<span class="sch-ring"></span>'
+                    : '';
+        return `<div class="sch-cell sch-cell-${st}" onclick="toggleBookingCell('${ds}','${c.id}')">${inner}</div>`;
+      }).join('')}
+    </div>`;
+  });
+
+  html += '</div>';
+  wrap.innerHTML = html;
+}
+
+async function _schedLoadSummary() {
+  const now = new Date();
+  const y = now.getFullYear(), m = now.getMonth();
+  const mStr = String(m+1).padStart(2,'0');
+  const start = `${y}-${mStr}-01`, end = `${y}-${mStr}-31`;
+  const snap = await getDocs(query(
+    collection(db,'bookings'),
+    where('date','>=',start), where('date','<=',end), where('status','==','done')
+  ));
+  const byClient = {}; let total = 0;
+  snap.forEach(d => { const cid = d.data().clientId; byClient[cid]=(byClient[cid]||0)+1; total++; });
+  return { byClient, total };
+}
+
+function _schedRenderSummary(byClient, total) {
+  const wrap = document.getElementById('sch-summary-body');
+  if (!wrap) return;
+  if (total === 0) {
+    wrap.innerHTML = '<p class="sch-empty">Chưa có session nào được ghi nhận tháng này</p>';
+    return;
+  }
+  const cls = clientsData || [];
+  let html = `<div class="sch-total-badge">${total} sessions</div><div class="sch-sum-grid">`;
+  cls.forEach(c => {
+    const n = byClient[c.id] || 0;
+    if (n > 0) html += `<div class="sch-sum-item"><span class="sch-sum-name">${c.name}</span><span class="sch-sum-n">${n}</span></div>`;
+  });
+  html += '</div>';
+  wrap.innerHTML = html;
+}
+
+async function renderSchedulePage() {
+  const content = document.getElementById('schedule-content');
+  if (!content) return;
+  if (!_schedWeekStart) _schedWeekStart = _schedMonday(new Date());
+
+  const now = new Date();
+  const MONTHS_VI = ['Tháng 1','Tháng 2','Tháng 3','Tháng 4','Tháng 5','Tháng 6','Tháng 7','Tháng 8','Tháng 9','Tháng 10','Tháng 11','Tháng 12'];
+
+  content.innerHTML = `
+    <div class="sch-topbar">
+      <button class="sch-nav-btn" onclick="schedNavWeek(-1)">&#8249;</button>
+      <span class="sch-week-lbl" id="sch-week-lbl"></span>
+      <button class="sch-nav-btn" onclick="schedNavWeek(1)">&#8250;</button>
+      <button class="sch-today-btn" onclick="schedGoToday()">Hôm nay</button>
+    </div>
+    <div id="sch-grid-wrap"><div class="loading">Đang tải lịch...</div></div>
+    <div class="sch-sum-wrap">
+      <div class="sch-sum-title">${MONTHS_VI[now.getMonth()]} ${now.getFullYear()}</div>
+      <div id="sch-summary-body"><div class="loading">...</div></div>
+    </div>
+  `;
+  _schedUpdateLabel();
+
+  _schedBookings = await _schedLoad(_schedWeekStart);
+  _schedRenderGrid();
+
+  _schedLoadSummary().then(({byClient,total}) => _schedRenderSummary(byClient,total));
+}
+
+function _schedUpdateLabel() {
+  const lbl = document.getElementById('sch-week-lbl');
+  if (lbl) lbl.textContent = `${_schedFmtLabel(_schedWeekStart)} – ${_schedFmtLabel(_schedAddDays(_schedWeekStart,6))}`;
+}
+
+async function schedNavWeek(dir) {
+  _schedWeekStart = _schedAddDays(_schedWeekStart, dir * 7);
+  _schedUpdateLabel();
+  const wrap = document.getElementById('sch-grid-wrap');
+  if (wrap) wrap.innerHTML = '<div class="loading">Đang tải...</div>';
+  _schedBookings = await _schedLoad(_schedWeekStart);
+  _schedRenderGrid();
+}
+
+async function schedGoToday() {
+  _schedWeekStart = _schedMonday(new Date());
+  _schedUpdateLabel();
+  const wrap = document.getElementById('sch-grid-wrap');
+  if (wrap) wrap.innerHTML = '<div class="loading">Đang tải...</div>';
+  _schedBookings = await _schedLoad(_schedWeekStart);
+  _schedRenderGrid();
+}
+
 window._showPage = showPage;
 window._setDay = setDay;
 window._openModal = openModal;
@@ -6100,6 +6271,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <div class="nav-tab active" onclick="showPage('workout')">Workout</div>
     <div class="nav-tab" onclick="showPage('progress')">Progress</div>
     <div class="nav-tab" onclick="showPage('log')">Log</div>
+    <div class="nav-tab" id="schedule-nav-tab" style="display:none" onclick="showPage('schedule')">Lịch</div>
   </div>
 
   <!-- WORKOUT PAGE -->
@@ -6150,6 +6322,11 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
       <button class="wl-edit-btn" id="wl-delete-toggle" onclick="toggleLogDeleteMode()">Edit</button>
     </div>
     <div id="workout-log-list"><div class="loading">Loading sessions...</div></div>
+  </div>
+
+  <!-- SCHEDULE PAGE (coach only) -->
+  <div id="schedule-page">
+    <div id="schedule-content"></div>
   </div>
 
   <!-- PROGRESS PAGE -->
@@ -7195,6 +7372,90 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 #progress-page .cd-muscle-vol{color:var(--ac-hi) !important;}
 #progress-page .cd-hist-table th{color:rgba(188,168,255,.5) !important;border-bottom:1px solid rgba(167,139,250,.16) !important;}
 #progress-page .cd-hist-table td{color:#E7E0FB !important;border-bottom:1px solid rgba(167,139,250,.08) !important;}
+</style>
+
+<style id="om-schedule">
+/* ── SCHEDULE PAGE ───────────────────────────────────── */
+#schedule-page{display:none;padding:16px 12px 32px;--ac:#8b6cff;--ac-lo:#6d45e0;--ac-hi:#bca8ff;}
+#schedule-page.active{display:block;}
+
+/* Top bar */
+.sch-topbar{display:flex;align-items:center;gap:8px;margin-bottom:18px;}
+.sch-nav-btn{
+  width:36px;height:36px;border-radius:50%;
+  background:rgba(139,108,255,.12);border:1px solid rgba(139,108,255,.35);
+  color:var(--ac-hi);font-size:22px;line-height:1;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.sch-nav-btn:active{background:rgba(139,108,255,.25);}
+.sch-week-lbl{flex:1;text-align:center;font-size:15px;font-weight:700;color:#F4F1FB;letter-spacing:.3px;}
+.sch-today-btn{
+  padding:7px 14px;border:none;border-radius:99px;
+  background:linear-gradient(135deg,#8b6cff,#6d45e0);
+  color:#fff;font-size:12px;font-weight:700;letter-spacing:.8px;cursor:pointer;flex-shrink:0;}
+.sch-today-btn:active{opacity:.8;}
+
+/* Grid wrapper — horizontal scroll on mobile */
+#sch-grid-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px;}
+.sch-grid{min-width:480px;display:flex;flex-direction:column;gap:4px;}
+
+/* Header row */
+.sch-hrow{display:grid;grid-template-columns:90px repeat(7,1fr);gap:4px;margin-bottom:2px;}
+.sch-clcol{padding:0 4px;}
+.sch-dhdr{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:7px 2px;border-radius:10px;background:rgba(139,108,255,.07);}
+.sch-dhdr.sch-today{background:rgba(139,108,255,.2);}
+.sch-dname{font-size:10px;font-weight:700;color:rgba(188,168,255,.6);letter-spacing:1px;text-transform:uppercase;}
+.sch-dnum{font-size:17px;font-weight:800;color:#F4F1FB;line-height:1.1;}
+.sch-today .sch-dnum{color:#8b6cff;}
+
+/* Client row */
+.sch-row{display:grid;grid-template-columns:90px repeat(7,1fr);gap:4px;}
+.sch-clcol{display:flex;align-items:center;padding:0 4px;}
+.sch-clname{
+  font-size:11px;font-weight:600;color:rgba(188,168,255,.8);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:86px;}
+
+/* Cell states */
+.sch-cell{
+  min-height:44px;border-radius:10px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  border:1px solid rgba(139,108,255,.1);background:rgba(139,108,255,.04);
+  transition:border-color .12s,background .12s;}
+.sch-cell:active{opacity:.75;}
+.sch-cell-booked{
+  border:2px solid rgba(139,108,255,.55) !important;
+  background:rgba(139,108,255,.12) !important;}
+.sch-cell-done{
+  border:2px solid rgba(139,108,255,.7) !important;
+  background:linear-gradient(135deg,rgba(139,108,255,.38),rgba(109,69,224,.28)) !important;}
+
+/* Indicators */
+.sch-ring{
+  width:10px;height:10px;border-radius:50%;
+  border:2px solid #8b6cff;background:transparent;}
+.sch-check{font-size:18px;font-weight:700;color:#fff;line-height:1;}
+
+/* Monthly summary */
+.sch-sum-wrap{
+  margin-top:24px;padding:16px;border-radius:16px;
+  background:linear-gradient(150deg,#1c1338,#15102b);
+  border:1px solid rgba(167,139,250,.14);}
+.sch-sum-title{
+  font-size:11px;font-weight:700;color:var(--ac-hi);
+  text-transform:uppercase;letter-spacing:2px;margin-bottom:12px;}
+.sch-total-badge{
+  display:inline-block;padding:5px 16px;border-radius:99px;
+  background:linear-gradient(135deg,#8b6cff,#6d45e0);
+  color:#fff;font-size:13px;font-weight:800;margin-bottom:12px;}
+.sch-sum-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;}
+.sch-sum-item{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:8px 12px;border-radius:10px;
+  background:rgba(139,108,255,.08);border:1px solid rgba(139,108,255,.15);}
+.sch-sum-name{font-size:12px;font-weight:600;color:#F4F1FB;}
+.sch-sum-n{font-size:20px;font-weight:800;color:#8b6cff;}
+.sch-empty{font-size:13px;color:rgba(188,168,255,.45);text-align:center;padding:10px 0;margin:0;}
 </style>
 </body>
 </html>

@@ -52,6 +52,11 @@ service cloud.firestore {
       allow write: if isCoach();
     }
 
+    // ── BOOKINGS collection (coach schedule only) ─────────
+    match /bookings/{bookingId} {
+      allow read, write: if isCoach();
+    }
+
     // ── CLIENTS collection ────────────────────────────────
     // Coach: full access tất cả clients
     // Client: chỉ đọc/ghi data của chính mình (khớp email)
