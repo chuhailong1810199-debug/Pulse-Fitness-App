@@ -3841,16 +3841,16 @@ function schedOpenAddModal(date, startMin, endMin) {
   const el = document.createElement('div');
   el.id = 'sch-modal'; el.className = 'sch-modal-bd';
   el.innerHTML = `<div class="sch-modal" onclick="event.stopPropagation()">
-    <div class="sch-modal-ttl">Thêm lịch</div>
+    <div class="sch-modal-ttl">Add Session</div>
     <div class="sch-modal-sub">${dateLbl}</div>
-    <input class="sch-modal-inp" id="sch-m-title" placeholder="Tên client hoặc ghi chú..." autocomplete="off">
+    <input class="sch-modal-inp" id="sch-m-title" placeholder="Client name or note..." autocomplete="off">
     <div class="sch-modal-row">
-      <div class="sch-modal-fld"><label class="sch-modal-lbl">Bắt đầu</label><input type="time" class="sch-modal-time" id="sch-m-start" value="${_minToT(startMin)}"></div>
-      <div class="sch-modal-fld"><label class="sch-modal-lbl">Kết thúc</label><input type="time" class="sch-modal-time" id="sch-m-end" value="${_minToT(endMin)}"></div>
+      <div class="sch-modal-fld"><label class="sch-modal-lbl">Start</label><input type="time" class="sch-modal-time" id="sch-m-start" value="${_minToT(startMin)}"></div>
+      <div class="sch-modal-fld"><label class="sch-modal-lbl">End</label><input type="time" class="sch-modal-time" id="sch-m-end" value="${_minToT(endMin)}"></div>
     </div>
     <div class="sch-modal-acts">
-      <button class="sch-modal-btn-c" onclick="schedCloseModal()">Hủy</button>
-      <button class="sch-modal-btn-s" onclick="schedSaveNew('${date}')">Lưu</button>
+      <button class="sch-modal-btn-c" onclick="schedCloseModal()">Cancel</button>
+      <button class="sch-modal-btn-s" onclick="schedSaveNew('${date}')">Save</button>
     </div>
   </div>`;
   el.addEventListener('click', schedCloseModal);
@@ -3876,7 +3876,7 @@ async function schedSaveNew(date) {
     console.error('[schedule] save failed', err);
     _schedEvents = _schedEvents.filter(e => e.id !== id);
     _schedRenderCalendar(true);
-    alert('Không lưu được. Vui lòng thử lại.');
+    alert('Failed to save. Please try again.');
   }
 }
 
@@ -3892,8 +3892,8 @@ function schedOpenEvt(id) {
     <div class="sch-modal-ttl">${evt.title||'Session'}</div>
     <div class="sch-modal-sub">${evt.date} · ${evt.startTime||''} – ${evt.endTime||''}</div>
     <div class="sch-modal-acts" style="margin-top:20px">
-      <button class="sch-modal-btn-c" onclick="schedDeleteEvt('${id}')">🗑 Xóa</button>
-      <button class="sch-modal-btn-s" onclick="schedToggleDone('${id}')">${isDone?'↩ Chưa xong':'✓ Đã xong'}</button>
+      <button class="sch-modal-btn-c" onclick="schedDeleteEvt('${id}')">🗑 Delete</button>
+      <button class="sch-modal-btn-s" onclick="schedToggleDone('${id}')">${isDone?'↩ Undo':'✓ Done'}</button>
     </div>
   </div>`;
   el.addEventListener('click', schedCloseModal);
@@ -3942,7 +3942,7 @@ function _schedRenderSummary(byTitle, total) {
   const wrap = document.getElementById('sch-summary-body');
   if (!wrap) return;
   if (total === 0) {
-    wrap.innerHTML = '<p class="sch-empty">Chưa có session nào được đánh dấu Xong tháng này</p>';
+    wrap.innerHTML = '<p class="sch-empty">No sessions marked done this month</p>';
     return;
   }
   const entries = Object.entries(byTitle).sort((a,b) => b[1]-a[1]);
@@ -3950,7 +3950,7 @@ function _schedRenderSummary(byTitle, total) {
   let html = `
     <div class="sch-sum-hero">
       <div class="sch-sum-hero-num">${total}</div>
-      <div class="sch-sum-hero-lbl">sessions tháng này</div>
+      <div class="sch-sum-hero-lbl">sessions this month</div>
     </div>
     <div class="sch-sum-rows">
       ${entries.map(([t,n]) => `
@@ -3975,9 +3975,9 @@ async function renderSchedulePage() {
       <button class="sch-nav-btn" onclick="schedNavWeek(-1)">&#8249;</button>
       <span class="sch-week-lbl" id="sch-week-lbl"></span>
       <button class="sch-nav-btn" onclick="schedNavWeek(1)">&#8250;</button>
-      <button class="sch-today-btn" onclick="schedGoToday()">Hôm nay</button>
+      <button class="sch-today-btn" onclick="schedGoToday()">Today</button>
     </div>
-    <div id="sch-cal-wrap"><div class="loading">Đang tải lịch...</div></div>
+    <div id="sch-cal-wrap"><div class="loading">Loading schedule...</div></div>
     <div class="sch-sum-wrap">
       <div class="sch-sum-title">${_SCH_MONTHS[now.getMonth()]} ${now.getFullYear()}</div>
       <div id="sch-summary-body"><div class="loading">...</div></div>
@@ -3987,7 +3987,7 @@ async function renderSchedulePage() {
   _schedRenderCalendar();
   _schedLoadSummary()
     .then(({byTitle,total}) => _schedRenderSummary(byTitle,total))
-    .catch(() => { const w=document.getElementById('sch-summary-body'); if(w) w.innerHTML='<p class="sch-empty">Không tải được dữ liệu</p>'; });
+    .catch(() => { const w=document.getElementById('sch-summary-body'); if(w) w.innerHTML='<p class="sch-empty">Failed to load data</p>'; });
 }
 
 function _schedUpdateLabel() {
@@ -6388,7 +6388,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <div class="nav-tab active" onclick="showPage('workout')">Workout</div>
     <div class="nav-tab" onclick="showPage('progress')">Progress</div>
     <div class="nav-tab" onclick="showPage('log')">Log</div>
-    <div class="nav-tab" id="schedule-nav-tab" style="display:none" onclick="showPage('schedule')">Lịch</div>
+    <div class="nav-tab" id="schedule-nav-tab" style="display:none" onclick="showPage('schedule')">Schedule</div>
   </div>
 
   <!-- WORKOUT PAGE -->
