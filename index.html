@@ -1119,7 +1119,21 @@ async function finishWorkout() {
     const dayPrefix = activeClient.id + '_' + activeDay + '_';
     const doneN = Object.entries(clientState).filter(([k,v]) => v && k.startsWith(dayPrefix)).length;
     const durationMs = window._workoutStartTime ? Date.now() - window._workoutStartTime : 0;
-    showWorkoutSummary({ doneN, total, tonnage: 0, durationMs, streak: 0 });
+    // Recompute tonnage from setLoads/exerciseLoads so it shows correctly on re-open
+    let replayVol = 0;
+    if (day) {
+      day.phases.forEach((phase, pi) => {
+        phase.exercises.forEach((ex, ei) => {
+          const k = activeClient.id + '_' + activeDay + '_' + pi + '_' + ei;
+          const perSet = (setLoads[k] || []).filter(v => Number.isFinite(v) && v > 0);
+          const m = (ex.setsReps||'').match(/(\d+)\s*[x×]\s*(\d+)/i);
+          const sets = m ? parseInt(m[1]) : 1, reps = m ? parseInt(m[2]) : 1;
+          if (perSet.length > 0) replayVol += perSet.reduce((s,kg) => s + kg * reps, 0);
+          else { const kg = parseFloat(exerciseLoads[k]); if (kg > 0) replayVol += sets * reps * kg; }
+        });
+      });
+    }
+    showWorkoutSummary({ doneN, total, tonnage: Math.round(replayVol), durationMs, streak: 0 });
     return;
   }
 
@@ -1148,15 +1162,48 @@ async function finishWorkout() {
   } catch(_e) { /* non-critical — proceed if check fails */ }
 
   _workoutLogging = true;
-  // Pre-compute summary data so it's always available even if Firestore write fails
+
+  // Pre-compute everything BEFORE try block so catch/finally always have correct values
+  const _prog0 = getProgram();
+  const _day0  = _prog0[activeDay];
+  const _total0 = _day0 ? _day0.phases.reduce((a,p) => a + p.exercises.length, 0) : 0;
+  const _clientState0 = exerciseState[activeClient.id] || {};
+  const _dayPrefix0 = activeClient.id + '_' + activeDay + '_';
+  const _doneN0 = Object.entries(_clientState0).filter(([k,v]) => v && k.startsWith(_dayPrefix0)).length;
+  const _durationMs0 = window._workoutStartTime ? Date.now() - window._workoutStartTime : 0;
+
+  function _parseSetsReps0(str) {
+    if (!str) return { sets: 1, reps: 1 };
+    const m = str.match(/(\d+)\s*[x×]\s*(\d+)/i);
+    if (m) return { sets: parseInt(m[1]), reps: parseInt(m[2]) };
+    const single = str.match(/(\d+)/);
+    return { sets: parseInt(single?.[1] || 1), reps: 1 };
+  }
+  let _totalVolume0 = 0;
+  if (_day0) {
+    _day0.phases.forEach((phase, pi) => {
+      phase.exercises.forEach((ex, ei) => {
+        const key = activeClient.id + '_' + activeDay + '_' + pi + '_' + ei;
+        const perSet = (setLoads[key] || []).filter(v => Number.isFinite(v) && v > 0);
+        const { sets, reps } = _parseSetsReps0(ex.setsReps);
+        if (perSet.length > 0) {
+          _totalVolume0 += perSet.reduce((s, kg) => s + kg * reps, 0);
+        } else {
+          const loadKg = parseFloat(exerciseLoads[key]);
+          if (Number.isFinite(loadKg) && loadKg > 0) _totalVolume0 += sets * reps * loadKg;
+        }
+      });
+    });
+  }
+
   let _summaryData = null;
   try {
-    const prog  = getProgram();
-    const day   = prog[activeDay];
-    const total = day ? day.phases.reduce((a,p) => a + p.exercises.length, 0) : 0;
-    const clientState = exerciseState[activeClient.id] || {};
-    const dayPrefix = activeClient.id + '_' + activeDay + '_';
-    const doneN = Object.entries(clientState).filter(([k, v]) => v && k.startsWith(dayPrefix)).length;
+    const prog  = _prog0;
+    const day   = _day0;
+    const total = _total0;
+    const clientState = _clientState0;
+    const dayPrefix = _dayPrefix0;
+    const doneN = _doneN0;
 
     // Compute volumeByMuscle from completed exercises that have muscles data
     const volumeByMuscle = {};
@@ -1246,13 +1293,8 @@ async function finishWorkout() {
     })();
   } catch(e) {
     console.error('[finishWorkout]', e);
-    // Still show summary even if Firestore write failed
-    const prog = getProgram(), day = prog[activeDay];
-    const total = day ? day.phases.reduce((a,p) => a + p.exercises.length, 0) : 0;
-    const clientState = exerciseState[activeClient.id] || {};
-    const dayPrefix = activeClient.id + '_' + activeDay + '_';
-    const doneN = Object.entries(clientState).filter(([k,v]) => v && k.startsWith(dayPrefix)).length;
-    _summaryData = { doneN, total, tonnage: 0, durationMs: 0, streak: 0 };
+    // Still show summary with pre-computed values even if Firestore write failed
+    _summaryData = { doneN: _doneN0, total: _total0, tonnage: Math.round(_totalVolume0), durationMs: _durationMs0, streak: 0 };
   } finally {
     _workoutLogging = false;
     if (_summaryData) showWorkoutSummary(_summaryData);
