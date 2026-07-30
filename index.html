@@ -3803,7 +3803,7 @@ function _schedRenderCalendar() {
               const ht = Math.max((em-sm)/30*SLOT_H, 24);
               return `<div class="sch-evt${e.status==='done'?' sch-evt-done':''}" style="top:${tp}px;height:${ht}px" onclick="event.stopPropagation();schedOpenEvt('${e.id}')">
                 <span class="sch-evt-ttl">${e.title||'Session'}</span>
-                ${ht>34?`<span class="sch-evt-sub">⏰ ${e.startTime||''} – ${e.endTime||''}</span>`:''}
+                ${ht>34?`<span class="sch-evt-sub">${e.startTime||''} – ${e.endTime||''}</span>`:''}
               </div>`;
             }).join('')}
           </div>`;
