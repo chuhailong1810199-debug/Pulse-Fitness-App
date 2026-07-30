@@ -3727,12 +3727,16 @@ window.closePulseFreeModal = closePulseFreeModal;
 window.submitPulseFreeForm = submitPulseFreeForm;
 window._openEditClientModal = openEditClientModal;
 window._saveClientInfo = saveClientInfo;
-// ── SCHEDULE PAGE ────────────────────────────────────────────────────────────
-let _schedWeekStart = null;
-let _schedBookings  = {};
-let _schedLoading   = false;
+// ── SCHEDULE PAGE (macOS Calendar style) ────────────────────────────────────
+const SCH_START = 6;   // 6 AM
+const SCH_END   = 22;  // 10 PM
+const SCH_HPX   = 60;  // px per hour
 
-const SCH_DAYS_VI = ['T2','T3','T4','T5','T6','T7','CN'];
+let _schedWeekStart = null;
+let _schedEvents    = [];
+
+const _SCH_DAYS   = ['T2','T3','T4','T5','T6','T7','CN'];
+const _SCH_MONTHS = ['Tháng 1','Tháng 2','Tháng 3','Tháng 4','Tháng 5','Tháng 6','Tháng 7','Tháng 8','Tháng 9','Tháng 10','Tháng 11','Tháng 12'];
 
 function _schedMonday(d) {
   const dt = new Date(d); dt.setHours(0,0,0,0);
@@ -3741,101 +3745,189 @@ function _schedMonday(d) {
   return dt;
 }
 function _schedAddDays(d, n) { const dt = new Date(d); dt.setDate(dt.getDate() + n); return dt; }
-function _schedFmt(d)        { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
-function _schedFmtLabel(d)   { return d.toLocaleDateString('vi-VN',{day:'2-digit',month:'2-digit'}); }
+function _schedFmt(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function _schedFmtLabel(d) { return d.toLocaleDateString('vi-VN',{day:'2-digit',month:'2-digit'}); }
+function _tToMin(t) { const [h,m]=t.split(':').map(Number); return h*60+m; }
+function _minToT(m) { return `${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`; }
 
-async function _schedLoad(weekStart) {
+async function _schedLoadWeek(weekStart) {
   const dates = Array.from({length:7}, (_,i) => _schedFmt(_schedAddDays(weekStart,i)));
   const snap = await getDocs(query(collection(db,'bookings'), where('date','in',dates)));
-  const res = {};
-  snap.forEach(d => { res[d.id] = d.data().status; });
-  return res;
+  const evts = [];
+  snap.forEach(d => evts.push({id:d.id, ...d.data()}));
+  return evts;
 }
 
-async function toggleBookingCell(date, clientId) {
-  const key   = `${date}_${clientId}`;
-  const curr  = _schedBookings[key] || 'empty';
-  const next  = curr === 'empty' ? 'booked' : curr === 'booked' ? 'done' : 'empty';
-  _schedBookings[key] = next === 'empty' ? undefined : next;
-  if (next === 'empty') delete _schedBookings[key];
-  _schedRenderGrid();
-  try {
-    const ref2 = doc(db,'bookings',key);
-    if (next === 'empty') { await deleteDoc(ref2); }
-    else { await setDoc(ref2, { date, clientId, status: next, updatedAt: serverTimestamp() }); }
-  } catch(e) {
-    console.error('[schedule] save failed', e);
-    _schedBookings[key] = curr === 'empty' ? undefined : curr;
-    if (curr === 'empty') delete _schedBookings[key];
-    _schedRenderGrid();
-  }
-}
-
-function _schedRenderGrid() {
-  const wrap = document.getElementById('sch-grid-wrap');
+function _schedRenderCalendar() {
+  const wrap = document.getElementById('sch-cal-wrap');
   if (!wrap) return;
-  const today = _schedFmt(new Date());
-  const days  = Array.from({length:7}, (_,i) => _schedAddDays(_schedWeekStart, i));
-  const cls   = clientsData || [];
+  const today  = _schedFmt(new Date());
+  const days   = Array.from({length:7}, (_,i) => _schedAddDays(_schedWeekStart, i));
+  const hours  = Array.from({length: SCH_END - SCH_START}, (_,i) => SCH_START + i);
+  const gridH  = (SCH_END - SCH_START) * SCH_HPX;
 
-  let html = `<div class="sch-grid">
-    <div class="sch-hrow">
-      <div class="sch-clcol"></div>
+  const evtsByDay = {};
+  days.forEach(d => evtsByDay[_schedFmt(d)] = []);
+  _schedEvents.forEach(e => { if (evtsByDay[e.date] !== undefined) evtsByDay[e.date].push(e); });
+
+  let html = `<div class="sch-cal-outer">
+    <div class="sch-cal-hdrs">
+      <div class="sch-tgutter-hdr"></div>
       ${days.map((d,i) => {
         const ds = _schedFmt(d);
         return `<div class="sch-dhdr${ds===today?' sch-today':''}">
-          <span class="sch-dname">${SCH_DAYS_VI[i]}</span>
-          <span class="sch-dnum">${d.getDate()}</span>
+          <span class="sch-dname">${_SCH_DAYS[i]}</span>
+          <span class="sch-dnum${ds===today?' sch-dnum-today':''}">${d.getDate()}</span>
         </div>`;
       }).join('')}
-    </div>`;
+    </div>
+    <div class="sch-grid-scroll" id="sch-grid-scroll">
+      <div class="sch-grid-body" style="height:${gridH}px">
+        <div class="sch-tgutter">
+          ${hours.map(h => `<div class="sch-tlbl" style="top:${(h-SCH_START)*SCH_HPX}px">${h<12?h+' SA':h===12?'12 TR':(h-12)+' CH'}</div>`).join('')}
+        </div>
+        ${days.map(d => {
+          const ds   = _schedFmt(d);
+          const evts = evtsByDay[ds] || [];
+          return `<div class="sch-dcol${ds===today?' sch-dcol-today':''}" onclick="schedClickCol(event,'${ds}')">
+            ${evts.map(e => {
+              const sm = _tToMin(e.startTime||'09:00');
+              const em = _tToMin(e.endTime||'10:00');
+              const tp = (sm/60 - SCH_START)*SCH_HPX;
+              const ht = Math.max((em-sm)/60*SCH_HPX, 24);
+              const done = e.status === 'done';
+              return `<div class="sch-evt${done?' sch-evt-done':''}" style="top:${tp}px;height:${ht}px" onclick="event.stopPropagation();schedOpenEvt('${e.id}')">
+                <span class="sch-evt-ttl">${e.title||'Session'}</span>
+                ${ht>38?`<span class="sch-evt-sub">${e.startTime||''}</span>`:''}
+              </div>`;
+            }).join('')}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  </div>`;
 
-  cls.forEach(c => {
-    html += `<div class="sch-row">
-      <div class="sch-clcol"><span class="sch-clname" title="${c.name}">${c.name}</span></div>
-      ${days.map(d => {
-        const ds  = _schedFmt(d);
-        const key = `${ds}_${c.id}`;
-        const st  = _schedBookings[key] || 'empty';
-        const inner = st === 'done'   ? '<span class="sch-check">✓</span>'
-                    : st === 'booked' ? '<span class="sch-ring"></span>'
-                    : '';
-        return `<div class="sch-cell sch-cell-${st}" onclick="toggleBookingCell('${ds}','${c.id}')">${inner}</div>`;
-      }).join('')}
-    </div>`;
-  });
-
-  html += '</div>';
   wrap.innerHTML = html;
+
+  const scrollEl = document.getElementById('sch-grid-scroll');
+  if (scrollEl) {
+    const now = new Date();
+    const scrollH = (_schedFmt(now) >= _schedFmt(_schedWeekStart) && _schedFmt(now) <= _schedFmt(_schedAddDays(_schedWeekStart,6)))
+      ? Math.max(SCH_START, now.getHours() - 1) : 7;
+    scrollEl.scrollTop = (scrollH - SCH_START) * SCH_HPX;
+  }
+}
+
+function schedClickCol(e, date) {
+  if (e.target.closest('.sch-evt')) return;
+  const col  = e.currentTarget;
+  const rect = col.getBoundingClientRect();
+  const relY = e.clientY - rect.top;
+  const totalMin = Math.floor((relY / SCH_HPX + SCH_START) * 60 / 30) * 30;
+  const startMin = Math.max(SCH_START*60, Math.min((SCH_END-1)*60, totalMin));
+  const endMin   = Math.min(SCH_END*60, startMin + 60);
+  schedOpenAddModal(date, startMin, endMin);
+}
+
+function schedOpenAddModal(date, startMin, endMin) {
+  const old = document.getElementById('sch-modal'); if (old) old.remove();
+  const [y,mo,d2] = date.split('-').map(Number);
+  const dateLbl = new Date(y, mo-1, d2).toLocaleDateString('vi-VN',{weekday:'long',day:'2-digit',month:'2-digit'});
+  const el = document.createElement('div');
+  el.id = 'sch-modal'; el.className = 'sch-modal-bd';
+  el.innerHTML = `<div class="sch-modal" onclick="event.stopPropagation()">
+    <div class="sch-modal-ttl">Thêm lịch</div>
+    <div class="sch-modal-sub">${dateLbl}</div>
+    <input class="sch-modal-inp" id="sch-m-title" placeholder="Tên client hoặc ghi chú..." autocomplete="off">
+    <div class="sch-modal-row">
+      <div class="sch-modal-fld"><label class="sch-modal-lbl">Bắt đầu</label><input type="time" class="sch-modal-time" id="sch-m-start" value="${_minToT(startMin)}"></div>
+      <div class="sch-modal-fld"><label class="sch-modal-lbl">Kết thúc</label><input type="time" class="sch-modal-time" id="sch-m-end" value="${_minToT(endMin)}"></div>
+    </div>
+    <div class="sch-modal-acts">
+      <button class="sch-modal-btn-c" onclick="schedCloseModal()">Hủy</button>
+      <button class="sch-modal-btn-s" onclick="schedSaveNew('${date}')">Lưu</button>
+    </div>
+  </div>`;
+  el.addEventListener('click', schedCloseModal);
+  document.body.appendChild(el);
+  setTimeout(() => document.getElementById('sch-m-title')?.focus(), 60);
+}
+
+function schedCloseModal() { const m = document.getElementById('sch-modal'); if (m) m.remove(); }
+
+async function schedSaveNew(date) {
+  const title = document.getElementById('sch-m-title')?.value.trim();
+  const start = document.getElementById('sch-m-start')?.value || '09:00';
+  const end   = document.getElementById('sch-m-end')?.value   || '10:00';
+  if (!title) { document.getElementById('sch-m-title')?.focus(); return; }
+  const id  = `bk_${Date.now()}`;
+  const evt = { id, date, startTime:start, endTime:end, title, status:'booked' };
+  _schedEvents.push(evt);
+  schedCloseModal();
+  _schedRenderCalendar();
+  try {
+    await setDoc(doc(db,'bookings',id), { date, startTime:start, endTime:end, title, status:'booked', updatedAt:serverTimestamp() });
+  } catch(err) {
+    console.error('[schedule] save failed', err);
+    _schedEvents = _schedEvents.filter(e => e.id !== id);
+    _schedRenderCalendar();
+    alert('Không lưu được. Vui lòng thử lại.');
+  }
+}
+
+function schedOpenEvt(id) {
+  const evt = _schedEvents.find(e => e.id === id);
+  if (!evt) return;
+  const old = document.getElementById('sch-modal'); if (old) old.remove();
+  const isDone = evt.status === 'done';
+  const el = document.createElement('div');
+  el.id = 'sch-modal'; el.className = 'sch-modal-bd';
+  el.innerHTML = `<div class="sch-modal" onclick="event.stopPropagation()">
+    <button class="sch-modal-x" onclick="schedCloseModal()">✕</button>
+    <div class="sch-modal-ttl">${evt.title||'Session'}</div>
+    <div class="sch-modal-sub">${evt.date} · ${evt.startTime||''} – ${evt.endTime||''}</div>
+    <div class="sch-modal-acts" style="margin-top:20px">
+      <button class="sch-modal-btn-c" onclick="schedDeleteEvt('${id}')">🗑 Xóa</button>
+      <button class="sch-modal-btn-s" onclick="schedToggleDone('${id}')">${isDone?'↩ Chưa xong':'✓ Đã xong'}</button>
+    </div>
+  </div>`;
+  el.addEventListener('click', schedCloseModal);
+  document.body.appendChild(el);
+}
+
+async function schedToggleDone(id) {
+  const evt = _schedEvents.find(e => e.id === id);
+  if (!evt) return;
+  const ns = evt.status === 'done' ? 'booked' : 'done';
+  evt.status = ns; schedCloseModal(); _schedRenderCalendar();
+  _schedLoadSummary().then(({byTitle,total}) => _schedRenderSummary(byTitle,total)).catch(()=>{});
+  try { await updateDoc(doc(db,'bookings',id), {status:ns, updatedAt:serverTimestamp()}); }
+  catch(err) { evt.status = ns === 'done' ? 'booked' : 'done'; _schedRenderCalendar(); }
+}
+
+async function schedDeleteEvt(id) {
+  _schedEvents = _schedEvents.filter(e => e.id !== id);
+  schedCloseModal(); _schedRenderCalendar();
+  _schedLoadSummary().then(({byTitle,total}) => _schedRenderSummary(byTitle,total)).catch(()=>{});
+  try { await deleteDoc(doc(db,'bookings',id)); } catch(err) { console.error('[schedule] delete failed', err); }
 }
 
 async function _schedLoadSummary() {
-  const now = new Date();
-  const y = now.getFullYear(), m = now.getMonth();
-  const mStr = String(m+1).padStart(2,'0');
-  const start = `${y}-${mStr}-01`, end = `${y}-${mStr}-31`;
-  const snap = await getDocs(query(
-    collection(db,'bookings'),
-    where('date','>=',start), where('date','<=',end), where('status','==','done')
-  ));
-  const byClient = {}; let total = 0;
-  snap.forEach(d => { const cid = d.data().clientId; byClient[cid]=(byClient[cid]||0)+1; total++; });
-  return { byClient, total };
+  const now=new Date(), y=now.getFullYear(), mo=now.getMonth();
+  const ms=String(mo+1).padStart(2,'0');
+  const snap=await getDocs(query(collection(db,'bookings'),where('date','>=',`${y}-${ms}-01`),where('date','<=',`${y}-${ms}-31`),where('status','==','done')));
+  const byTitle={}; let total=0;
+  snap.forEach(d => { const t=d.data().title||'Session'; byTitle[t]=(byTitle[t]||0)+1; total++; });
+  return {byTitle, total};
 }
 
-function _schedRenderSummary(byClient, total) {
+function _schedRenderSummary(byTitle, total) {
   const wrap = document.getElementById('sch-summary-body');
   if (!wrap) return;
-  if (total === 0) {
-    wrap.innerHTML = '<p class="sch-empty">Chưa có session nào được ghi nhận tháng này</p>';
-    return;
-  }
-  const cls = clientsData || [];
+  if (total === 0) { wrap.innerHTML='<p class="sch-empty">Chưa có session nào tháng này</p>'; return; }
+  const entries = Object.entries(byTitle).sort((a,b) => b[1]-a[1]);
   let html = `<div class="sch-total-badge">${total} sessions</div><div class="sch-sum-grid">`;
-  cls.forEach(c => {
-    const n = byClient[c.id] || 0;
-    if (n > 0) html += `<div class="sch-sum-item"><span class="sch-sum-name">${c.name}</span><span class="sch-sum-n">${n}</span></div>`;
-  });
+  entries.forEach(([t,n]) => { html+=`<div class="sch-sum-item"><span class="sch-sum-name">${t}</span><span class="sch-sum-n">${n}</span></div>`; });
   html += '</div>';
   wrap.innerHTML = html;
 }
@@ -3844,10 +3936,7 @@ async function renderSchedulePage() {
   const content = document.getElementById('schedule-content');
   if (!content) return;
   if (!_schedWeekStart) _schedWeekStart = _schedMonday(new Date());
-
   const now = new Date();
-  const MONTHS_VI = ['Tháng 1','Tháng 2','Tháng 3','Tháng 4','Tháng 5','Tháng 6','Tháng 7','Tháng 8','Tháng 9','Tháng 10','Tháng 11','Tháng 12'];
-
   content.innerHTML = `
     <div class="sch-topbar">
       <button class="sch-nav-btn" onclick="schedNavWeek(-1)">&#8249;</button>
@@ -3855,29 +3944,17 @@ async function renderSchedulePage() {
       <button class="sch-nav-btn" onclick="schedNavWeek(1)">&#8250;</button>
       <button class="sch-today-btn" onclick="schedGoToday()">Hôm nay</button>
     </div>
-    <div id="sch-grid-wrap"><div class="loading">Đang tải lịch...</div></div>
+    <div id="sch-cal-wrap"><div class="loading">Đang tải lịch...</div></div>
     <div class="sch-sum-wrap">
-      <div class="sch-sum-title">${MONTHS_VI[now.getMonth()]} ${now.getFullYear()}</div>
+      <div class="sch-sum-title">${_SCH_MONTHS[now.getMonth()]} ${now.getFullYear()}</div>
       <div id="sch-summary-body"><div class="loading">...</div></div>
-    </div>
-  `;
+    </div>`;
   _schedUpdateLabel();
-
-  try {
-    _schedBookings = await _schedLoad(_schedWeekStart);
-  } catch(e) {
-    console.error('[schedule] load week failed', e);
-    _schedBookings = {};
-  }
-  _schedRenderGrid();
-
+  try { _schedEvents = await _schedLoadWeek(_schedWeekStart); } catch(e) { _schedEvents = []; }
+  _schedRenderCalendar();
   _schedLoadSummary()
-    .then(({byClient,total}) => _schedRenderSummary(byClient,total))
-    .catch(e => {
-      console.error('[schedule] summary failed', e);
-      const w = document.getElementById('sch-summary-body');
-      if (w) w.innerHTML = '<p class="sch-empty">Không tải được dữ liệu</p>';
-    });
+    .then(({byTitle,total}) => _schedRenderSummary(byTitle,total))
+    .catch(() => { const w=document.getElementById('sch-summary-body'); if(w) w.innerHTML='<p class="sch-empty">Không tải được dữ liệu</p>'; });
 }
 
 function _schedUpdateLabel() {
@@ -3886,21 +3963,17 @@ function _schedUpdateLabel() {
 }
 
 async function schedNavWeek(dir) {
-  _schedWeekStart = _schedAddDays(_schedWeekStart, dir * 7);
-  _schedUpdateLabel();
-  const wrap = document.getElementById('sch-grid-wrap');
-  if (wrap) wrap.innerHTML = '<div class="loading">Đang tải...</div>';
-  _schedBookings = await _schedLoad(_schedWeekStart);
-  _schedRenderGrid();
+  _schedWeekStart = _schedAddDays(_schedWeekStart, dir*7); _schedUpdateLabel();
+  const w = document.getElementById('sch-cal-wrap'); if(w) w.innerHTML='<div class="loading">Đang tải...</div>';
+  try { _schedEvents = await _schedLoadWeek(_schedWeekStart); } catch(e) { _schedEvents = []; }
+  _schedRenderCalendar();
 }
 
 async function schedGoToday() {
-  _schedWeekStart = _schedMonday(new Date());
-  _schedUpdateLabel();
-  const wrap = document.getElementById('sch-grid-wrap');
-  if (wrap) wrap.innerHTML = '<div class="loading">Đang tải...</div>';
-  _schedBookings = await _schedLoad(_schedWeekStart);
-  _schedRenderGrid();
+  _schedWeekStart = _schedMonday(new Date()); _schedUpdateLabel();
+  const w = document.getElementById('sch-cal-wrap'); if(w) w.innerHTML='<div class="loading">Đang tải...</div>';
+  try { _schedEvents = await _schedLoadWeek(_schedWeekStart); } catch(e) { _schedEvents = []; }
+  _schedRenderCalendar();
 }
 
 window._showPage = showPage;
@@ -7386,87 +7459,94 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 </style>
 
 <style id="om-schedule">
-/* ── SCHEDULE PAGE ───────────────────────────────────── */
-#schedule-page{display:none;padding:16px 12px 32px;--ac:#8b6cff;--ac-lo:#6d45e0;--ac-hi:#bca8ff;}
+/* ── SCHEDULE PAGE (macOS Calendar) ─────────────────── */
+#schedule-page{display:none;padding:12px 0 48px;--ac:#8b6cff;--ac-lo:#6d45e0;--ac-hi:#bca8ff;}
 #schedule-page.active{display:block;}
 
-/* Top bar */
-.sch-topbar{display:flex;align-items:center;gap:8px;margin-bottom:18px;}
-.sch-nav-btn{
-  width:36px;height:36px;border-radius:50%;
-  background:rgba(139,108,255,.12);border:1px solid rgba(139,108,255,.35);
-  color:var(--ac-hi);font-size:22px;line-height:1;cursor:pointer;
-  display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+/* Topbar */
+.sch-topbar{display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:0 12px;}
+.sch-nav-btn{width:34px;height:34px;border-radius:50%;background:rgba(139,108,255,.12);border:1px solid rgba(139,108,255,.3);color:var(--ac-hi);font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;line-height:1;}
 .sch-nav-btn:active{background:rgba(139,108,255,.25);}
-.sch-week-lbl{flex:1;text-align:center;font-size:15px;font-weight:700;color:#F4F1FB;letter-spacing:.3px;}
-.sch-today-btn{
-  padding:7px 14px;border:none;border-radius:99px;
-  background:linear-gradient(135deg,#8b6cff,#6d45e0);
-  color:#fff;font-size:12px;font-weight:700;letter-spacing:.8px;cursor:pointer;flex-shrink:0;}
+.sch-week-lbl{flex:1;text-align:center;font-size:15px;font-weight:700;color:#F4F1FB;}
+.sch-today-btn{padding:7px 14px;border:none;border-radius:99px;background:linear-gradient(135deg,#8b6cff,#6d45e0);color:#fff;font-size:12px;font-weight:700;letter-spacing:.8px;cursor:pointer;flex-shrink:0;}
 .sch-today-btn:active{opacity:.8;}
 
-/* Grid wrapper — horizontal scroll on mobile */
-#sch-grid-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px;}
-.sch-grid{min-width:480px;display:flex;flex-direction:column;gap:4px;}
+/* Calendar container */
+.sch-cal-outer{margin:0 8px;border-radius:14px;overflow:hidden;border:1px solid rgba(139,108,255,.2);background:#08060f;}
 
-/* Header row */
-.sch-hrow{display:grid;grid-template-columns:90px repeat(7,1fr);gap:4px;margin-bottom:2px;}
-.sch-clcol{padding:0 4px;}
-.sch-dhdr{
-  display:flex;flex-direction:column;align-items:center;justify-content:center;
-  padding:7px 2px;border-radius:10px;background:rgba(139,108,255,.07);}
-.sch-dhdr.sch-today{background:rgba(139,108,255,.2);}
-.sch-dname{font-size:10px;font-weight:700;color:rgba(188,168,255,.6);letter-spacing:1px;text-transform:uppercase;}
-.sch-dnum{font-size:17px;font-weight:800;color:#F4F1FB;line-height:1.1;}
-.sch-today .sch-dnum{color:#8b6cff;}
+/* Day headers (sticky) */
+.sch-cal-hdrs{display:grid;grid-template-columns:42px repeat(7,1fr);border-bottom:1px solid rgba(139,108,255,.18);background:#0d0a1a;position:sticky;top:0;z-index:2;}
+.sch-tgutter-hdr{background:#0d0a1a;}
+.sch-dhdr{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:9px 2px;border-left:1px solid rgba(139,108,255,.1);}
+.sch-dhdr.sch-today{background:rgba(139,108,255,.13);}
+.sch-dname{font-size:10px;font-weight:700;color:rgba(188,168,255,.5);letter-spacing:1px;text-transform:uppercase;}
+.sch-dnum{font-size:18px;font-weight:800;color:#F4F1FB;line-height:1.1;}
+.sch-dnum-today{color:#8b6cff;}
 
-/* Client row */
-.sch-row{display:grid;grid-template-columns:90px repeat(7,1fr);gap:4px;}
-.sch-clcol{display:flex;align-items:center;padding:0 4px;}
-.sch-clname{
-  font-size:11px;font-weight:600;color:rgba(188,168,255,.8);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:86px;}
+/* Scrollable grid */
+.sch-grid-scroll{height:430px;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;}
+.sch-grid-scroll::-webkit-scrollbar{width:4px;}
+.sch-grid-scroll::-webkit-scrollbar-thumb{background:rgba(139,108,255,.25);border-radius:4px;}
 
-/* Cell states */
-.sch-cell{
-  min-height:44px;border-radius:10px;cursor:pointer;
-  display:flex;align-items:center;justify-content:center;
-  border:1px solid rgba(139,108,255,.1);background:rgba(139,108,255,.04);
-  transition:border-color .12s,background .12s;}
-.sch-cell:active{opacity:.75;}
-.sch-cell-booked{
-  border:2px solid rgba(139,108,255,.55) !important;
-  background:rgba(139,108,255,.12) !important;}
-.sch-cell-done{
-  border:2px solid rgba(139,108,255,.7) !important;
-  background:linear-gradient(135deg,rgba(139,108,255,.38),rgba(109,69,224,.28)) !important;}
+/* Grid body */
+.sch-grid-body{display:grid;grid-template-columns:42px repeat(7,1fr);position:relative;}
 
-/* Indicators */
-.sch-ring{
-  width:10px;height:10px;border-radius:50%;
-  border:2px solid #8b6cff;background:transparent;}
-.sch-check{font-size:18px;font-weight:700;color:#fff;line-height:1;}
+/* Time gutter */
+.sch-tgutter{position:relative;background:#0d0a1a;border-right:1px solid rgba(139,108,255,.14);}
+.sch-tlbl{position:absolute;right:5px;transform:translateY(-50%);font-size:9px;color:rgba(188,168,255,.3);white-space:nowrap;pointer-events:none;font-weight:600;}
 
-/* Monthly summary */
-.sch-sum-wrap{
-  margin-top:24px;padding:16px;border-radius:16px;
-  background:linear-gradient(150deg,#1c1338,#15102b);
-  border:1px solid rgba(167,139,250,.14);}
-.sch-sum-title{
-  font-size:11px;font-weight:700;color:var(--ac-hi);
-  text-transform:uppercase;letter-spacing:2px;margin-bottom:12px;}
-.sch-total-badge{
-  display:inline-block;padding:5px 16px;border-radius:99px;
-  background:linear-gradient(135deg,#8b6cff,#6d45e0);
-  color:#fff;font-size:13px;font-weight:800;margin-bottom:12px;}
-.sch-sum-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;}
-.sch-sum-item{
-  display:flex;align-items:center;justify-content:space-between;
-  padding:8px 12px;border-radius:10px;
-  background:rgba(139,108,255,.08);border:1px solid rgba(139,108,255,.15);}
-.sch-sum-name{font-size:12px;font-weight:600;color:#F4F1FB;}
-.sch-sum-n{font-size:20px;font-weight:800;color:#8b6cff;}
-.sch-empty{font-size:13px;color:rgba(188,168,255,.45);text-align:center;padding:10px 0;margin:0;}
+/* Day columns */
+.sch-dcol{
+  position:relative;border-left:1px solid rgba(139,108,255,.08);cursor:pointer;
+  background-image:
+    repeating-linear-gradient(to bottom,rgba(139,108,255,.1) 0,rgba(139,108,255,.1) 1px,transparent 1px,transparent 60px),
+    repeating-linear-gradient(to bottom,transparent 0,transparent 29px,rgba(139,108,255,.04) 29px,rgba(139,108,255,.04) 30px,transparent 30px,transparent 60px);
+}
+.sch-dcol-today{background-color:rgba(139,108,255,.04);}
+
+/* Events */
+.sch-evt{
+  position:absolute;left:2px;right:2px;border-radius:7px;padding:3px 6px;
+  background:linear-gradient(150deg,rgba(139,108,255,.6),rgba(109,69,224,.5));
+  border-left:3px solid #8b6cff;
+  box-shadow:0 2px 10px rgba(139,108,255,.22);
+  cursor:pointer;overflow:hidden;
+  display:flex;flex-direction:column;justify-content:flex-start;gap:1px;
+  transition:opacity .12s;z-index:1;
+}
+.sch-evt:active{opacity:.65;}
+.sch-evt-done{background:linear-gradient(150deg,rgba(109,69,224,.28),rgba(67,40,140,.22));border-left-color:rgba(109,69,224,.45);opacity:.6;}
+.sch-evt-ttl{font-size:11px;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;}
+.sch-evt-sub{font-size:9px;color:rgba(255,255,255,.55);}
+
+/* Modal backdrop */
+.sch-modal-bd{position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);}
+.sch-modal{background:linear-gradient(150deg,#1e1240,#16102e);border:1px solid rgba(167,139,250,.28);border-radius:22px;padding:22px 20px 20px;width:min(340px,92vw);position:relative;box-shadow:0 24px 64px rgba(0,0,0,.55);}
+.sch-modal-x{position:absolute;top:15px;right:15px;background:none;border:none;color:rgba(188,168,255,.45);font-size:16px;cursor:pointer;padding:4px;line-height:1;}
+.sch-modal-ttl{font-size:18px;font-weight:800;color:#F4F1FB;margin-bottom:3px;padding-right:28px;}
+.sch-modal-sub{font-size:12px;color:rgba(188,168,255,.5);margin-bottom:16px;}
+.sch-modal-inp{display:block;width:100%;box-sizing:border-box;background:rgba(139,108,255,.1);border:1.5px solid rgba(139,108,255,.3);border-radius:10px;padding:10px 12px;font-size:15px;color:#F4F1FB;outline:none;margin-bottom:12px;font-family:inherit;}
+.sch-modal-inp:focus{border-color:rgba(139,108,255,.7);}
+.sch-modal-row{display:flex;gap:10px;margin-bottom:20px;}
+.sch-modal-fld{flex:1;display:flex;flex-direction:column;gap:4px;}
+.sch-modal-lbl{font-size:10px;font-weight:700;color:rgba(188,168,255,.5);text-transform:uppercase;letter-spacing:1px;}
+.sch-modal-time{background:rgba(139,108,255,.1);border:1.5px solid rgba(139,108,255,.3);border-radius:10px;padding:8px 10px;font-size:14px;color:#F4F1FB;outline:none;width:100%;box-sizing:border-box;font-family:inherit;}
+.sch-modal-time:focus{border-color:rgba(139,108,255,.7);}
+.sch-modal-acts{display:flex;gap:10px;}
+.sch-modal-btn-c{flex:1;padding:11px;border-radius:12px;border:1px solid rgba(139,108,255,.3);background:transparent;color:rgba(188,168,255,.8);font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;}
+.sch-modal-btn-c:active{background:rgba(139,108,255,.1);}
+.sch-modal-btn-s{flex:2;padding:11px;border-radius:12px;border:none;background:linear-gradient(135deg,#8b6cff,#6d45e0);color:#fff;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;}
+.sch-modal-btn-s:active{opacity:.85;}
+
+/* Summary */
+.sch-sum-wrap{margin:18px 8px 0;padding:16px;border-radius:14px;background:linear-gradient(150deg,#1c1338,#15102b);border:1px solid rgba(167,139,250,.14);}
+.sch-sum-title{font-size:10px;font-weight:700;color:var(--ac-hi);text-transform:uppercase;letter-spacing:2px;margin-bottom:12px;}
+.sch-total-badge{display:inline-block;padding:4px 14px;border-radius:99px;background:linear-gradient(135deg,#8b6cff,#6d45e0);color:#fff;font-size:13px;font-weight:800;margin-bottom:12px;}
+.sch-sum-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:7px;}
+.sch-sum-item{display:flex;align-items:center;justify-content:space-between;padding:8px 11px;border-radius:10px;background:rgba(139,108,255,.08);border:1px solid rgba(139,108,255,.15);}
+.sch-sum-name{font-size:12px;font-weight:600;color:#F4F1FB;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sch-sum-n{font-size:18px;font-weight:800;color:#8b6cff;flex-shrink:0;margin-left:4px;}
+.sch-empty{font-size:12px;color:rgba(188,168,255,.4);text-align:center;padding:8px 0;margin:0;}
 </style>
 </body>
 </html>
