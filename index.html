@@ -3741,7 +3741,7 @@ function _schedMonday(d) {
   return dt;
 }
 function _schedAddDays(d, n) { const dt = new Date(d); dt.setDate(dt.getDate() + n); return dt; }
-function _schedFmt(d)        { return d.toISOString().slice(0,10); }
+function _schedFmt(d)        { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 function _schedFmtLabel(d)   { return d.toLocaleDateString('vi-VN',{day:'2-digit',month:'2-digit'}); }
 
 async function _schedLoad(weekStart) {
