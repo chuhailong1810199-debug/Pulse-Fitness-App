@@ -281,11 +281,19 @@ async function loadUserProfile(user) {
     } catch (_e) { /* index unavailable — fall through to scan */ }
 
     if (!matchedClientId) {
-      const clientsSnap = await getDocs(collection(db, 'clients'));
-      const matches = [];
-      clientsSnap.forEach(d => {
-        if ((d.data().email || '').toLowerCase().trim() === emailNorm) matches.push(d.id);
-      });
+      // Legacy fallback for clients created before /clientEmails existed.
+      // Listing /clients is denied for client-role accounts by design (they must not
+      // be able to enumerate other clients) — so treat a failure here as "no match"
+      // rather than letting it break login.
+      let matches = [];
+      try {
+        const clientsSnap = await getDocs(collection(db, 'clients'));
+        clientsSnap.forEach(d => {
+          if ((d.data().email || '').toLowerCase().trim() === emailNorm) matches.push(d.id);
+        });
+      } catch (e) {
+        console.warn('[loadUserProfile] client scan denied (expected for client role):', e.code || e.message);
+      }
       if (matches.length > 1) {
         // Ambiguous — refuse rather than silently opening someone else's account
         console.error('[loadUserProfile] duplicate email across clients:', emailNorm, matches);
@@ -332,13 +340,26 @@ async function loadUserProfile(user) {
     userRole     = snap.data().role;
     userClientId = snap.data().clientId || null;
 
-    // Re-check: if user was previously assigned "coach" but is now in clients list
+    // Re-check: user has no clientId yet — resolve it from the email index.
     if (!userClientId) {
-      const clientsSnap = await getDocs(collection(db, 'clients'));
+      const emailNorm0 = (user.email || '').toLowerCase().trim();
       let matchedClientId = null;
-      clientsSnap.forEach(d => {
-        if ((d.data().email || '').toLowerCase().trim() === (user.email || '').toLowerCase().trim()) matchedClientId = d.id;
-      });
+      try {
+        const idx0 = await getDoc(doc(db, 'clientEmails', emailNorm0));
+        if (idx0.exists) matchedClientId = idx0.data().clientId || null;
+      } catch (_e) { /* fall through */ }
+
+      if (!matchedClientId) {
+        // Legacy scan — denied for client-role accounts by design; ignore the failure.
+        try {
+          const clientsSnap = await getDocs(collection(db, 'clients'));
+          clientsSnap.forEach(d => {
+            if ((d.data().email || '').toLowerCase().trim() === emailNorm0) matchedClientId = d.id;
+          });
+        } catch (e) {
+          console.warn('[loadUserProfile] re-check scan denied:', e.code || e.message);
+        }
+      }
       if (matchedClientId) {
         await updateDoc(userRef, { role: 'client', clientId: matchedClientId });
         userRole     = 'client';
@@ -518,11 +539,16 @@ async function loadApp() {
       } catch (_e) { /* fall through */ }
 
       if (!userClientId) {
-        const csSnap = await getDocs(collection(db, 'clients'));
-        const hits = [];
-        csSnap.forEach(d => {
-          if ((d.data().email || '').toLowerCase().trim() === emailNorm2) hits.push(d.id);
-        });
+        // Legacy fallback — denied for client-role accounts by design; treat as no match.
+        let hits = [];
+        try {
+          const csSnap = await getDocs(collection(db, 'clients'));
+          csSnap.forEach(d => {
+            if ((d.data().email || '').toLowerCase().trim() === emailNorm2) hits.push(d.id);
+          });
+        } catch (e) {
+          console.warn('[loadApp] client scan denied (expected for client role):', e.code || e.message);
+        }
         if (hits.length > 1) {
           showNoClientError('Email ' + emailNorm2 + ' is linked to ' + hits.length +
             ' clients (' + hits.join(', ') + '). Ask your coach to fix this.');
@@ -541,18 +567,35 @@ async function loadApp() {
     }
     let snap = await getDoc(doc(db, 'clients', userClientId));
     if (!snap.exists) {
-      // clientId in users doc is stale — rescan to find a valid one
-      console.log('[loadApp] client doc missing for', userClientId, '— rescanning...');
-      const csSnap2 = await getDocs(collection(db, 'clients'));
-      const matches = [];
-      csSnap2.forEach(d => {
-        if ((d.data().email || '').toLowerCase().trim() === (currentUser?.email || '').toLowerCase().trim()) matches.push(d);
-      });
+      // clientId in the users doc is stale — re-resolve via the email index first
+      console.log('[loadApp] client doc missing for', userClientId, '— re-resolving...');
+      const emailNorm3 = (currentUser?.email || '').toLowerCase().trim();
       let recovered = null;
-      for (const m of matches) {
-        if (m.id !== userClientId) { // skip the known-missing one
-          const t = await getDoc(doc(db, 'clients', m.id));
-          if (t.exists) { recovered = t; break; }
+      try {
+        const idx3 = await getDoc(doc(db, 'clientEmails', emailNorm3));
+        const cid3 = idx3.exists ? idx3.data().clientId : null;
+        if (cid3 && cid3 !== userClientId) {
+          const t = await getDoc(doc(db, 'clients', cid3));
+          if (t.exists) recovered = t;
+        }
+      } catch (_e) { /* fall through to legacy scan */ }
+
+      if (!recovered) {
+        // Legacy scan — denied for client-role accounts by design.
+        try {
+          const csSnap2 = await getDocs(collection(db, 'clients'));
+          const matches = [];
+          csSnap2.forEach(d => {
+            if ((d.data().email || '').toLowerCase().trim() === emailNorm3) matches.push(d);
+          });
+          for (const m of matches) {
+            if (m.id !== userClientId) { // skip the known-missing one
+              const t = await getDoc(doc(db, 'clients', m.id));
+              if (t.exists) { recovered = t; break; }
+            }
+          }
+        } catch (e) {
+          console.warn('[loadApp] recovery scan denied:', e.code || e.message);
         }
       }
       if (!recovered) { showNoClientError('doc /clients/' + userClientId + ' missing'); return; }
@@ -4148,6 +4191,13 @@ function showNoClientError(debugMsg = '') {
 function renderClientBar(isCoach) {
   const bar = document.getElementById('client-bar');
   if (!bar) return;
+  // Coach-only: the client switcher (+ Add / Edit / Profile). Clients keep their
+  // edit controls in .ctrl-bar — they may edit their OWN program, just not browse others.
+  // NOTE: hide via the .hidden class, NOT inline style — the theme sets
+  // `#app-screen .client-bar{display:flex !important}`, and an !important stylesheet
+  // rule beats a plain inline style. That is why clients saw the coach bar
+  // stuck on "Loading...".
+  bar.classList.toggle('hidden', !isCoach);
   if (isCoach) {
     bar.style.display = 'flex';
     const sel = document.getElementById('client-select');
@@ -8161,6 +8211,9 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 #app-screen .user-logout:hover{color:#ff6b8a !important;}
 #app-screen #date-display{color:rgba(188,168,255,.55) !important;}
 /* ── Client bar (coach) ── */
+/* Must out-specify the rule below, which is !important. A plain `.hidden`
+   (0,1,0) loses to `#app-screen .client-bar` (1,1,0); this selector is (1,2,0). */
+#app-screen .client-bar.hidden{display:none !important;}
 #app-screen .client-bar{
   display:flex !important;align-items:center;gap:9px !important;flex-wrap:nowrap !important;
   background:linear-gradient(150deg,#1f1640,#16102e) !important;border:1px solid rgba(167,139,250,.16) !important;
