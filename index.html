@@ -3314,7 +3314,7 @@ async function loadNutritionData() {
   // Date title
   const titleEl = document.getElementById('nutrition-date-title');
   if (titleEl) {
-    titleEl.textContent = '🥗 ' + new Date().toLocaleDateString('en-AU', {
+    titleEl.textContent = new Date().toLocaleDateString('en-AU', {
       weekday: 'long', day: 'numeric', month: 'short'
     });
   }
@@ -3354,7 +3354,7 @@ function renderNutritionCard() {
     macrosEl.classList.add('hidden');
     recPanel && recPanel.classList.add('hidden');
     noTarget.textContent = isCoach
-      ? 'No macro targets yet — generate them from this client\'s InBody data below.'
+      ? 'No macro targets set. Calculate them from this client\'s InBody data below.'
       : 'Macro targets not set yet — your coach will add them soon.';
     return;
   }
@@ -3386,29 +3386,39 @@ function renderNutritionCard() {
     macroRow('🍚 Carbs',    'carbs',    'carbs') +
     macroRow('🧈 Fat',      'fat',      'fat');
 
-  // AI reasoning panel
+  // Reasoning panel
+  const recSource = document.getElementById('nrec-source');
   if (recPanel && recBody && _macroMeta) {
     recPanel.classList.remove('hidden');
     const m = _macroMeta;
+    const isManual = m.source === 'manual';
     const dateStr = m.generatedAt
       ? new Date(m.generatedAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })
       : '';
+
+    if (recSource) {
+      recSource.textContent = isManual ? 'Set by coach' : 'Calculated from InBody';
+    }
+
     let html = '';
-    if (m.bmr || m.tdee) {
-      html += `<div class="nrec-stats">
-        ${m.bmr  ? `<div class="nrec-stat"><div class="nrec-stat-val">${m.bmr}</div><div class="nrec-stat-lbl">BMR</div></div>` : ''}
-        ${m.tdee ? `<div class="nrec-stat"><div class="nrec-stat-val">${m.tdee}</div><div class="nrec-stat-lbl">TDEE</div></div>` : ''}
-        <div class="nrec-stat"><div class="nrec-stat-val">${t.calories}</div><div class="nrec-stat-lbl">Target</div></div>
-      </div>`;
+    if (isManual) {
+      html = `<p class="nrec-text">These targets were entered manually by your coach.</p>`;
+    } else {
+      if (m.bmr || m.tdee) {
+        html += `<div class="nrec-stats">
+          ${m.bmr  ? `<div class="nrec-stat"><div class="nrec-stat-val">${m.bmr}</div><div class="nrec-stat-lbl">BMR</div></div>` : ''}
+          ${m.tdee ? `<div class="nrec-stat"><div class="nrec-stat-val">${m.tdee}</div><div class="nrec-stat-lbl">TDEE</div></div>` : ''}
+          <div class="nrec-stat"><div class="nrec-stat-val">${t.calories}</div><div class="nrec-stat-lbl">Target</div></div>
+        </div>`;
+      }
+      if (m.isMinor && m.medicalNote) {
+        html += `<div class="nrec-medical">${m.medicalNote}</div>`;
+      }
+      if (m.reasoning)      html += `<p class="nrec-text">${m.reasoning}</p>`;
+      if (m.proteinNote)    html += `<p class="nrec-text">${m.proteinNote}</p>`;
+      if (m.adjustmentNote) html += `<p class="nrec-text nrec-adjust">${m.adjustmentNote}</p>`;
     }
-    if (m.isMinor && m.medicalNote) {
-      html += `<div class="nrec-medical">⚕️ ${m.medicalNote}</div>`;
-    }
-    if (m.reasoning)       html += `<p class="nrec-text">${m.reasoning}</p>`;
-    if (m.proteinNote)     html += `<p class="nrec-text">💪 ${m.proteinNote}</p>`;
-    if (m.adjustmentNote)  html += `<p class="nrec-text nrec-adjust">📈 ${m.adjustmentNote}</p>`;
-    if (m.source === 'manual') html = `<p class="nrec-text">Targets were set manually by your coach.</p>`;
-    if (dateStr)           html += `<div class="nrec-date">Generated ${dateStr}${m.basedOn ? ' · based on ' + m.basedOn : ''}</div>`;
+    if (dateStr) html += `<div class="nrec-date">Updated ${dateStr}</div>`;
     recBody.innerHTML = html;
   } else if (recPanel) {
     recPanel.classList.add('hidden');
@@ -3478,7 +3488,7 @@ async function generateMacroRecommendation() {
   if (!activeClient) return;
   const btn = document.getElementById('nrec-generate-btn');
   const origText = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = '⚡ Analyzing InBody data…'; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Calculating…'; }
 
   try {
     const fn = firebase.app().functions('asia-southeast1').httpsCallable('recommendMacros');
@@ -3516,7 +3526,7 @@ async function generateMacroRecommendation() {
     console.error('[generateMacroRecommendation]', err);
     alert(err.message || 'Could not generate macro targets. Make sure this client has InBody baseline data.');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = origText || '⚡ Generate targets from InBody'; }
+    if (btn) { btn.disabled = false; btn.textContent = origText || 'Calculate from InBody'; }
   }
 }
 
@@ -6974,11 +6984,11 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
       <div class="macro-rows hidden" id="nutrition-macros"></div>
     </div>
 
-    <!-- AI recommendation panel -->
+    <!-- Recommendation panel -->
     <div class="nrec-panel hidden" id="nrec-panel">
       <div class="nrec-head">
-        <div class="nrec-badge">⚡ AI</div>
-        <div class="nrec-title">Macro targets from InBody</div>
+        <div class="nrec-title">Macro Targets</div>
+        <div class="nrec-source" id="nrec-source"></div>
       </div>
       <div class="nrec-body" id="nrec-body"></div>
     </div>
@@ -6986,9 +6996,9 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <!-- Coach controls -->
     <div class="nutrition-actions hidden" id="nutrition-actions">
       <button class="nrec-btn" id="nrec-generate-btn" onclick="generateMacroRecommendation()">
-        ⚡ Generate targets from InBody
+        Calculate from InBody
       </button>
-      <button class="macro-target-btn" onclick="openMacroTargetsModal()">✏️ Edit manually</button>
+      <button class="macro-target-btn" onclick="openMacroTargetsModal()">Adjust manually</button>
     </div>
 
     <!-- Meals logged today -->
@@ -7066,7 +7076,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
           <div class="nlog-option" onclick="document.getElementById('nlog-photo-input').click()">
             <div class="nlog-option-icon">📷</div>
             <div class="nlog-option-label">Photo</div>
-            <div class="nlog-option-sub">AI estimates macros</div>
+            <div class="nlog-option-sub">Estimate from image</div>
           </div>
           <div class="nlog-option" onclick="showNlogStep('manual')">
             <div class="nlog-option-icon">✏️</div>
@@ -7088,7 +7098,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
       <!-- Step 2: AI Results Review -->
       <div class="nlog-step" id="nlog-step-results">
         <button class="nlog-back-btn" onclick="showNlogStep('0')">← Back</button>
-        <div class="nlog-section-label">AI Detected Foods</div>
+        <div class="nlog-section-label">Detected Items</div>
         <div class="nlog-foods-list" id="nlog-foods-list"></div>
         <div class="nlog-confidence" id="nlog-confidence"></div>
         <div class="nlog-section-label">Total</div>
@@ -8300,9 +8310,9 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 
 /* AI recommendation panel */
 .nrec-panel{background:linear-gradient(150deg,rgba(109,69,224,.14),rgba(22,14,40,.6));border:1px solid rgba(139,108,255,.22);border-radius:16px;padding:14px 16px;margin-top:12px;}
-.nrec-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
-.nrec-badge{background:linear-gradient(135deg,#6d45e0,#8b6cff);color:#fff;font-size:10px;font-weight:800;letter-spacing:.8px;border-radius:6px;padding:3px 8px;}
-.nrec-title{font-size:12px;font-weight:700;color:rgba(188,168,255,.7);letter-spacing:.3px;}
+.nrec-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid rgba(167,139,250,.12);}
+.nrec-title{font-size:13px;font-weight:800;color:#F4F1FB;letter-spacing:.2px;}
+.nrec-source{font-size:11px;font-weight:600;color:rgba(188,168,255,.45);letter-spacing:.2px;white-space:nowrap;}
 .nrec-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;}
 .nrec-stat{background:rgba(139,108,255,.1);border-radius:10px;padding:8px 4px;text-align:center;}
 .nrec-stat-val{font-size:16px;font-weight:800;color:#F4F1FB;}
@@ -8310,11 +8320,12 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .nrec-text{font-size:12.5px;line-height:1.55;color:rgba(231,224,251,.82);margin:0 0 8px;}
 .nrec-adjust{color:rgba(188,168,255,.6);}
 .nrec-date{font-size:10px;color:rgba(188,168,255,.35);margin-top:4px;}
-.nrec-medical{background:rgba(255,183,77,.12);border:1px solid rgba(255,183,77,.3);border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.5;color:#ffd54f;margin-bottom:10px;}
-.nutrition-actions{display:flex;flex-direction:column;gap:8px;margin-top:12px;}
-.nrec-btn{width:100%;background:linear-gradient(135deg,#6d45e0,#8b6cff);border:none;border-radius:13px;padding:14px;color:#fff;font-size:14px;font-weight:800;cursor:pointer;letter-spacing:.3px;}
-.nrec-btn:disabled{opacity:.55;cursor:wait;}
-.nrec-btn:active:not(:disabled){transform:scale(.985);}
+.nrec-medical{background:rgba(255,183,77,.1);border-left:3px solid rgba(255,183,77,.55);border-radius:0 8px 8px 0;padding:10px 12px;font-size:12px;line-height:1.55;color:#ffd54f;margin-bottom:12px;}
+.nutrition-actions{display:flex;gap:8px;margin-top:12px;}
+.nrec-btn{flex:1;background:rgba(139,108,255,.16);border:1px solid rgba(139,108,255,.34);border-radius:12px;padding:13px;color:#bca8ff;font-size:13px;font-weight:700;cursor:pointer;letter-spacing:.2px;transition:background .15s;}
+.nrec-btn:hover:not(:disabled){background:rgba(139,108,255,.24);}
+.nrec-btn:disabled{opacity:.5;cursor:wait;}
+.nrec-btn:active:not(:disabled){transform:scale(.99);}
 
 /* 7-day history */
 .nweek-row{display:grid;grid-template-columns:56px 1fr 72px 32px;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid rgba(167,139,250,.07);}
@@ -8376,8 +8387,9 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .nlog-save-btn:disabled{opacity:.4;cursor:not-allowed;}
 .nlog-back-btn{background:none;border:none;color:rgba(188,168,255,.6);font-size:13px;cursor:pointer;padding:0 0 12px;display:flex;align-items:center;gap:4px;}
 /* Coach macro target panel */
-.macro-target-btn{display:block;width:100%;text-align:center;background:none;border:1px solid rgba(139,108,255,.2);border-radius:10px;padding:8px;color:rgba(188,168,255,.5);font-size:12px;font-weight:600;cursor:pointer;margin-top:12px;}
-.macro-target-btn:active{background:rgba(139,108,255,.1);}
+.macro-target-btn{flex:1;text-align:center;background:none;border:1px solid rgba(139,108,255,.18);border-radius:12px;padding:13px;color:rgba(188,168,255,.55);font-size:13px;font-weight:600;cursor:pointer;transition:background .15s;}
+.macro-target-btn:hover{background:rgba(139,108,255,.08);}
+.macro-target-btn:active{background:rgba(139,108,255,.14);}
 .nlog-target-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;}
 </style>
 </body>
