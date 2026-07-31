@@ -3414,6 +3414,17 @@ function renderNutritionCard() {
       if (m.isMinor && m.medicalNote) {
         html += `<div class="nrec-medical">${m.medicalNote}</div>`;
       }
+      // Show the InBody inputs these numbers came from — LBM and SMM are
+      // different measurements and are easy to confuse when cross-checking.
+      const b = m.basis;
+      if (b) {
+        const parts = [];
+        if (b.weight) parts.push(`Weight ${b.weight}kg`);
+        if (b.pbf != null) parts.push(`Body fat ${b.pbf}%`);
+        if (b.lbm != null) parts.push(`LBM ${b.lbm}kg`);
+        if (b.smm != null) parts.push(`SMM ${b.smm}kg`);
+        if (parts.length) html += `<div class="nrec-basis">${parts.join(' &nbsp;·&nbsp; ')}</div>`;
+      }
       if (m.reasoning)      html += `<p class="nrec-text">${m.reasoning}</p>`;
       if (m.proteinNote)    html += `<p class="nrec-text">${m.proteinNote}</p>`;
       if (m.adjustmentNote) html += `<p class="nrec-text nrec-adjust">${m.adjustmentNote}</p>`;
@@ -3510,6 +3521,7 @@ async function generateMacroRecommendation() {
       confidence: r.confidence || 'medium',
       isMinor: r.isMinor || false,
       medicalNote: r.medicalNote || '',
+      basis: r.basis || null,
       source: 'ai',
       basedOn: 'InBody',
       generatedAt: Date.now(),
@@ -8320,6 +8332,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .nrec-text{font-size:12.5px;line-height:1.55;color:rgba(231,224,251,.82);margin:0 0 8px;}
 .nrec-adjust{color:rgba(188,168,255,.6);}
 .nrec-date{font-size:10px;color:rgba(188,168,255,.35);margin-top:4px;}
+.nrec-basis{font-size:11px;color:rgba(188,168,255,.5);background:rgba(139,108,255,.07);border-radius:8px;padding:8px 10px;margin-bottom:10px;line-height:1.5;}
 .nrec-medical{background:rgba(255,183,77,.1);border-left:3px solid rgba(255,183,77,.55);border-radius:0 8px 8px 0;padding:10px 12px;font-size:12px;line-height:1.55;color:#ffd54f;margin-bottom:12px;}
 .nutrition-actions{display:flex;gap:8px;margin-top:12px;}
 .nrec-btn{flex:1;background:rgba(139,108,255,.16);border:1px solid rgba(139,108,255,.34);border-radius:12px;padding:13px;color:#bca8ff;font-size:13px;font-weight:700;cursor:pointer;letter-spacing:.2px;transition:background .15s;}

@@ -1604,9 +1604,73 @@ ${cueRule}
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GEMINI — shared config for nutrition features
+// Uses the Interactions API via @google/genai. Older gemini-1.x/2.0 models and
+// the legacy @google/generative-ai SDK are both shut down — do not go back.
+// Setup: firebase functions:secrets:set GEMINI_API_KEY
+// ─────────────────────────────────────────────────────────────────────────────
+const GEMINI_MODEL = "gemini-3.6-flash";
+
+/**
+ * Run a Gemini Interactions call and convert SDK/API failures into readable
+ * HttpsErrors. Without this, any thrown error surfaces in the app as "INTERNAL".
+ */
+async function callGemini(apiKey, input, schema, label) {
+  const { GoogleGenAI } = require("@google/genai");
+  const client = new GoogleGenAI({ apiKey });
+  try {
+    const interaction = await client.interactions.create({
+      model: GEMINI_MODEL,
+      input,
+      response_format: { type: "text", mime_type: "application/json", schema },
+    });
+    return interaction.output_text;
+  } catch (err) {
+    const status = err.status || err.code || (err.error && err.error.code);
+    const msg = (err.message || "").toLowerCase();
+    console.error(`[callGemini] ${label} failed — status=${status} msg=${err.message}`);
+
+    if (status === 401 || status === 403 || msg.includes("api key") || msg.includes("unauthenticated")) {
+      throw new HttpsError("failed-precondition",
+        "Invalid Gemini API key. Check the GEMINI_API_KEY secret — the key must come from aistudio.google.com and start with 'AIza'.");
+    }
+    if (status === 404 || msg.includes("not found") || msg.includes("model")) {
+      throw new HttpsError("failed-precondition",
+        `Model "${GEMINI_MODEL}" is not available for this API key. The model may have been renamed, or the key lacks access.`);
+    }
+    if (status === 429 || msg.includes("quota") || msg.includes("rate limit")) {
+      throw new HttpsError("resource-exhausted",
+        "Gemini request limit reached. Please try again in a few minutes.");
+    }
+    if (status === 503 || status === 500 || msg.includes("overloaded")) {
+      throw new HttpsError("unavailable", "Gemini is overloaded — please try again in a few minutes.");
+    }
+    throw new HttpsError("internal", `Gemini error (${label}): ${err.message}`);
+  }
+}
+
+/** Parse a Gemini structured-output response, tolerating stray fences/prose. */
+function parseGeminiJson(text, label) {
+  const raw = (text || "").trim();
+  if (!raw) {
+    throw new HttpsError("internal", `Gemini returned an empty response for ${label}. Please try again.`);
+  }
+  const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch (e) {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (match) {
+      try { return JSON.parse(match[0]); } catch (e2) { /* fall through */ }
+    }
+    console.error(`[parseGeminiJson] ${label} parse failed. Raw (first 400):`, cleaned.substring(0, 400));
+    throw new HttpsError("internal", `Could not read the ${label} result. Please try again.`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // analyzeMealPhoto — Gemini Vision, HTTPS Callable
 // Takes a base64-encoded meal photo and returns macro estimates.
-// Setup: firebase functions:secrets:set GEMINI_API_KEY
 // ─────────────────────────────────────────────────────────────────────────────
 exports.analyzeMealPhoto = onCall(
   {
@@ -1616,57 +1680,76 @@ exports.analyzeMealPhoto = onCall(
     memory: "256MiB",
   },
   async (request) => {
-    const { GoogleGenerativeAI } = require("@google/generative-ai");
     const { imageBase64, mimeType } = request.data || {};
 
     if (!imageBase64) {
       throw new HttpsError("invalid-argument", "imageBase64 is required");
     }
 
-    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY.value());
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-    const prompt = `You are a nutrition expert. Analyze this meal photo and estimate nutritional content.
-
-Return ONLY a valid JSON object (no markdown, no code fences, no explanation):
-{
-  "foods": [
-    {"name": "food name", "portion": "estimated portion size", "calories": 350, "protein": 25, "carbs": 40, "fat": 8}
-  ],
-  "total": {"calories": 350, "protein": 25, "carbs": 40, "fat": 8},
-  "confidence": "medium",
-  "note": "Brief note about estimation accuracy"
-}
+    const prompt = `You are a nutrition expert. Analyze this meal photo and estimate its nutritional content.
 
 Rules:
-- Identify every visible food/drink item
+- Identify every visible food and drink item; list each distinct dish as a separate entry in "foods"
 - Estimate realistic Vietnamese and Asian meal portions where applicable
-- All macro values in grams (g), calories in kcal
-- confidence: "low" (mixed dish, unclear), "medium" (reasonable estimate), "high" (clear identifiable food)
-- Be slightly conservative (underestimate rather than overestimate)
-- List each distinct food/dish as a separate item in foods array
-- If image is not food, return {"error": "not_food", "note": "No food detected in image"}`;
+- All macro values in grams, calories in kcal
+- "confidence": "low" (mixed/unclear dish), "medium" (reasonable estimate), "high" (clearly identifiable food)
+- Be slightly conservative — underestimate rather than overestimate
+- "total" must be the sum of all items in "foods"
+- Write "note" in ENGLISH, one short sentence about estimation accuracy
+- If the image contains no food at all, set "isFood" to false, return an empty "foods" array, zeros in "total", and explain in "note"`;
 
-    const result = await model.generateContent([
-      { inlineData: { data: imageBase64, mimeType: mimeType || "image/jpeg" } },
-      prompt,
-    ]);
+    const macroProps = {
+      calories: { type: "number" },
+      protein:  { type: "number" },
+      carbs:    { type: "number" },
+      fat:      { type: "number" },
+    };
 
-    const text = result.response.text().trim();
+    const schema = {
+      type: "object",
+      properties: {
+        isFood: { type: "boolean" },
+        foods: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name:    { type: "string" },
+              portion: { type: "string" },
+              ...macroProps,
+            },
+            required: ["name", "portion", "calories", "protein", "carbs", "fat"],
+          },
+        },
+        total: {
+          type: "object",
+          properties: macroProps,
+          required: ["calories", "protein", "carbs", "fat"],
+        },
+        confidence: { type: "string", enum: ["low", "medium", "high"] },
+        note: { type: "string" },
+      },
+      required: ["isFood", "foods", "total", "confidence", "note"],
+    };
 
-    // Strip markdown fences if model wraps response
-    const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new HttpsError("internal", "Could not parse nutrition data from image. Please try again.");
+    // Text prompt goes BEFORE the image — recommended for single-image requests
+    const outputText = await callGemini(
+      GEMINI_API_KEY.value(),
+      [
+        { type: "text", text: prompt },
+        { type: "image", data: imageBase64, mime_type: mimeType || "image/jpeg" },
+      ],
+      schema,
+      "meal photo"
+    );
+
+    const parsed = parseGeminiJson(outputText, "meal photo");
+
+    if (parsed.isFood === false) {
+      throw new HttpsError("invalid-argument", parsed.note || "No food detected in this image.");
     }
 
-    const parsed = JSON.parse(jsonMatch[0]);
-    if (parsed.error === "not_food") {
-      throw new HttpsError("invalid-argument", parsed.note || "No food detected in image");
-    }
-
-    console.log(`[analyzeMealPhoto] Analyzed meal: ${parsed.foods ? parsed.foods.length : 0} foods, ${parsed.total ? parsed.total.calories : "?"}kcal`);
+    console.log(`[analyzeMealPhoto] ${parsed.foods ? parsed.foods.length : 0} foods, ${parsed.total ? parsed.total.calories : "?"}kcal`);
     return parsed;
   }
 );
@@ -1684,7 +1767,6 @@ exports.recommendMacros = onCall(
     memory: "256MiB",
   },
   async (request) => {
-    const { GoogleGenerativeAI } = require("@google/generative-ai");
     const { clientId } = request.data || {};
     if (!clientId) throw new HttpsError("invalid-argument", "clientId is required");
 
@@ -1729,12 +1811,18 @@ exports.recommendMacros = onCall(
       const bmi = Math.round((w / Math.pow(h / 100, 2)) * 10) / 10;
       lines.push(`- BMI: ${bmi}`);
     }
+    let lbm = null;
     if (pbf !== null) {
-      // Lean body mass — the most important number for protein targeting
-      const lbm = Math.round((w * (1 - pbf / 100)) * 10) / 10;
-      lines.push(`- Body Fat: ${pbf}% | Lean Body Mass: ${lbm}kg`);
+      // Lean body mass — the basis for protein targeting.
+      // NOTE: LBM (fat-free mass: muscle + bone + organs + water) is NOT the same
+      // as SMM (skeletal muscle only). SMM is typically ~50-55% of LBM.
+      lbm = Math.round((w * (1 - pbf / 100)) * 10) / 10;
+      lines.push(`- Body Fat: ${pbf}%`);
+      lines.push(`- Lean Body Mass (LBM, fat-free mass = muscle + bone + organs + water): ${lbm}kg`);
     }
-    if (smm !== null) lines.push(`- Skeletal Muscle Mass: ${smm}kg`);
+    if (smm !== null) {
+      lines.push(`- Skeletal Muscle Mass (SMM, skeletal muscle ONLY — a subset of LBM, not the same number): ${smm}kg`);
+    }
     if (latest.bmr) lines.push(`- InBody-measured BMR: ${latest.bmr} kcal`);
     if (latest.vfl) lines.push(`- Visceral Fat Level: ${latest.vfl} (healthy is under 10)`);
     if (latest.waist && latest.hip) {
@@ -1768,8 +1856,8 @@ IMPORTANT: Use this trend to adjust the calorie target. If the client is not pro
 2. Set calories at MAINTENANCE (full TDEE) or slightly above. Body composition improves through growth, training and food quality — not restriction.
 3. Frame the goal as "grow into their weight": as they gain height and muscle, body fat percentage falls on its own without cutting calories.
 4. Emphasise protein adequacy, calcium, iron, and total nutrient density rather than any limit.
-5. In the reasoning field, state plainly (in Vietnamese) that a deficit is not appropriate at this age and that these are maintenance targets supporting growth.
-6. Set "isMinor": true and put a clear note in "medicalNote" (in Vietnamese) advising that nutrition for an under-18 athlete should be supervised by a parent/guardian and reviewed with a paediatrician or registered dietitian, and that these numbers are general guidance only.
+5. In the reasoning field, state plainly that a deficit is not appropriate at this age and that these are maintenance targets supporting growth.
+6. Set "isMinor": true and put a clear note in "medicalNote" advising that nutrition for an under-18 athlete should be supervised by a parent/guardian and reviewed with a paediatrician or registered dietitian, and that these numbers are general guidance only.
 7. Do NOT use adult body-fat classifications — adolescent body composition is assessed against age-and-sex growth charts, not adult thresholds. Avoid labelling the client "overweight" or "high body fat".
 ` : "";
 
@@ -1807,40 +1895,60 @@ CALCULATION METHOD — follow this precisely:
 6. CARBS: fill the remaining calories. (Protein 4 kcal/g, Carbs 4 kcal/g, Fat 9 kcal/g)
    Higher training frequency → push carbs higher. Verify the macros add up to the calorie target within ±30 kcal.
 
-Return ONLY a valid JSON object (no markdown, no code fences, no explanation outside the JSON):
-{
-  "calories": 2100,
-  "protein": 165,
-  "carbs": 210,
-  "fat": 65,
-  "bmr": 1650,
-  "tdee": 2550,
-  "reasoning": "2-3 sentences in Vietnamese explaining the calorie target and why, referencing their body composition numbers.",
-  "proteinNote": "One short sentence in Vietnamese on the protein target.",
-  "adjustmentNote": "One short sentence in Vietnamese on what to adjust if progress stalls after 2-3 weeks.",
-  "confidence": "high",
-  "isMinor": false,
-  "medicalNote": ""
-}
+TERMINOLOGY — CRITICAL, the coach cross-checks these against the InBody printout:
+- LBM and SMM are DIFFERENT numbers. Never treat them as interchangeable and never call LBM a muscle mass figure.
+- LBM (Lean Body Mass / fat-free mass) = everything that is not fat: muscle + bone + organs + water.
+  Always write it as "lean body mass (LBM)" or "fat-free mass (LBM)".
+  NEVER call LBM "muscle mass" or "muscle" — that contradicts the SMM value on the client's InBody sheet and confuses the coach.
+- SMM (Skeletal Muscle Mass) = skeletal muscle only, roughly 50-55% of LBM.
+  Always write it as "skeletal muscle mass (SMM)".
+- Protein is calculated per kg of LBM (this is the standard). When you state the protein figure, say it is per kg LBM explicitly so it cannot be confused with SMM.
 
 Rules:
 - All macro values must be whole numbers (integers)
-- Write reasoning, proteinNote and adjustmentNote in VIETNAMESE — the coach and client are Vietnamese
-- confidence: "high" if body fat % and weight are both known, "medium" if only weight, "low" if data is sparse
+- "bmr" and "tdee" are the intermediate values you calculated, in kcal
+- Write "reasoning", "proteinNote", "adjustmentNote" and "medicalNote" in ENGLISH
+- "reasoning": 2-3 sentences explaining the calorie target, referencing their actual body composition numbers
+- "proteinNote": one short sentence on the protein target
+- "adjustmentNote": one short sentence on what to adjust if progress stalls after 2-3 weeks
+- "confidence": "high" if body fat % and weight are both known, "medium" if only weight, "low" if data is sparse
+- "isMinor": true only if the client is under 18; "medicalNote" empty string unless isMinor is true
 - Be practical and realistic, not textbook-extreme`;
 
-    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY.value());
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const schema = {
+      type: "object",
+      properties: {
+        calories:       { type: "number" },
+        protein:        { type: "number" },
+        carbs:          { type: "number" },
+        fat:            { type: "number" },
+        bmr:            { type: "number" },
+        tdee:           { type: "number" },
+        reasoning:      { type: "string" },
+        proteinNote:    { type: "string" },
+        adjustmentNote: { type: "string" },
+        confidence:     { type: "string", enum: ["low", "medium", "high"] },
+        isMinor:        { type: "boolean" },
+        medicalNote:    { type: "string" },
+      },
+      required: [
+        "calories", "protein", "carbs", "fat", "bmr", "tdee",
+        "reasoning", "proteinNote", "adjustmentNote", "confidence",
+        "isMinor", "medicalNote",
+      ],
+    };
 
-    const result = await model.generateContent(prompt);
-    const text = result.response.text().trim();
-    const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new HttpsError("internal", "Could not parse macro recommendation. Please try again.");
-    }
+    // Echo the inputs back so the coach can verify what the numbers were derived from
+    const basis = { weight: w, pbf, smm, lbm, age: a, gender: g, sessionsPerWeek: sessionsPerWeek || 3 };
 
-    const parsed = JSON.parse(jsonMatch[0]);
+    const outputText = await callGemini(
+      GEMINI_API_KEY.value(),
+      [{ type: "text", text: prompt }],
+      schema,
+      "macro recommendation"
+    );
+
+    const parsed = parseGeminiJson(outputText, "macro recommendation");
 
     // Sanity check — reject nonsense output
     ["calories", "protein", "carbs", "fat"].forEach((k) => {
@@ -1856,8 +1964,8 @@ Rules:
       parsed.isMinor = true;
       if (!parsed.medicalNote) {
         parsed.medicalNote =
-          "Khách dưới 18 tuổi — đây là mức calo duy trì để hỗ trợ tăng trưởng, không phải chế độ giảm cân. " +
-          "Cần có sự đồng ý của phụ huynh và nên tham khảo bác sĩ nhi hoặc chuyên gia dinh dưỡng trước khi áp dụng.";
+          "Client is under 18 — these are maintenance calories to support growth, not a weight-loss plan. " +
+          "Parent or guardian consent is required, and a paediatrician or registered dietitian should review these targets before use.";
       }
       // If the model still returned a deficit, raise calories back to TDEE.
       const tdee = Math.round(parseFloat(parsed.tdee) || 0);
@@ -1870,7 +1978,9 @@ Rules:
       }
     }
 
-    console.log(`[recommendMacros] ${name}: ${parsed.calories}kcal P${parsed.protein} C${parsed.carbs} F${parsed.fat}`);
+    parsed.basis = basis;
+
+    console.log(`[recommendMacros] ${name}: ${parsed.calories}kcal P${parsed.protein} C${parsed.carbs} F${parsed.fat} (LBM ${lbm}kg, SMM ${smm}kg)`);
     return parsed;
   }
 );
