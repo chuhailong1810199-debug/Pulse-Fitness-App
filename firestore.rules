@@ -12,10 +12,32 @@ service cloud.firestore {
     }
 
     // ── Helper: user hiện tại là chủ của clientId (email khớp)
+    // LƯU Ý: rule này chỉ an toàn khi mỗi email chỉ thuộc về DUY NHẤT một client.
+    // Tính duy nhất được cưỡng chế bởi collection /clientEmails bên dưới —
+    // không được bỏ nó đi, nếu không hai client trùng email sẽ đọc/ghi được data của nhau.
     function isClientOwner(clientId) {
       return request.auth != null &&
         exists(/databases/$(database)/documents/clients/$(clientId)) &&
         get(/databases/$(database)/documents/clients/$(clientId)).data.email == request.auth.token.email;
+    }
+
+    // ── CLIENT EMAIL INDEX — cưỡng chế 1 email = 1 client ─
+    // Doc id chính là email (viết thường). Firestore phân biệt create với update:
+    // doc chưa tồn tại -> 'create', doc đã tồn tại -> 'update'.
+    // Cho phép create, chặn update => không thể chiếm email đã có người dùng.
+    // Muốn đổi email cho client thì phải delete doc cũ rồi create doc mới.
+    match /clientEmails/{emailKey} {
+      allow read: if request.auth != null;
+
+      // Coach đăng ký email cho bất kỳ client nào;
+      // user tự đăng ký thì CHỈ được đăng ký chính email của mình.
+      allow create: if request.auth != null
+                    && request.resource.data.clientId is string
+                    && request.resource.data.clientId.size() > 0
+                    && (isCoach() || emailKey == request.auth.token.email.lower());
+
+      allow update: if false;   // KHÔNG BAO GIỜ ghi đè — đây là chốt chặn duy nhất
+      allow delete: if isCoach();
     }
 
     // ── LEADS collection ─────────────────────────────────
@@ -37,11 +59,20 @@ service cloud.firestore {
     }
 
     // ── USERS collection ─────────────────────────────────
-    // Mỗi user chỉ đọc/ghi profile của chính mình
-    // Coach có thể đọc tất cả (để kiểm tra role)
+    // Coach: toàn quyền (cần để dọn tài khoản mồ côi, gán lại clientId)
+    // User thường: đọc profile của mình; tạo lần đầu khi đăng nhập;
+    //   được sửa name/email của mình nhưng KHÔNG được tự đổi role hay clientId
+    //   (nếu cho phép thì client có thể tự trỏ sang client khác).
     match /users/{uid} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
-      allow read: if isCoach();
+      allow read, write: if isCoach();
+
+      allow read:   if request.auth != null && request.auth.uid == uid;
+      allow create: if request.auth != null && request.auth.uid == uid
+                    && request.resource.data.get('role', 'client') != 'coach';
+      allow update: if request.auth != null && request.auth.uid == uid
+                    && request.resource.data.get('role', '')     == resource.data.get('role', '')
+                    && request.resource.data.get('clientId', '') == resource.data.get('clientId', '');
+      allow delete: if false;   // chỉ coach mới được xoá
     }
 
     // ── EXERCISES collection (thư viện bài tập) ──────────

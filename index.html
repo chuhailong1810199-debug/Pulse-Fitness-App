@@ -270,12 +270,31 @@ async function loadUserProfile(user) {
   const snap    = await getDoc(userRef);
 
   if (!snap.exists) {
-    // First time — check if this email is in clients list
-    const clientsSnap = await getDocs(collection(db, 'clients'));
+    // First time — resolve this email to a client.
+    // Prefer the /clientEmails index: it holds exactly one clientId per address.
+    // Fall back to scanning only for clients created before the index existed.
+    const emailNorm = (user.email || '').toLowerCase().trim();
     let matchedClientId = null;
-    clientsSnap.forEach(d => {
-      if ((d.data().email || '').toLowerCase().trim() === (user.email || '').toLowerCase().trim()) matchedClientId = d.id;
-    });
+    try {
+      const idxSnap = await getDoc(doc(db, 'clientEmails', emailNorm));
+      if (idxSnap.exists) matchedClientId = idxSnap.data().clientId || null;
+    } catch (_e) { /* index unavailable — fall through to scan */ }
+
+    if (!matchedClientId) {
+      const clientsSnap = await getDocs(collection(db, 'clients'));
+      const matches = [];
+      clientsSnap.forEach(d => {
+        if ((d.data().email || '').toLowerCase().trim() === emailNorm) matches.push(d.id);
+      });
+      if (matches.length > 1) {
+        // Ambiguous — refuse rather than silently opening someone else's account
+        console.error('[loadUserProfile] duplicate email across clients:', emailNorm, matches);
+        showNoClientError('Email ' + emailNorm + ' is linked to ' + matches.length +
+          ' clients (' + matches.join(', ') + '). Ask your coach to fix this.');
+        return;
+      }
+      matchedClientId = matches[0] || null;
+    }
     let role, assignedClientId;
     if (matchedClientId) {
       // Known client added by coach
@@ -487,13 +506,30 @@ async function loadApp() {
     if (!userClientId) {
       // Last-resort: rescan clients directly in case users doc was wrong
       console.log('[loadApp] userClientId null — emergency rescan...');
-      const csSnap = await getDocs(collection(db, 'clients'));
-      csSnap.forEach(d => {
-        if ((d.data().email || '').toLowerCase().trim() === (currentUser?.email || '').toLowerCase().trim()) {
-          userClientId = d.id;
+      const emailNorm2 = (currentUser?.email || '').toLowerCase().trim();
+
+      // Index first — unambiguous by construction
+      try {
+        const idx = await getDoc(doc(db, 'clientEmails', emailNorm2));
+        if (idx.exists && idx.data().clientId) {
+          userClientId = idx.data().clientId;
           userRole = 'client';
         }
-      });
+      } catch (_e) { /* fall through */ }
+
+      if (!userClientId) {
+        const csSnap = await getDocs(collection(db, 'clients'));
+        const hits = [];
+        csSnap.forEach(d => {
+          if ((d.data().email || '').toLowerCase().trim() === emailNorm2) hits.push(d.id);
+        });
+        if (hits.length > 1) {
+          showNoClientError('Email ' + emailNorm2 + ' is linked to ' + hits.length +
+            ' clients (' + hits.join(', ') + '). Ask your coach to fix this.');
+          return;
+        }
+        if (hits.length === 1) { userClientId = hits[0]; userRole = 'client'; }
+      }
       if (userClientId) {
         // Fix the users doc so next login is instant (use setDoc+merge in case doc doesn't exist yet)
         await setDoc(doc(db, 'users', currentUser.uid), { email: currentUser.email, name: currentUser.displayName || currentUser.email, role: 'client', clientId: userClientId }, { merge: true });
@@ -666,6 +702,53 @@ function openEditClientModal() {
   document.getElementById('edit-client-modal').classList.add('open');
 }
 
+// ── CLIENT EMAIL UNIQUENESS ────────────────────────────
+// One Gmail = one client. Enforced in Firestore by /clientEmails/{email}:
+// rules allow create but forbid update, so claiming a taken email fails atomically.
+// Never write clients.email directly — always go through these helpers.
+function _emailKey(email) {
+  return (email || '').trim().toLowerCase();
+}
+
+/** Returns the clientId currently holding this email, or null if free. */
+async function emailOwner(email) {
+  const key = _emailKey(email);
+  if (!key) return null;
+  const snap = await getDoc(doc(db, 'clientEmails', key));
+  return snap.exists ? (snap.data().clientId || null) : null;
+}
+
+/**
+ * Claim `email` for `clientId`, releasing `oldEmail` first if given.
+ * Throws with a readable message if another client already holds it.
+ */
+async function claimClientEmail(email, clientId, oldEmail) {
+  const key = _emailKey(email);
+  if (!key) throw new Error('Email is required.');
+
+  const owner = await emailOwner(key);
+  if (owner && owner !== clientId) {
+    const other = clientsData.find(c => c.id === owner);
+    throw new Error(
+      'This Gmail is already used by ' + (other ? other.name : owner) + '. ' +
+      'Each client must have their own Gmail — otherwise they can see each other\'s data.'
+    );
+  }
+
+  // Release the previous claim so the old address becomes reusable
+  const oldKey = _emailKey(oldEmail);
+  if (oldKey && oldKey !== key) {
+    try { await deleteDoc(doc(db, 'clientEmails', oldKey)); } catch (_e) { /* not fatal */ }
+  }
+
+  if (!owner) {
+    // create (not update) — fails if someone claimed it in the meantime
+    await setDoc(doc(db, 'clientEmails', key), {
+      clientId, claimedAt: serverTimestamp()
+    });
+  }
+}
+
 async function saveClientInfo() {
   if (!activeClient) return;
   const name  = document.getElementById('edit-client-name').value.trim();
@@ -675,6 +758,14 @@ async function saveClientInfo() {
   if (!name || !email) return alert('Please fill in Name and Gmail.');
 
   const oldEmail = activeClient.email;
+
+  // Reserve the address BEFORE writing it to the client doc
+  try {
+    await claimClientEmail(email, activeClient.id, oldEmail);
+  } catch (err) {
+    return alert(err.message);
+  }
+
   await updateDoc(doc(db, 'clients', activeClient.id), { name, email, level, goal });
 
   // Update linked user record if email changed
@@ -708,6 +799,14 @@ async function addClient() {
   if (!name || !email) return;
 
   const clientId = name.toLowerCase().replace(/\s+/g, '_') + '_' + Date.now();
+
+  // Reject a duplicate Gmail before creating anything
+  try {
+    await claimClientEmail(email, clientId, null);
+  } catch (err) {
+    return alert(err.message);
+  }
+
   await setDoc(doc(db, 'clients', clientId), {
     name, email, level, goal, sessionsPerWeek,
     coachUid: currentUser.uid,
