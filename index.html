@@ -3401,6 +3401,9 @@ function renderNutritionCard() {
         <div class="nrec-stat"><div class="nrec-stat-val">${t.calories}</div><div class="nrec-stat-lbl">Target</div></div>
       </div>`;
     }
+    if (m.isMinor && m.medicalNote) {
+      html += `<div class="nrec-medical">⚕️ ${m.medicalNote}</div>`;
+    }
     if (m.reasoning)       html += `<p class="nrec-text">${m.reasoning}</p>`;
     if (m.proteinNote)     html += `<p class="nrec-text">💪 ${m.proteinNote}</p>`;
     if (m.adjustmentNote)  html += `<p class="nrec-text nrec-adjust">📈 ${m.adjustmentNote}</p>`;
@@ -3495,6 +3498,8 @@ async function generateMacroRecommendation() {
       proteinNote: r.proteinNote || '',
       adjustmentNote: r.adjustmentNote || '',
       confidence: r.confidence || 'medium',
+      isMinor: r.isMinor || false,
+      medicalNote: r.medicalNote || '',
       source: 'ai',
       basedOn: 'InBody',
       generatedAt: Date.now(),
@@ -8305,6 +8310,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .nrec-text{font-size:12.5px;line-height:1.55;color:rgba(231,224,251,.82);margin:0 0 8px;}
 .nrec-adjust{color:rgba(188,168,255,.6);}
 .nrec-date{font-size:10px;color:rgba(188,168,255,.35);margin-top:4px;}
+.nrec-medical{background:rgba(255,183,77,.12);border:1px solid rgba(255,183,77,.3);border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.5;color:#ffd54f;margin-bottom:10px;}
 .nutrition-actions{display:flex;flex-direction:column;gap:8px;margin-top:12px;}
 .nrec-btn{width:100%;background:linear-gradient(135deg,#6d45e0,#8b6cff);border:none;border-radius:13px;padding:14px;color:#fff;font-size:14px;font-weight:800;cursor:pointer;letter-spacing:.3px;}
 .nrec-btn:disabled{opacity:.55;cursor:wait;}

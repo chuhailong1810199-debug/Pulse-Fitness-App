@@ -1759,7 +1759,22 @@ IMPORTANT: Use this trend to adjust the calorie target. If the client is not pro
       trendContext = "\nPROGRESS TREND: First measurement only — no trend data yet. Use standard calculations.";
     }
 
+    // ── MINOR SAFEGUARD ──────────────────────────────────────────────────────
+    // Under-18s are still growing. Never prescribe a caloric deficit.
+    const isMinor = a !== null && a < 18;
+    const minorRules = isMinor ? `
+⚠️ CRITICAL — THIS CLIENT IS ${a} YEARS OLD (A MINOR). THESE RULES OVERRIDE EVERYTHING BELOW:
+1. DO NOT prescribe a caloric deficit under any circumstances, even if the stated goal is fat loss. Adolescents are still growing; energy restriction during puberty can impair final adult height and bone density, and is a known risk factor for disordered eating.
+2. Set calories at MAINTENANCE (full TDEE) or slightly above. Body composition improves through growth, training and food quality — not restriction.
+3. Frame the goal as "grow into their weight": as they gain height and muscle, body fat percentage falls on its own without cutting calories.
+4. Emphasise protein adequacy, calcium, iron, and total nutrient density rather than any limit.
+5. In the reasoning field, state plainly (in Vietnamese) that a deficit is not appropriate at this age and that these are maintenance targets supporting growth.
+6. Set "isMinor": true and put a clear note in "medicalNote" (in Vietnamese) advising that nutrition for an under-18 athlete should be supervised by a parent/guardian and reviewed with a paediatrician or registered dietitian, and that these numbers are general guidance only.
+7. Do NOT use adult body-fat classifications — adolescent body composition is assessed against age-and-sex growth charts, not adult thresholds. Avoid labelling the client "overweight" or "high body fat".
+` : "";
+
     const prompt = `You are a sports nutritionist. Calculate personalized daily macro targets for this client based on their InBody body composition scan.
+${minorRules}
 
 CLIENT:
 - Name: ${name}
@@ -1803,7 +1818,9 @@ Return ONLY a valid JSON object (no markdown, no code fences, no explanation out
   "reasoning": "2-3 sentences in Vietnamese explaining the calorie target and why, referencing their body composition numbers.",
   "proteinNote": "One short sentence in Vietnamese on the protein target.",
   "adjustmentNote": "One short sentence in Vietnamese on what to adjust if progress stalls after 2-3 weeks.",
-  "confidence": "high"
+  "confidence": "high",
+  "isMinor": false,
+  "medicalNote": ""
 }
 
 Rules:
@@ -1831,6 +1848,26 @@ Rules:
     });
     if (parsed.calories < 800 || parsed.calories > 6000) {
       throw new HttpsError("internal", "Recommendation out of safe range. Please try again.");
+    }
+
+    // ── Hard server-side floor for minors ────────────────────────────────────
+    // Enforced in code, not just the prompt, so it cannot be bypassed.
+    if (isMinor) {
+      parsed.isMinor = true;
+      if (!parsed.medicalNote) {
+        parsed.medicalNote =
+          "Khách dưới 18 tuổi — đây là mức calo duy trì để hỗ trợ tăng trưởng, không phải chế độ giảm cân. " +
+          "Cần có sự đồng ý của phụ huynh và nên tham khảo bác sĩ nhi hoặc chuyên gia dinh dưỡng trước khi áp dụng.";
+      }
+      // If the model still returned a deficit, raise calories back to TDEE.
+      const tdee = Math.round(parseFloat(parsed.tdee) || 0);
+      if (tdee > 0 && parsed.calories < tdee) {
+        const deficit = tdee - parsed.calories;
+        parsed.calories = tdee;
+        // Put the restored calories into carbs (4 kcal/g)
+        parsed.carbs = Math.round(parsed.carbs + deficit / 4);
+        console.warn(`[recommendMacros] Minor safeguard: raised calories ${tdee - deficit} → ${tdee}`);
+      }
     }
 
     console.log(`[recommendMacros] ${name}: ${parsed.calories}kcal P${parsed.protein} C${parsed.carbs} F${parsed.fat}`);
