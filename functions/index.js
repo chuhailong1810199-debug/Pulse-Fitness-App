@@ -27,9 +27,10 @@ const { Groq }               = require("groq-sdk");
 
 initializeApp();
 
-const SMTP_USER     = defineSecret("SMTP_USER");
-const SMTP_PASS     = defineSecret("SMTP_PASS");
+const SMTP_USER      = defineSecret("SMTP_USER");
+const SMTP_PASS      = defineSecret("SMTP_PASS");
 const GROQ_API_KEY   = defineSecret("GROQ_API_KEY");
+const GEMINI_API_KEY = defineSecret("GEMINI_API_KEY");
 
 const COACH_EMAIL = "chuhailong1810199@gmail.com";
 const APP_NAME = "Striveo";
@@ -1599,5 +1600,73 @@ ${cueRule}
 
     console.log(`[pulseGenerateFree] ⚡ 4-week program generated for ${name} (${level}, ${goal}, ${sessions} days/week)`);
     return { program, steps, clientName: name };
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// analyzeMealPhoto — Gemini Vision, HTTPS Callable
+// Takes a base64-encoded meal photo and returns macro estimates.
+// Setup: firebase functions:secrets:set GEMINI_API_KEY
+// ─────────────────────────────────────────────────────────────────────────────
+exports.analyzeMealPhoto = onCall(
+  {
+    secrets: [GEMINI_API_KEY],
+    region: "asia-southeast1",
+    timeoutSeconds: 60,
+    memory: "256MiB",
+  },
+  async (request) => {
+    const { GoogleGenerativeAI } = require("@google/generative-ai");
+    const { imageBase64, mimeType } = request.data || {};
+
+    if (!imageBase64) {
+      throw new HttpsError("invalid-argument", "imageBase64 is required");
+    }
+
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY.value());
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+    const prompt = `You are a nutrition expert. Analyze this meal photo and estimate nutritional content.
+
+Return ONLY a valid JSON object (no markdown, no code fences, no explanation):
+{
+  "foods": [
+    {"name": "food name", "portion": "estimated portion size", "calories": 350, "protein": 25, "carbs": 40, "fat": 8}
+  ],
+  "total": {"calories": 350, "protein": 25, "carbs": 40, "fat": 8},
+  "confidence": "medium",
+  "note": "Brief note about estimation accuracy"
+}
+
+Rules:
+- Identify every visible food/drink item
+- Estimate realistic Vietnamese and Asian meal portions where applicable
+- All macro values in grams (g), calories in kcal
+- confidence: "low" (mixed dish, unclear), "medium" (reasonable estimate), "high" (clear identifiable food)
+- Be slightly conservative (underestimate rather than overestimate)
+- List each distinct food/dish as a separate item in foods array
+- If image is not food, return {"error": "not_food", "note": "No food detected in image"}`;
+
+    const result = await model.generateContent([
+      { inlineData: { data: imageBase64, mimeType: mimeType || "image/jpeg" } },
+      prompt,
+    ]);
+
+    const text = result.response.text().trim();
+
+    // Strip markdown fences if model wraps response
+    const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new HttpsError("internal", "Could not parse nutrition data from image. Please try again.");
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (parsed.error === "not_food") {
+      throw new HttpsError("invalid-argument", parsed.note || "No food detected in image");
+    }
+
+    console.log(`[analyzeMealPhoto] Analyzed meal: ${parsed.foods ? parsed.foods.length : 0} foods, ${parsed.total ? parsed.total.calories : "?"}kcal`);
+    return parsed;
   }
 );

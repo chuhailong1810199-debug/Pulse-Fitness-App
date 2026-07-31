@@ -563,6 +563,7 @@ async function loadApp() {
   initDaySwipe();
   initNavAutoHide();
   renderStats(); // non-blocking — stats update in background
+  loadNutritionData(); // non-blocking — load nutrition in background
   subscribeProgram();
   if (userRole === 'coach') {
     showScreen('app');
@@ -3290,6 +3291,318 @@ function closePhotoFullscreen() {
   if (overlay) { overlay.classList.remove('open'); overlay.querySelector('img').src = ''; }
 }
 
+// ── NUTRITION TRACKING ─────────────────────────────────────────────────────
+let _nutritionData = null;   // today's log
+let _macroTargets  = null;   // from client doc
+let _aiMealResult  = null;   // last Gemini result
+
+function _nutritionDateKey() {
+  const d = new Date();
+  return d.getFullYear() + '-' +
+    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0');
+}
+
+async function loadNutritionData() {
+  if (!activeClient) return;
+  const db = firebase.firestore();
+  // Load targets from client doc
+  const clientSnap = await db.collection('clients').doc(activeClient.id).get();
+  _macroTargets = (clientSnap.data() || {}).macroTargets || null;
+
+  // Load today's log
+  const dateKey = _nutritionDateKey();
+  const logSnap = await db.collection('clients').doc(activeClient.id)
+    .collection('nutrition').doc(dateKey).get();
+  _nutritionData = logSnap.exists ? logSnap.data() : null;
+
+  renderNutritionCard();
+}
+
+function renderNutritionCard() {
+  const noTarget    = document.getElementById('nutrition-no-target');
+  const macrosEl    = document.getElementById('nutrition-macros');
+  const mealsEl     = document.getElementById('nutrition-meals');
+  const targetBtn   = document.getElementById('macro-target-btn');
+  if (!noTarget) return;
+
+  const isCoach = userRole === 'coach';
+
+  // Show/hide coach target button
+  if (targetBtn) {
+    targetBtn.classList.toggle('hidden', !isCoach);
+  }
+
+  if (!_macroTargets) {
+    noTarget.classList.remove('hidden');
+    macrosEl.classList.add('hidden');
+    mealsEl.classList.add('hidden');
+    if (isCoach) {
+      noTarget.textContent = 'No macro targets set. Tap below to add them.';
+      targetBtn && targetBtn.classList.remove('hidden');
+    } else {
+      noTarget.textContent = 'Macro targets not set yet — ask your coach.';
+    }
+    return;
+  }
+
+  noTarget.classList.add('hidden');
+  macrosEl.classList.remove('hidden');
+
+  const totals = (_nutritionData || {}).totals || { calories: 0, protein: 0, carbs: 0, fat: 0 };
+  const t = _macroTargets;
+
+  function macroRow(label, key, barClass) {
+    const cur = Math.round(totals[key] || 0);
+    const tgt = t[key] || 0;
+    const pct = tgt > 0 ? Math.min(100, Math.round((cur / tgt) * 100)) : 0;
+    const over = tgt > 0 && cur > tgt;
+    return `<div class="macro-row">
+      <div class="macro-label">${label}</div>
+      <div class="macro-bar-wrap"><div class="macro-bar ${barClass}${over ? ' over' : ''}" style="width:${pct}%"></div></div>
+      <div class="macro-val">${cur}<span>/${tgt}${key === 'calories' ? 'kcal' : 'g'}</span></div>
+    </div>`;
+  }
+
+  macrosEl.innerHTML =
+    macroRow('🔥 Calories', 'calories', 'cal') +
+    macroRow('💪 Protein',  'protein',  'protein') +
+    macroRow('🍚 Carbs',    'carbs',    'carbs') +
+    macroRow('🧈 Fat',      'fat',      'fat');
+
+  // Meals list
+  const meals = (_nutritionData || {}).meals || [];
+  if (meals.length > 0) {
+    mealsEl.classList.remove('hidden');
+    mealsEl.innerHTML = meals.map((m, i) => {
+      const time = m.timestamp
+        ? new Date(m.timestamp).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })
+        : '';
+      return `<div class="nutrition-meal-item">
+        <div>
+          <div class="nmi-name">${m.name || 'Meal'}</div>
+          ${time ? `<div class="nmi-time">${time}</div>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="nmi-kcal">${Math.round(m.calories || 0)} kcal</div>
+          <button class="nmi-delete" onclick="deleteMealLog(${i})" title="Delete">×</button>
+        </div>
+      </div>`;
+    }).join('');
+  } else {
+    mealsEl.classList.add('hidden');
+  }
+}
+
+function openNutritionModal() {
+  showNlogStep('0');
+  document.getElementById('nlog-overlay').classList.remove('hidden');
+}
+
+function closeNutritionModal() {
+  document.getElementById('nlog-overlay').classList.add('hidden');
+  _aiMealResult = null;
+  // reset photo input
+  const inp = document.getElementById('nlog-photo-input');
+  if (inp) inp.value = '';
+}
+
+function showNlogStep(step) {
+  ['0','analyzing','results','manual'].forEach(s => {
+    const el = document.getElementById('nlog-step-' + s);
+    if (el) el.classList.toggle('active', s === step);
+  });
+  const titles = { '0': 'Log a Meal', 'analyzing': 'Analyzing…', 'results': 'Review & Save', 'manual': 'Manual Entry' };
+  const t = document.getElementById('nlog-title');
+  if (t) t.textContent = titles[step] || 'Log a Meal';
+}
+
+async function handleMealPhoto(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  showNlogStep('analyzing');
+
+  try {
+    // Compress image to max 800px, JPEG quality 0.8
+    const base64 = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const img = new Image();
+        img.onload = function() {
+          const maxSide = 800;
+          const scale   = Math.min(1, maxSide / Math.max(img.width, img.height));
+          const canvas  = document.createElement('canvas');
+          canvas.width  = Math.round(img.width * scale);
+          canvas.height = Math.round(img.height * scale);
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+          resolve(dataUrl.split(',')[1]); // strip data:image/jpeg;base64,
+        };
+        img.onerror = reject;
+        img.src = e.target.result;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+    const fn = firebase.app().functions('asia-southeast1').httpsCallable('analyzeMealPhoto');
+    const result = await fn({ imageBase64: base64, mimeType: 'image/jpeg' });
+    _aiMealResult = result.data;
+    renderAiResults(_aiMealResult);
+    showNlogStep('results');
+  } catch (err) {
+    console.error('[handleMealPhoto]', err);
+    showNlogStep('0');
+    alert('Could not analyze photo: ' + (err.message || 'Unknown error'));
+  } finally {
+    input.value = '';
+  }
+}
+
+function renderAiResults(data) {
+  const foodsList = document.getElementById('nlog-foods-list');
+  const totalRow  = document.getElementById('nlog-total-row');
+  const confEl    = document.getElementById('nlog-confidence');
+  const noteEl    = document.getElementById('nlog-note');
+
+  if (foodsList) {
+    foodsList.innerHTML = (data.foods || []).map(f => `
+      <div class="nlog-food-row">
+        <div class="nlog-food-name">${f.name} <span style="color:rgba(188,168,255,.45);font-weight:500;font-size:11px">${f.portion || ''}</span></div>
+        <div class="nlog-food-macros">
+          <div class="nlog-macro-chip"><div class="nlog-macro-chip-val">${f.calories}</div><div class="nlog-macro-chip-lbl">kcal</div></div>
+          <div class="nlog-macro-chip"><div class="nlog-macro-chip-val">${f.protein}g</div><div class="nlog-macro-chip-lbl">protein</div></div>
+          <div class="nlog-macro-chip"><div class="nlog-macro-chip-val">${f.carbs}g</div><div class="nlog-macro-chip-lbl">carbs</div></div>
+          <div class="nlog-macro-chip"><div class="nlog-macro-chip-val">${f.fat}g</div><div class="nlog-macro-chip-lbl">fat</div></div>
+        </div>
+      </div>`).join('');
+  }
+
+  const tot = data.total || {};
+  if (totalRow) {
+    totalRow.innerHTML = `
+      <div class="nlog-total-chip"><div class="nlog-total-chip-val">${tot.calories || 0}</div><div class="nlog-total-chip-lbl">kcal</div></div>
+      <div class="nlog-total-chip"><div class="nlog-total-chip-val">${tot.protein || 0}g</div><div class="nlog-total-chip-lbl">protein</div></div>
+      <div class="nlog-total-chip"><div class="nlog-total-chip-val">${tot.carbs || 0}g</div><div class="nlog-total-chip-lbl">carbs</div></div>
+      <div class="nlog-total-chip"><div class="nlog-total-chip-val">${tot.fat || 0}g</div><div class="nlog-total-chip-lbl">fat</div></div>`;
+  }
+
+  const confMap = { low: '⚠️ Low confidence', medium: '🟡 Medium confidence', high: '✅ High confidence' };
+  if (confEl) confEl.textContent = confMap[data.confidence] || '';
+  if (noteEl) noteEl.textContent = data.note || '';
+}
+
+async function saveNutritionLog(source) {
+  if (!activeClient) return;
+
+  let mealData;
+  if (source === 'ai' && _aiMealResult) {
+    const tot = _aiMealResult.total || {};
+    const foodNames = (_aiMealResult.foods || []).map(f => f.name).join(', ');
+    mealData = {
+      name: foodNames || 'Meal',
+      calories: tot.calories || 0,
+      protein: tot.protein || 0,
+      carbs: tot.carbs || 0,
+      fat: tot.fat || 0,
+      source: 'ai',
+      timestamp: Date.now(),
+    };
+  } else if (source === 'manual') {
+    const name  = (document.getElementById('nlog-meal-name')?.value || '').trim() || 'Meal';
+    const cal   = parseFloat(document.getElementById('nlog-cal')?.value)   || 0;
+    const prot  = parseFloat(document.getElementById('nlog-prot')?.value)  || 0;
+    const carbs = parseFloat(document.getElementById('nlog-carbs')?.value) || 0;
+    const fat   = parseFloat(document.getElementById('nlog-fat')?.value)   || 0;
+    mealData = { name, calories: cal, protein: prot, carbs, fat, source: 'manual', timestamp: Date.now() };
+  } else return;
+
+  const dateKey = _nutritionDateKey();
+  const db = firebase.firestore();
+  const ref = db.collection('clients').doc(activeClient.id).collection('nutrition').doc(dateKey);
+
+  const snap = await ref.get();
+  const existing = snap.exists ? (snap.data() || {}) : { meals: [], totals: { calories: 0, protein: 0, carbs: 0, fat: 0 } };
+
+  const meals = [...(existing.meals || []), mealData];
+  const totals = {
+    calories: (existing.totals?.calories || 0) + mealData.calories,
+    protein:  (existing.totals?.protein  || 0) + mealData.protein,
+    carbs:    (existing.totals?.carbs    || 0) + mealData.carbs,
+    fat:      (existing.totals?.fat      || 0) + mealData.fat,
+  };
+
+  await ref.set({ date: dateKey, meals, totals, updatedAt: Date.now() });
+
+  _nutritionData = { date: dateKey, meals, totals };
+  closeNutritionModal();
+  renderNutritionCard();
+
+  // Reset manual fields
+  ['nlog-meal-name','nlog-cal','nlog-prot','nlog-carbs','nlog-fat'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+}
+
+async function deleteMealLog(mealIndex) {
+  if (!activeClient || !_nutritionData) return;
+  if (!confirm('Remove this meal from today\'s log?')) return;
+
+  const meals = (_nutritionData.meals || []).filter((_, i) => i !== mealIndex);
+  const totals = meals.reduce((acc, m) => {
+    acc.calories += m.calories || 0;
+    acc.protein  += m.protein  || 0;
+    acc.carbs    += m.carbs    || 0;
+    acc.fat      += m.fat      || 0;
+    return acc;
+  }, { calories: 0, protein: 0, carbs: 0, fat: 0 });
+
+  const dateKey = _nutritionDateKey();
+  await firebase.firestore().collection('clients').doc(activeClient.id)
+    .collection('nutrition').doc(dateKey)
+    .set({ date: dateKey, meals, totals, updatedAt: Date.now() });
+
+  _nutritionData = { date: dateKey, meals, totals };
+  renderNutritionCard();
+}
+
+function openMacroTargetsModal() {
+  const t = _macroTargets || {};
+  ['cal','prot','carbs','fat'].forEach(key => {
+    const firestoreKey = key === 'cal' ? 'calories' : key === 'prot' ? 'protein' : key;
+    const el = document.getElementById('ntarget-' + key);
+    if (el) el.value = t[firestoreKey] || '';
+  });
+  document.getElementById('ntarget-overlay').classList.remove('hidden');
+}
+
+function closeMacroTargetsModal() {
+  document.getElementById('ntarget-overlay').classList.add('hidden');
+}
+
+async function saveMacroTargets() {
+  if (!activeClient) return;
+  const cal   = parseFloat(document.getElementById('ntarget-cal')?.value)   || 0;
+  const prot  = parseFloat(document.getElementById('ntarget-prot')?.value)  || 0;
+  const carbs = parseFloat(document.getElementById('ntarget-carbs')?.value) || 0;
+  const fat   = parseFloat(document.getElementById('ntarget-fat')?.value)   || 0;
+
+  const targets = {};
+  if (cal)   targets.calories = cal;
+  if (prot)  targets.protein  = prot;
+  if (carbs) targets.carbs    = carbs;
+  if (fat)   targets.fat      = fat;
+
+  await firebase.firestore().collection('clients').doc(activeClient.id)
+    .update({ macroTargets: Object.keys(targets).length > 0 ? targets : firebase.firestore.FieldValue.delete() });
+
+  _macroTargets = Object.keys(targets).length > 0 ? targets : null;
+  closeMacroTargetsModal();
+  renderNutritionCard();
+}
+
 // ── NAV ────────────────────────────────────────────────
 function centerActiveNavTab() {
   const active = document.querySelector('.nav-tab.active');
@@ -3315,6 +3628,7 @@ function showPage(page) {
       renderProgressPage();
       renderCoachDashboard();
       renderProgressPhotos();
+      loadNutritionData();
     });
   }
   if (page === 'log') {
@@ -6549,10 +6863,138 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <div class="section-title">Weekly Log</div>
     <div id="weekly-log"></div>
 
+    <!-- ── NUTRITION TRACKING ── -->
+    <div class="nutrition-section" id="nutrition-section">
+      <div class="nutrition-header">
+        <div class="nutrition-title">🥗 Nutrition — Today</div>
+        <button class="nlog-add-btn" onclick="openNutritionModal()">+ Log Meal</button>
+      </div>
+      <div class="nutrition-card" id="nutrition-card">
+        <div class="nutrition-no-target" id="nutrition-no-target">Set macro targets to start tracking</div>
+        <div class="macro-rows hidden" id="nutrition-macros"></div>
+        <div class="nutrition-meals hidden" id="nutrition-meals"></div>
+        <button class="macro-target-btn hidden" id="macro-target-btn" onclick="openMacroTargetsModal()">⚙️ Set Macro Targets</button>
+      </div>
+    </div>
+
     <div class="section-title">📸 Progress Photos</div>
     <div id="progress-photos-wrap"></div>
   </div>
 </div>
+</div>
+
+<!-- ── NUTRITION LOG MODAL ─────────────────────────────────────────────── -->
+<div class="nlog-overlay hidden" id="nlog-overlay">
+  <div class="nlog-sheet">
+    <div class="nlog-handle"></div>
+    <div class="nlog-head">
+      <div class="nlog-title" id="nlog-title">Log a Meal</div>
+      <button class="nlog-close" onclick="closeNutritionModal()">✕</button>
+    </div>
+    <div class="nlog-body">
+
+      <!-- Step 0: Choose input method -->
+      <div class="nlog-step active" id="nlog-step-0">
+        <div class="nlog-option-row">
+          <div class="nlog-option" onclick="document.getElementById('nlog-photo-input').click()">
+            <div class="nlog-option-icon">📷</div>
+            <div class="nlog-option-label">Photo</div>
+            <div class="nlog-option-sub">AI estimates macros</div>
+          </div>
+          <div class="nlog-option" onclick="showNlogStep('manual')">
+            <div class="nlog-option-icon">✏️</div>
+            <div class="nlog-option-label">Manual</div>
+            <div class="nlog-option-sub">Enter numbers directly</div>
+          </div>
+        </div>
+        <input type="file" id="nlog-photo-input" accept="image/*" capture="environment" style="display:none" onchange="handleMealPhoto(this)">
+      </div>
+
+      <!-- Step 1: Analyzing -->
+      <div class="nlog-step" id="nlog-step-analyzing">
+        <div class="nlog-analyzing">
+          <div class="nlog-analyzing-spinner">🔍</div>
+          <div class="nlog-analyzing-text">Analyzing your meal…</div>
+        </div>
+      </div>
+
+      <!-- Step 2: AI Results Review -->
+      <div class="nlog-step" id="nlog-step-results">
+        <button class="nlog-back-btn" onclick="showNlogStep('0')">← Back</button>
+        <div class="nlog-section-label">AI Detected Foods</div>
+        <div class="nlog-foods-list" id="nlog-foods-list"></div>
+        <div class="nlog-confidence" id="nlog-confidence"></div>
+        <div class="nlog-section-label">Total</div>
+        <div class="nlog-total-row" id="nlog-total-row"></div>
+        <div class="nlog-note" id="nlog-note"></div>
+        <button class="nlog-save-btn" onclick="saveNutritionLog('ai')">Save to Log</button>
+      </div>
+
+      <!-- Step 3: Manual Entry -->
+      <div class="nlog-step" id="nlog-step-manual">
+        <button class="nlog-back-btn" onclick="showNlogStep('0')">← Back</button>
+        <div class="nlog-section-label">Meal Name</div>
+        <div class="nlog-field" style="margin-bottom:12px">
+          <input type="text" id="nlog-meal-name" placeholder="e.g. Cơm bò, Salad, Protein shake…" style="width:100%;box-sizing:border-box">
+        </div>
+        <div class="nlog-section-label">Macros</div>
+        <div class="nlog-manual-grid">
+          <div class="nlog-field">
+            <label>Calories (kcal)</label>
+            <input type="number" id="nlog-cal" placeholder="0" min="0" max="5000">
+          </div>
+          <div class="nlog-field">
+            <label>Protein (g)</label>
+            <input type="number" id="nlog-prot" placeholder="0" min="0" max="500">
+          </div>
+          <div class="nlog-field">
+            <label>Carbs (g)</label>
+            <input type="number" id="nlog-carbs" placeholder="0" min="0" max="1000">
+          </div>
+          <div class="nlog-field">
+            <label>Fat (g)</label>
+            <input type="number" id="nlog-fat" placeholder="0" min="0" max="500">
+          </div>
+        </div>
+        <button class="nlog-save-btn" onclick="saveNutritionLog('manual')">Save to Log</button>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ── MACRO TARGETS MODAL ─────────────────────────────────────────────── -->
+<div class="nlog-overlay hidden" id="ntarget-overlay">
+  <div class="nlog-sheet">
+    <div class="nlog-handle"></div>
+    <div class="nlog-head">
+      <div class="nlog-title">Set Macro Targets</div>
+      <button class="nlog-close" onclick="closeMacroTargetsModal()">✕</button>
+    </div>
+    <div class="nlog-body">
+      <div class="nlog-section-label" style="margin-bottom:4px">Daily Targets</div>
+      <div style="font-size:12px;color:rgba(188,168,255,.45);margin-bottom:14px">Leave blank to remove a target</div>
+      <div class="nlog-target-grid">
+        <div class="nlog-field">
+          <label>Calories (kcal)</label>
+          <input type="number" id="ntarget-cal" placeholder="e.g. 2000" min="0" max="10000">
+        </div>
+        <div class="nlog-field">
+          <label>Protein (g)</label>
+          <input type="number" id="ntarget-prot" placeholder="e.g. 160" min="0" max="500">
+        </div>
+        <div class="nlog-field">
+          <label>Carbs (g)</label>
+          <input type="number" id="ntarget-carbs" placeholder="e.g. 220" min="0" max="1000">
+        </div>
+        <div class="nlog-field">
+          <label>Fat (g)</label>
+          <input type="number" id="ntarget-fat" placeholder="e.g. 65" min="0" max="500">
+        </div>
+      </div>
+      <button class="nlog-save-btn" onclick="saveMacroTargets()">Save Targets</button>
+    </div>
+  </div>
 </div>
 
 <!-- PROGRESS PHOTOS — BEFORE/AFTER OVERLAY -->
@@ -7651,6 +8093,87 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .sch-sum-bar{height:100%;border-radius:99px;background:linear-gradient(90deg,#8b6cff,#bca8ff);transition:width .4s ease;}
 .sch-sum-rn{font-size:14px;font-weight:700;color:#8b6cff;text-align:right;}
 .sch-empty{font-size:12px;color:rgba(188,168,255,.4);text-align:center;padding:8px 0;margin:0;}
+
+/* ── Nutrition Tracking ─────────────────────────────────────────────────── */
+.nutrition-section{margin:0 0 1.5rem;}
+.nutrition-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
+.nutrition-title{font-size:13px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:rgba(188,168,255,.6);}
+.nutrition-title::after{content:'';display:block;height:1px;background:rgba(167,139,250,.16);margin-top:6px;}
+.nlog-add-btn{background:rgba(139,108,255,.15);border:1px solid rgba(139,108,255,.3);color:#bca8ff;font-size:12px;font-weight:700;border-radius:20px;padding:5px 14px;cursor:pointer;letter-spacing:.5px;}
+.nlog-add-btn:active{background:rgba(139,108,255,.25);}
+.nutrition-card{background:rgba(22,14,40,.6);border:1px solid rgba(139,108,255,.14);border-radius:16px;padding:16px;}
+.nutrition-no-target{font-size:13px;color:rgba(188,168,255,.45);text-align:center;padding:8px 0;}
+.macro-rows{display:flex;flex-direction:column;gap:10px;}
+.macro-row{display:grid;grid-template-columns:80px 1fr 70px;align-items:center;gap:10px;}
+.macro-label{font-size:12px;font-weight:700;color:rgba(188,168,255,.7);letter-spacing:.3px;}
+.macro-bar-wrap{background:rgba(139,108,255,.12);border-radius:99px;height:7px;overflow:hidden;}
+.macro-bar{height:100%;border-radius:99px;transition:width .4s ease;}
+.macro-bar.cal{background:linear-gradient(90deg,#ff7043,#ffb74d);}
+.macro-bar.protein{background:linear-gradient(90deg,#8b6cff,#bca8ff);}
+.macro-bar.carbs{background:linear-gradient(90deg,#43a047,#a5d6a7);}
+.macro-bar.fat{background:linear-gradient(90deg,#fb8c00,#ffd54f);}
+.macro-bar.over{background:#ef5350 !important;}
+.macro-val{font-size:12px;font-weight:700;color:#F4F1FB;text-align:right;white-space:nowrap;}
+.macro-val span{color:rgba(188,168,255,.45);font-weight:500;}
+.nutrition-meals{margin-top:14px;display:flex;flex-direction:column;gap:8px;}
+.nutrition-meal-item{background:rgba(139,108,255,.07);border-radius:10px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;}
+.nmi-name{font-size:13px;color:#F4F1FB;font-weight:600;}
+.nmi-time{font-size:11px;color:rgba(188,168,255,.45);}
+.nmi-kcal{font-size:13px;font-weight:700;color:#bca8ff;}
+.nmi-delete{background:none;border:none;color:rgba(188,168,255,.35);font-size:16px;cursor:pointer;padding:0 4px;line-height:1;}
+
+/* ── Nutrition Modal ─────────────────────────────────────────────────────── */
+.nlog-overlay{position:fixed;inset:0;z-index:900;background:rgba(8,4,18,.88);display:flex;flex-direction:column;overflow:hidden;transition:opacity .2s;}
+.nlog-overlay.hidden{display:none;}
+.nlog-sheet{background:linear-gradient(160deg,#15082e,#0e0520);border-radius:22px 22px 0 0;padding:0 0 env(safe-area-inset-bottom,16px);flex:1;display:flex;flex-direction:column;overflow:hidden;max-height:92vh;margin-top:auto;}
+.nlog-handle{width:36px;height:4px;background:rgba(139,108,255,.3);border-radius:4px;margin:12px auto 0;}
+.nlog-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px 12px;}
+.nlog-title{font-size:17px;font-weight:800;color:#F4F1FB;}
+.nlog-close{background:none;border:none;color:rgba(188,168,255,.5);font-size:22px;cursor:pointer;line-height:1;padding:0;}
+.nlog-body{overflow-y:auto;flex:1;padding:0 20px 20px;}
+/* Step 1 — choose input */
+.nlog-step{display:none;}
+.nlog-step.active{display:block;}
+.nlog-option-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;}
+.nlog-option{background:rgba(139,108,255,.1);border:1.5px solid rgba(139,108,255,.25);border-radius:14px;padding:20px 12px;text-align:center;cursor:pointer;transition:background .15s,border .15s;}
+.nlog-option:active{background:rgba(139,108,255,.2);}
+.nlog-option-icon{font-size:28px;margin-bottom:6px;}
+.nlog-option-label{font-size:13px;font-weight:700;color:#F4F1FB;}
+.nlog-option-sub{font-size:11px;color:rgba(188,168,255,.5);margin-top:2px;}
+.nlog-section-label{font-size:12px;font-weight:700;letter-spacing:1px;color:rgba(188,168,255,.5);text-transform:uppercase;margin:0 0 10px;}
+/* Step 2a — analyzing */
+.nlog-analyzing{text-align:center;padding:32px 0;}
+.nlog-analyzing-spinner{font-size:40px;animation:spin 1.5s linear infinite;display:inline-block;margin-bottom:12px;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.nlog-analyzing-text{color:rgba(188,168,255,.7);font-size:14px;}
+/* Step 2b — review results */
+.nlog-foods-list{display:flex;flex-direction:column;gap:8px;margin-bottom:16px;}
+.nlog-food-row{background:rgba(139,108,255,.08);border-radius:11px;padding:10px 12px;}
+.nlog-food-name{font-size:13px;font-weight:700;color:#F4F1FB;margin-bottom:4px;}
+.nlog-food-macros{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;}
+.nlog-macro-chip{background:rgba(139,108,255,.12);border-radius:6px;padding:4px 6px;text-align:center;}
+.nlog-macro-chip-val{font-size:12px;font-weight:800;color:#bca8ff;}
+.nlog-macro-chip-lbl{font-size:9px;color:rgba(188,168,255,.5);text-transform:uppercase;letter-spacing:.5px;}
+.nlog-confidence{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:rgba(188,168,255,.5);margin-bottom:12px;}
+.nlog-total-row{background:rgba(22,14,40,.7);border:1px solid rgba(139,108,255,.2);border-radius:12px;padding:12px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px;}
+.nlog-total-chip{text-align:center;}
+.nlog-total-chip-val{font-size:18px;font-weight:800;color:#F4F1FB;}
+.nlog-total-chip-lbl{font-size:10px;color:rgba(188,168,255,.5);letter-spacing:.5px;text-transform:uppercase;}
+.nlog-note{font-size:11px;color:rgba(188,168,255,.4);margin-bottom:16px;font-style:italic;}
+/* Manual entry */
+.nlog-manual-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;}
+.nlog-field{display:flex;flex-direction:column;gap:4px;}
+.nlog-field label{font-size:11px;font-weight:700;letter-spacing:.5px;color:rgba(188,168,255,.6);text-transform:uppercase;}
+.nlog-field input{background:rgba(139,108,255,.1);border:1px solid rgba(139,108,255,.25);border-radius:10px;padding:10px 12px;color:#F4F1FB;font-size:15px;font-weight:700;outline:none;-webkit-appearance:none;}
+.nlog-field input:focus{border-color:rgba(139,108,255,.6);}
+.nlog-field-full{grid-column:1/-1;}
+.nlog-save-btn{width:100%;background:linear-gradient(135deg,#6d45e0,#8b6cff);border:none;border-radius:14px;padding:16px;color:#fff;font-size:16px;font-weight:800;cursor:pointer;letter-spacing:.5px;}
+.nlog-save-btn:disabled{opacity:.4;cursor:not-allowed;}
+.nlog-back-btn{background:none;border:none;color:rgba(188,168,255,.6);font-size:13px;cursor:pointer;padding:0 0 12px;display:flex;align-items:center;gap:4px;}
+/* Coach macro target panel */
+.macro-target-btn{display:block;width:100%;text-align:center;background:none;border:1px solid rgba(139,108,255,.2);border-radius:10px;padding:8px;color:rgba(188,168,255,.5);font-size:12px;font-weight:600;cursor:pointer;margin-top:12px;}
+.macro-target-btn:active{background:rgba(139,108,255,.1);}
+.nlog-target-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;}
 </style>
 </body>
 </html>
