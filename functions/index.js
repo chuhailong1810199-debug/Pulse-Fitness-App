@@ -1670,3 +1670,170 @@ Rules:
     return parsed;
   }
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// recommendMacros — Gemini, HTTPS Callable
+// Reads the client's InBody baseline + checkpoints + goal + training load,
+// then returns recommended daily macro targets with reasoning.
+// ─────────────────────────────────────────────────────────────────────────────
+exports.recommendMacros = onCall(
+  {
+    secrets: [GEMINI_API_KEY],
+    region: "asia-southeast1",
+    timeoutSeconds: 90,
+    memory: "256MiB",
+  },
+  async (request) => {
+    const { GoogleGenerativeAI } = require("@google/generative-ai");
+    const { clientId } = request.data || {};
+    if (!clientId) throw new HttpsError("invalid-argument", "clientId is required");
+
+    const db = getFirestore();
+
+    // ── Read client profile ──────────────────────────────────────────────────
+    const clientDoc = await db.collection("clients").doc(clientId).get();
+    if (!clientDoc.exists) throw new HttpsError("not-found", "Client not found: " + clientId);
+    const client = clientDoc.data();
+    const { name, level, goal, sessionsPerWeek, notes } = client;
+
+    // ── Read InBody baseline ─────────────────────────────────────────────────
+    const baseDoc = await db.collection("clients").doc(clientId)
+      .collection("assessment").doc("baseline").get();
+    const baseline = baseDoc.exists ? baseDoc.data() : null;
+
+    // ── Read checkpoints (most recent first) ─────────────────────────────────
+    const cpSnap = await db.collection("clients").doc(clientId)
+      .collection("checkpoints").orderBy("date", "desc").limit(4).get();
+    const checkpoints = cpSnap.docs.map((d) => d.data());
+
+    // Latest measurement = most recent checkpoint, else baseline
+    const latest = checkpoints.length > 0 ? checkpoints[0] : baseline;
+    if (!latest || !latest.weight) {
+      throw new HttpsError(
+        "failed-precondition",
+        "No InBody data found for this client. Add a baseline assessment first."
+      );
+    }
+
+    // ── Build measurement context ────────────────────────────────────────────
+    const w   = parseFloat(latest.weight) || null;
+    const h   = parseFloat(latest.height || (baseline && baseline.height)) || null;
+    const a   = parseInt(latest.age || (baseline && baseline.age)) || null;
+    const g   = latest.gender || (baseline && baseline.gender) || "";
+    const pbf = parseFloat(latest.pbf) || null;
+    const smm = parseFloat(latest.smm) || null;
+
+    const lines = [];
+    lines.push(`- Weight: ${w}kg | Height: ${h || "?"}cm | Age: ${a || "?"} | Gender: ${g || "?"}`);
+    if (w && h) {
+      const bmi = Math.round((w / Math.pow(h / 100, 2)) * 10) / 10;
+      lines.push(`- BMI: ${bmi}`);
+    }
+    if (pbf !== null) {
+      // Lean body mass — the most important number for protein targeting
+      const lbm = Math.round((w * (1 - pbf / 100)) * 10) / 10;
+      lines.push(`- Body Fat: ${pbf}% | Lean Body Mass: ${lbm}kg`);
+    }
+    if (smm !== null) lines.push(`- Skeletal Muscle Mass: ${smm}kg`);
+    if (latest.bmr) lines.push(`- InBody-measured BMR: ${latest.bmr} kcal`);
+    if (latest.vfl) lines.push(`- Visceral Fat Level: ${latest.vfl} (healthy is under 10)`);
+    if (latest.waist && latest.hip) {
+      lines.push(`- Waist: ${latest.waist}cm | Hip: ${latest.hip}cm`);
+    }
+
+    // ── Trend across checkpoints ─────────────────────────────────────────────
+    let trendContext = "";
+    if (checkpoints.length >= 2) {
+      const oldest = checkpoints[checkpoints.length - 1];
+      const dW   = ((latest.weight || 0) - (oldest.weight || 0)).toFixed(1);
+      const dPBF = ((latest.pbf   || 0) - (oldest.pbf   || 0)).toFixed(1);
+      const dSMM = ((latest.smm   || 0) - (oldest.smm   || 0)).toFixed(1);
+      trendContext = `
+PROGRESS TREND (${checkpoints.length} checkpoints):
+- Weight: ${oldest.weight}kg → ${latest.weight}kg (${dW > 0 ? "+" : ""}${dW}kg)
+- Body Fat: ${oldest.pbf || "?"}% → ${latest.pbf || "?"}% (${dPBF > 0 ? "+" : ""}${dPBF}%)
+- Muscle Mass: ${oldest.smm || "?"}kg → ${latest.smm || "?"}kg (${dSMM > 0 ? "+" : ""}${dSMM}kg)
+
+IMPORTANT: Use this trend to adjust the calorie target. If the client is not progressing toward their goal, adjust calories accordingly (e.g. fat loss stalled → reduce deficit further; muscle gain stalled → increase surplus; losing muscle → raise protein and reduce deficit).`;
+    } else {
+      trendContext = "\nPROGRESS TREND: First measurement only — no trend data yet. Use standard calculations.";
+    }
+
+    const prompt = `You are a sports nutritionist. Calculate personalized daily macro targets for this client based on their InBody body composition scan.
+
+CLIENT:
+- Name: ${name}
+- Training level: ${level || "Intermediate"}
+- Goal: ${goal || "General fitness"}
+- Training sessions per week: ${sessionsPerWeek || 3}
+${notes && notes.trim() && notes.trim().toLowerCase() !== "none" ? `- Notes / limitations: ${notes}` : ""}
+
+INBODY MEASUREMENTS (most recent):
+${lines.join("\n")}
+${trendContext}
+
+CALCULATION METHOD — follow this precisely:
+1. BMR: use the InBody-measured BMR if provided above. Otherwise use the Katch-McArdle formula (BMR = 370 + 21.6 × Lean Body Mass in kg) if body fat % is known, else Mifflin-St Jeor.
+2. TDEE: multiply BMR by an activity factor based on training frequency:
+   - 3 sessions/week → 1.45  | 4 → 1.55  | 5 → 1.65  | 6 → 1.725  | 7 → 1.8
+   Adjust slightly for the client's job/lifestyle if implied by notes.
+3. CALORIE TARGET — adjust TDEE by goal:
+   - Fat loss: 15–20% deficit (never below BMR, never more than 25% deficit)
+   - Muscle gain: 10–15% surplus
+   - Recomposition: maintenance to 5% deficit
+   - Endurance/HYROX/performance: maintenance to slight surplus (fuel the work)
+   - General fitness: maintenance
+4. PROTEIN — base on LEAN BODY MASS, not total weight:
+   - Fat loss: 2.2–2.6 g per kg LBM (higher end preserves muscle in a deficit)
+   - Muscle gain: 2.0–2.2 g per kg LBM
+   - Endurance: 1.8–2.0 g per kg LBM
+   If body fat % is unknown, use 1.8–2.2 g per kg total body weight instead.
+5. FAT: 0.8–1.0 g per kg total body weight, minimum 20% of total calories (hormonal health).
+6. CARBS: fill the remaining calories. (Protein 4 kcal/g, Carbs 4 kcal/g, Fat 9 kcal/g)
+   Higher training frequency → push carbs higher. Verify the macros add up to the calorie target within ±30 kcal.
+
+Return ONLY a valid JSON object (no markdown, no code fences, no explanation outside the JSON):
+{
+  "calories": 2100,
+  "protein": 165,
+  "carbs": 210,
+  "fat": 65,
+  "bmr": 1650,
+  "tdee": 2550,
+  "reasoning": "2-3 sentences in Vietnamese explaining the calorie target and why, referencing their body composition numbers.",
+  "proteinNote": "One short sentence in Vietnamese on the protein target.",
+  "adjustmentNote": "One short sentence in Vietnamese on what to adjust if progress stalls after 2-3 weeks.",
+  "confidence": "high"
+}
+
+Rules:
+- All macro values must be whole numbers (integers)
+- Write reasoning, proteinNote and adjustmentNote in VIETNAMESE — the coach and client are Vietnamese
+- confidence: "high" if body fat % and weight are both known, "medium" if only weight, "low" if data is sparse
+- Be practical and realistic, not textbook-extreme`;
+
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY.value());
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+    const result = await model.generateContent(prompt);
+    const text = result.response.text().trim();
+    const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new HttpsError("internal", "Could not parse macro recommendation. Please try again.");
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]);
+
+    // Sanity check — reject nonsense output
+    ["calories", "protein", "carbs", "fat"].forEach((k) => {
+      parsed[k] = Math.round(parseFloat(parsed[k]) || 0);
+    });
+    if (parsed.calories < 800 || parsed.calories > 6000) {
+      throw new HttpsError("internal", "Recommendation out of safe range. Please try again.");
+    }
+
+    console.log(`[recommendMacros] ${name}: ${parsed.calories}kcal P${parsed.protein} C${parsed.carbs} F${parsed.fat}`);
+    return parsed;
+  }
+);

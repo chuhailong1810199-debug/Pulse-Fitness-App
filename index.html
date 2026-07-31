@@ -563,7 +563,6 @@ async function loadApp() {
   initDaySwipe();
   initNavAutoHide();
   renderStats(); // non-blocking — stats update in background
-  loadNutritionData(); // non-blocking — load nutrition in background
   subscribeProgram();
   if (userRole === 'coach') {
     showScreen('app');
@@ -622,13 +621,14 @@ async function switchClient(id) {
   if (!next) return;
 
   // ── Fade out ──
-  const pages = document.querySelectorAll('.workout-page, .progress-page, .log-page');
+  const pages = document.querySelectorAll('.workout-page, .progress-page, .log-page, #nutrition-page');
   pages.forEach(p => p.classList.add('switching'));
   await new Promise(r => setTimeout(r, 180));
 
   // ── Switch data ──
   activeClient = next;
   _historyCache = null; // clear cache for new client
+  _nutritionData = null; _macroTargets = null; _macroMeta = null; // clear nutrition for new client
   _sessionLogged = false; updateFinishBtn();
   document.getElementById('client-level').textContent = activeClient.level || '—';
 
@@ -647,6 +647,9 @@ async function switchClient(id) {
   renderCoachDashboard();
   if (document.getElementById('log-page')?.classList.contains('active')) {
     renderWorkoutLog();
+  }
+  if (document.getElementById('nutrition-page')?.classList.contains('active')) {
+    loadNutritionData();
   }
 
   // ── Fade in ──
@@ -3294,6 +3297,7 @@ function closePhotoFullscreen() {
 // ── NUTRITION TRACKING ─────────────────────────────────────────────────────
 let _nutritionData = null;   // today's log
 let _macroTargets  = null;   // from client doc
+let _macroMeta     = null;   // AI reasoning / BMR / TDEE behind the targets
 let _aiMealResult  = null;   // last Gemini result
 
 function _nutritionDateKey() {
@@ -3306,9 +3310,20 @@ function _nutritionDateKey() {
 async function loadNutritionData() {
   if (!activeClient) return;
   const db = firebase.firestore();
-  // Load targets from client doc
+
+  // Date title
+  const titleEl = document.getElementById('nutrition-date-title');
+  if (titleEl) {
+    titleEl.textContent = '🥗 ' + new Date().toLocaleDateString('en-AU', {
+      weekday: 'long', day: 'numeric', month: 'short'
+    });
+  }
+
+  // Load targets + recommendation meta from client doc
   const clientSnap = await db.collection('clients').doc(activeClient.id).get();
-  _macroTargets = (clientSnap.data() || {}).macroTargets || null;
+  const cdata = clientSnap.data() || {};
+  _macroTargets = cdata.macroTargets || null;
+  _macroMeta    = cdata.macroMeta || null;
 
   // Load today's log
   const dateKey = _nutritionDateKey();
@@ -3317,32 +3332,30 @@ async function loadNutritionData() {
   _nutritionData = logSnap.exists ? logSnap.data() : null;
 
   renderNutritionCard();
+  renderNutritionMeals();
+  renderNutritionWeek();
 }
 
 function renderNutritionCard() {
-  const noTarget    = document.getElementById('nutrition-no-target');
-  const macrosEl    = document.getElementById('nutrition-macros');
-  const mealsEl     = document.getElementById('nutrition-meals');
-  const targetBtn   = document.getElementById('macro-target-btn');
+  const noTarget  = document.getElementById('nutrition-no-target');
+  const macrosEl  = document.getElementById('nutrition-macros');
+  const actionsEl = document.getElementById('nutrition-actions');
+  const recPanel  = document.getElementById('nrec-panel');
+  const recBody   = document.getElementById('nrec-body');
   if (!noTarget) return;
 
   const isCoach = userRole === 'coach';
 
-  // Show/hide coach target button
-  if (targetBtn) {
-    targetBtn.classList.toggle('hidden', !isCoach);
-  }
+  // Coach-only action buttons
+  if (actionsEl) actionsEl.classList.toggle('hidden', !isCoach);
 
   if (!_macroTargets) {
     noTarget.classList.remove('hidden');
     macrosEl.classList.add('hidden');
-    mealsEl.classList.add('hidden');
-    if (isCoach) {
-      noTarget.textContent = 'No macro targets set. Tap below to add them.';
-      targetBtn && targetBtn.classList.remove('hidden');
-    } else {
-      noTarget.textContent = 'Macro targets not set yet — ask your coach.';
-    }
+    recPanel && recPanel.classList.add('hidden');
+    noTarget.textContent = isCoach
+      ? 'No macro targets yet — generate them from this client\'s InBody data below.'
+      : 'Macro targets not set yet — your coach will add them soon.';
     return;
   }
 
@@ -3357,10 +3370,13 @@ function renderNutritionCard() {
     const tgt = t[key] || 0;
     const pct = tgt > 0 ? Math.min(100, Math.round((cur / tgt) * 100)) : 0;
     const over = tgt > 0 && cur > tgt;
+    const left = tgt - cur;
     return `<div class="macro-row">
       <div class="macro-label">${label}</div>
       <div class="macro-bar-wrap"><div class="macro-bar ${barClass}${over ? ' over' : ''}" style="width:${pct}%"></div></div>
-      <div class="macro-val">${cur}<span>/${tgt}${key === 'calories' ? 'kcal' : 'g'}</span></div>
+      <div class="macro-val">${cur}<span>/${tgt}${key === 'calories' ? '' : 'g'}</span>
+        <div class="macro-left${over ? ' over' : ''}">${over ? '+' + Math.abs(left) + ' over' : left + ' left'}</div>
+      </div>
     </div>`;
   }
 
@@ -3370,27 +3386,132 @@ function renderNutritionCard() {
     macroRow('🍚 Carbs',    'carbs',    'carbs') +
     macroRow('🧈 Fat',      'fat',      'fat');
 
-  // Meals list
-  const meals = (_nutritionData || {}).meals || [];
-  if (meals.length > 0) {
-    mealsEl.classList.remove('hidden');
-    mealsEl.innerHTML = meals.map((m, i) => {
-      const time = m.timestamp
-        ? new Date(m.timestamp).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })
-        : '';
-      return `<div class="nutrition-meal-item">
-        <div>
-          <div class="nmi-name">${m.name || 'Meal'}</div>
-          ${time ? `<div class="nmi-time">${time}</div>` : ''}
-        </div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <div class="nmi-kcal">${Math.round(m.calories || 0)} kcal</div>
-          <button class="nmi-delete" onclick="deleteMealLog(${i})" title="Delete">×</button>
-        </div>
+  // AI reasoning panel
+  if (recPanel && recBody && _macroMeta) {
+    recPanel.classList.remove('hidden');
+    const m = _macroMeta;
+    const dateStr = m.generatedAt
+      ? new Date(m.generatedAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })
+      : '';
+    let html = '';
+    if (m.bmr || m.tdee) {
+      html += `<div class="nrec-stats">
+        ${m.bmr  ? `<div class="nrec-stat"><div class="nrec-stat-val">${m.bmr}</div><div class="nrec-stat-lbl">BMR</div></div>` : ''}
+        ${m.tdee ? `<div class="nrec-stat"><div class="nrec-stat-val">${m.tdee}</div><div class="nrec-stat-lbl">TDEE</div></div>` : ''}
+        <div class="nrec-stat"><div class="nrec-stat-val">${t.calories}</div><div class="nrec-stat-lbl">Target</div></div>
       </div>`;
-    }).join('');
-  } else {
-    mealsEl.classList.add('hidden');
+    }
+    if (m.reasoning)       html += `<p class="nrec-text">${m.reasoning}</p>`;
+    if (m.proteinNote)     html += `<p class="nrec-text">💪 ${m.proteinNote}</p>`;
+    if (m.adjustmentNote)  html += `<p class="nrec-text nrec-adjust">📈 ${m.adjustmentNote}</p>`;
+    if (m.source === 'manual') html = `<p class="nrec-text">Targets were set manually by your coach.</p>`;
+    if (dateStr)           html += `<div class="nrec-date">Generated ${dateStr}${m.basedOn ? ' · based on ' + m.basedOn : ''}</div>`;
+    recBody.innerHTML = html;
+  } else if (recPanel) {
+    recPanel.classList.add('hidden');
+  }
+}
+
+function renderNutritionMeals() {
+  const mealsEl = document.getElementById('nutrition-meals');
+  if (!mealsEl) return;
+  const meals = (_nutritionData || {}).meals || [];
+
+  if (meals.length === 0) {
+    mealsEl.innerHTML = '<div class="nutrition-empty">No meals logged yet today.</div>';
+    return;
+  }
+
+  mealsEl.innerHTML = meals.map((m, i) => {
+    const time = m.timestamp
+      ? new Date(m.timestamp).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })
+      : '';
+    const badge = m.source === 'ai' ? '<span class="nmi-badge">AI</span>' : '';
+    return `<div class="nutrition-meal-item">
+      <div style="min-width:0;flex:1">
+        <div class="nmi-name">${m.name || 'Meal'} ${badge}</div>
+        <div class="nmi-macros">${Math.round(m.protein||0)}p · ${Math.round(m.carbs||0)}c · ${Math.round(m.fat||0)}f${time ? ' · ' + time : ''}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+        <div class="nmi-kcal">${Math.round(m.calories || 0)}</div>
+        <button class="nmi-delete" onclick="deleteMealLog(${i})" title="Delete">×</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function renderNutritionWeek() {
+  const weekEl = document.getElementById('nutrition-week');
+  if (!weekEl || !activeClient) return;
+
+  const db = firebase.firestore();
+  const snap = await db.collection('clients').doc(activeClient.id)
+    .collection('nutrition').orderBy('date', 'desc').limit(7).get();
+
+  const days = snap.docs.map(d => d.data()).filter(d => d.date !== _nutritionDateKey());
+  if (days.length === 0) {
+    weekEl.innerHTML = '<div class="nutrition-empty">No history yet — log a few days to see trends.</div>';
+    return;
+  }
+
+  const calTarget = (_macroTargets || {}).calories || 0;
+  weekEl.innerHTML = days.map(d => {
+    const cal = Math.round((d.totals || {}).calories || 0);
+    const pct = calTarget > 0 ? Math.min(100, Math.round((cal / calTarget) * 100)) : 0;
+    const over = calTarget > 0 && cal > calTarget;
+    const label = new Date(d.date + 'T00:00:00').toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric' });
+    const nMeals = (d.meals || []).length;
+    return `<div class="nweek-row">
+      <div class="nweek-day">${label}</div>
+      <div class="nweek-bar-wrap"><div class="nweek-bar${over ? ' over' : ''}" style="width:${pct}%"></div></div>
+      <div class="nweek-val">${cal}<span> kcal</span></div>
+      <div class="nweek-meals">${nMeals}🍽</div>
+    </div>`;
+  }).join('');
+}
+
+// ── AI macro recommendation ────────────────────────────────────────────────
+async function generateMacroRecommendation() {
+  if (!activeClient) return;
+  const btn = document.getElementById('nrec-generate-btn');
+  const origText = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '⚡ Analyzing InBody data…'; }
+
+  try {
+    const fn = firebase.app().functions('asia-southeast1').httpsCallable('recommendMacros');
+    const res = await fn({ clientId: activeClient.id });
+    const r = res.data;
+
+    const targets = {
+      calories: r.calories,
+      protein:  r.protein,
+      carbs:    r.carbs,
+      fat:      r.fat,
+    };
+    const meta = {
+      bmr: r.bmr || null,
+      tdee: r.tdee || null,
+      reasoning: r.reasoning || '',
+      proteinNote: r.proteinNote || '',
+      adjustmentNote: r.adjustmentNote || '',
+      confidence: r.confidence || 'medium',
+      source: 'ai',
+      basedOn: 'InBody',
+      generatedAt: Date.now(),
+    };
+
+    await firebase.firestore().collection('clients').doc(activeClient.id)
+      .update({ macroTargets: targets, macroMeta: meta });
+
+    _macroTargets = targets;
+    _macroMeta    = meta;
+    renderNutritionCard();
+    renderNutritionWeek();
+  } catch (err) {
+    console.error('[generateMacroRecommendation]', err);
+    alert(err.message || 'Could not generate macro targets. Make sure this client has InBody baseline data.');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = origText || '⚡ Generate targets from InBody'; }
   }
 }
 
@@ -3538,6 +3659,7 @@ async function saveNutritionLog(source) {
   _nutritionData = { date: dateKey, meals, totals };
   closeNutritionModal();
   renderNutritionCard();
+  renderNutritionMeals();
 
   // Reset manual fields
   ['nlog-meal-name','nlog-cal','nlog-prot','nlog-carbs','nlog-fat'].forEach(id => {
@@ -3566,6 +3688,7 @@ async function deleteMealLog(mealIndex) {
 
   _nutritionData = { date: dateKey, meals, totals };
   renderNutritionCard();
+  renderNutritionMeals();
 }
 
 function openMacroTargetsModal() {
@@ -3595,12 +3718,22 @@ async function saveMacroTargets() {
   if (carbs) targets.carbs    = carbs;
   if (fat)   targets.fat      = fat;
 
-  await firebase.firestore().collection('clients').doc(activeClient.id)
-    .update({ macroTargets: Object.keys(targets).length > 0 ? targets : firebase.firestore.FieldValue.delete() });
+  const hasTargets = Object.keys(targets).length > 0;
+  const meta = hasTargets
+    ? { source: 'manual', generatedAt: Date.now() }
+    : firebase.firestore.FieldValue.delete();
 
-  _macroTargets = Object.keys(targets).length > 0 ? targets : null;
+  await firebase.firestore().collection('clients').doc(activeClient.id)
+    .update({
+      macroTargets: hasTargets ? targets : firebase.firestore.FieldValue.delete(),
+      macroMeta: meta,
+    });
+
+  _macroTargets = hasTargets ? targets : null;
+  _macroMeta    = hasTargets ? { source: 'manual', generatedAt: Date.now() } : null;
   closeMacroTargetsModal();
   renderNutritionCard();
+  renderNutritionWeek();
 }
 
 // ── NAV ────────────────────────────────────────────────
@@ -3611,16 +3744,15 @@ function centerActiveNavTab() {
 }
 
 function showPage(page) {
-  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
-  const tabMap = { workout: 0, progress: 1, log: 2, schedule: 3 };
-  if (tabMap[page] !== undefined) {
-    document.querySelectorAll('.nav-tab')[tabMap[page]]?.classList.add('active');
-  }
+  document.querySelectorAll('.nav-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.page === page);
+  });
   centerActiveNavTab();
   document.getElementById('workout-page').classList.toggle('hidden', page !== 'workout');
   document.getElementById('progress-page').classList.toggle('active', page === 'progress');
   document.getElementById('log-page').classList.toggle('active', page === 'log');
   document.getElementById('schedule-page').classList.toggle('active', page === 'schedule');
+  document.getElementById('nutrition-page').classList.toggle('active', page === 'nutrition');
   if (page === 'progress') {
     ensureChartJS().then(() => {
       checkCheckpointReminder();
@@ -3628,8 +3760,10 @@ function showPage(page) {
       renderProgressPage();
       renderCoachDashboard();
       renderProgressPhotos();
-      loadNutritionData();
     });
+  }
+  if (page === 'nutrition') {
+    loadNutritionData();
   }
   if (page === 'log') {
     renderWorkoutLog();
@@ -6759,10 +6893,11 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   </div>
 
   <div class="nav">
-    <div class="nav-tab active" onclick="showPage('workout')">Workout</div>
-    <div class="nav-tab" onclick="showPage('progress')">Progress</div>
-    <div class="nav-tab" onclick="showPage('log')">Log</div>
-    <div class="nav-tab" id="schedule-nav-tab" style="display:none" onclick="showPage('schedule')">Schedule</div>
+    <div class="nav-tab active" data-page="workout" onclick="showPage('workout')">Workout</div>
+    <div class="nav-tab" data-page="progress" onclick="showPage('progress')">Progress</div>
+    <div class="nav-tab" data-page="nutrition" onclick="showPage('nutrition')">Nutrition</div>
+    <div class="nav-tab" data-page="log" onclick="showPage('log')">Log</div>
+    <div class="nav-tab" id="schedule-nav-tab" data-page="schedule" style="display:none" onclick="showPage('schedule')">Schedule</div>
   </div>
 
   <!-- WORKOUT PAGE -->
@@ -6821,6 +6956,47 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <div id="schedule-content"></div>
   </div>
 
+  <!-- NUTRITION PAGE -->
+  <div id="nutrition-page">
+    <!-- Today's macros hero -->
+    <div class="nutrition-header">
+      <div class="nutrition-title" id="nutrition-date-title">🥗 Today</div>
+      <button class="nlog-add-btn" onclick="openNutritionModal()">+ Log Meal</button>
+    </div>
+
+    <div class="nutrition-card" id="nutrition-card">
+      <div class="nutrition-no-target" id="nutrition-no-target">Loading…</div>
+      <div class="macro-rows hidden" id="nutrition-macros"></div>
+    </div>
+
+    <!-- AI recommendation panel -->
+    <div class="nrec-panel hidden" id="nrec-panel">
+      <div class="nrec-head">
+        <div class="nrec-badge">⚡ AI</div>
+        <div class="nrec-title">Macro targets from InBody</div>
+      </div>
+      <div class="nrec-body" id="nrec-body"></div>
+    </div>
+
+    <!-- Coach controls -->
+    <div class="nutrition-actions hidden" id="nutrition-actions">
+      <button class="nrec-btn" id="nrec-generate-btn" onclick="generateMacroRecommendation()">
+        ⚡ Generate targets from InBody
+      </button>
+      <button class="macro-target-btn" onclick="openMacroTargetsModal()">✏️ Edit manually</button>
+    </div>
+
+    <!-- Meals logged today -->
+    <div class="section-title" style="margin-top:24px">Meals Today</div>
+    <div class="nutrition-meals" id="nutrition-meals">
+      <div class="nutrition-empty" id="nutrition-meals-empty">No meals logged yet today.</div>
+    </div>
+
+    <!-- 7-day history -->
+    <div class="section-title" style="margin-top:24px">Last 7 Days</div>
+    <div id="nutrition-week"><div class="nutrition-empty">Loading…</div></div>
+  </div>
+
   <!-- PROGRESS PAGE -->
   <div class="progress-page" id="progress-page">
     <!-- COACH DASHBOARD (Step 5) -->
@@ -6862,20 +7038,6 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     </div>
     <div class="section-title">Weekly Log</div>
     <div id="weekly-log"></div>
-
-    <!-- ── NUTRITION TRACKING ── -->
-    <div class="nutrition-section" id="nutrition-section">
-      <div class="nutrition-header">
-        <div class="nutrition-title">🥗 Nutrition — Today</div>
-        <button class="nlog-add-btn" onclick="openNutritionModal()">+ Log Meal</button>
-      </div>
-      <div class="nutrition-card" id="nutrition-card">
-        <div class="nutrition-no-target" id="nutrition-no-target">Set macro targets to start tracking</div>
-        <div class="macro-rows hidden" id="nutrition-macros"></div>
-        <div class="nutrition-meals hidden" id="nutrition-meals"></div>
-        <button class="macro-target-btn hidden" id="macro-target-btn" onclick="openMacroTargetsModal()">⚙️ Set Macro Targets</button>
-      </div>
-    </div>
 
     <div class="section-title">📸 Progress Photos</div>
     <div id="progress-photos-wrap"></div>
@@ -8094,11 +8256,16 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .sch-sum-rn{font-size:14px;font-weight:700;color:#8b6cff;text-align:right;}
 .sch-empty{font-size:12px;color:rgba(188,168,255,.4);text-align:center;padding:8px 0;margin:0;}
 
-/* ── Nutrition Tracking ─────────────────────────────────────────────────── */
+/* ── Nutrition Page ─────────────────────────────────────────────────────── */
+#nutrition-page{display:none;padding:12px 0 48px;--ac:#8b6cff;--ac-lo:#6d45e0;--ac-hi:#bca8ff;}
+#nutrition-page.active{display:block;}
+#nutrition-page.switching{opacity:0;transition:opacity .18s ease;}
+#nutrition-page .section-title{font-size:13px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:rgba(188,168,255,.6);margin-bottom:10px;}
+#nutrition-page .section-title::after{content:'';display:block;height:1px;background:rgba(167,139,250,.16);margin-top:6px;}
+.nutrition-empty{font-size:13px;color:rgba(188,168,255,.4);text-align:center;padding:16px 0;}
 .nutrition-section{margin:0 0 1.5rem;}
-.nutrition-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
-.nutrition-title{font-size:13px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:rgba(188,168,255,.6);}
-.nutrition-title::after{content:'';display:block;height:1px;background:rgba(167,139,250,.16);margin-top:6px;}
+.nutrition-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:12px;}
+.nutrition-title{font-size:15px;font-weight:800;color:#F4F1FB;letter-spacing:.2px;}
 .nlog-add-btn{background:rgba(139,108,255,.15);border:1px solid rgba(139,108,255,.3);color:#bca8ff;font-size:12px;font-weight:700;border-radius:20px;padding:5px 14px;cursor:pointer;letter-spacing:.5px;}
 .nlog-add-btn:active{background:rgba(139,108,255,.25);}
 .nutrition-card{background:rgba(22,14,40,.6);border:1px solid rgba(139,108,255,.14);border-radius:16px;padding:16px;}
@@ -8115,12 +8282,44 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .macro-bar.over{background:#ef5350 !important;}
 .macro-val{font-size:12px;font-weight:700;color:#F4F1FB;text-align:right;white-space:nowrap;}
 .macro-val span{color:rgba(188,168,255,.45);font-weight:500;}
-.nutrition-meals{margin-top:14px;display:flex;flex-direction:column;gap:8px;}
-.nutrition-meal-item{background:rgba(139,108,255,.07);border-radius:10px;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;}
-.nmi-name{font-size:13px;color:#F4F1FB;font-weight:600;}
-.nmi-time{font-size:11px;color:rgba(188,168,255,.45);}
-.nmi-kcal{font-size:13px;font-weight:700;color:#bca8ff;}
-.nmi-delete{background:none;border:none;color:rgba(188,168,255,.35);font-size:16px;cursor:pointer;padding:0 4px;line-height:1;}
+.macro-left{font-size:10px;font-weight:600;color:rgba(188,168,255,.4);margin-top:1px;}
+.macro-left.over{color:#ef5350;}
+.macro-row{grid-template-columns:80px 1fr 78px;}
+.nutrition-meals{display:flex;flex-direction:column;gap:8px;}
+.nutrition-meal-item{background:rgba(22,14,40,.6);border:1px solid rgba(139,108,255,.12);border-radius:12px;padding:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;}
+.nmi-name{font-size:13px;color:#F4F1FB;font-weight:700;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
+.nmi-macros{font-size:11px;color:rgba(188,168,255,.45);}
+.nmi-badge{display:inline-block;background:rgba(139,108,255,.2);color:#bca8ff;font-size:9px;font-weight:800;letter-spacing:.5px;border-radius:4px;padding:1px 5px;vertical-align:middle;}
+.nmi-kcal{font-size:15px;font-weight:800;color:#bca8ff;}
+.nmi-delete{background:none;border:none;color:rgba(188,168,255,.3);font-size:18px;cursor:pointer;padding:0 4px;line-height:1;}
+
+/* AI recommendation panel */
+.nrec-panel{background:linear-gradient(150deg,rgba(109,69,224,.14),rgba(22,14,40,.6));border:1px solid rgba(139,108,255,.22);border-radius:16px;padding:14px 16px;margin-top:12px;}
+.nrec-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
+.nrec-badge{background:linear-gradient(135deg,#6d45e0,#8b6cff);color:#fff;font-size:10px;font-weight:800;letter-spacing:.8px;border-radius:6px;padding:3px 8px;}
+.nrec-title{font-size:12px;font-weight:700;color:rgba(188,168,255,.7);letter-spacing:.3px;}
+.nrec-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;}
+.nrec-stat{background:rgba(139,108,255,.1);border-radius:10px;padding:8px 4px;text-align:center;}
+.nrec-stat-val{font-size:16px;font-weight:800;color:#F4F1FB;}
+.nrec-stat-lbl{font-size:9px;color:rgba(188,168,255,.5);text-transform:uppercase;letter-spacing:.8px;margin-top:1px;}
+.nrec-text{font-size:12.5px;line-height:1.55;color:rgba(231,224,251,.82);margin:0 0 8px;}
+.nrec-adjust{color:rgba(188,168,255,.6);}
+.nrec-date{font-size:10px;color:rgba(188,168,255,.35);margin-top:4px;}
+.nutrition-actions{display:flex;flex-direction:column;gap:8px;margin-top:12px;}
+.nrec-btn{width:100%;background:linear-gradient(135deg,#6d45e0,#8b6cff);border:none;border-radius:13px;padding:14px;color:#fff;font-size:14px;font-weight:800;cursor:pointer;letter-spacing:.3px;}
+.nrec-btn:disabled{opacity:.55;cursor:wait;}
+.nrec-btn:active:not(:disabled){transform:scale(.985);}
+
+/* 7-day history */
+.nweek-row{display:grid;grid-template-columns:56px 1fr 72px 32px;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid rgba(167,139,250,.07);}
+.nweek-row:last-child{border-bottom:none;}
+.nweek-day{font-size:12px;font-weight:700;color:rgba(188,168,255,.65);}
+.nweek-bar-wrap{background:rgba(139,108,255,.12);border-radius:99px;height:6px;overflow:hidden;}
+.nweek-bar{height:100%;border-radius:99px;background:linear-gradient(90deg,#ff7043,#ffb74d);transition:width .4s ease;}
+.nweek-bar.over{background:#ef5350;}
+.nweek-val{font-size:12px;font-weight:700;color:#F4F1FB;text-align:right;white-space:nowrap;}
+.nweek-val span{color:rgba(188,168,255,.4);font-weight:500;font-size:10px;}
+.nweek-meals{font-size:10px;color:rgba(188,168,255,.4);text-align:right;}
 
 /* ── Nutrition Modal ─────────────────────────────────────────────────────── */
 .nlog-overlay{position:fixed;inset:0;z-index:900;background:rgba(8,4,18,.88);display:flex;flex-direction:column;overflow:hidden;transition:opacity .2s;}
