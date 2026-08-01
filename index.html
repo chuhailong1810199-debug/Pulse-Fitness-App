@@ -2535,24 +2535,26 @@ function renderExercises() {
         const vKey = 'v_'+activeClient.id+'_'+activeDay+'_'+pi+'_'+ei;
         vKeys.push(vKey);
         if (ei > 0) html += `<div class="flow-arrow">→</div>`;
+        // Compact card: number + name + big check on one line, set chips side by side.
+        // Max 4 sets across all real programs, so the chips always fit one row.
         html += `<div class="exercise-node${done?' done-node':''}" id="card_${key}">
-          <div class="node-top">
-            <div class="node-num">${String(ei+1).padStart(2,'0')}</div>
-            <div class="node-check${done?' done':''}" onclick="toggleExercise('${key}')">${done?'✓':''}</div>
+          <div class="node-head">
+            <span class="node-num">${String(ei+1).padStart(2,'0')}</span>
+            <div class="node-title" onclick="openModal(${pi},${ei})">
+              <div class="node-name${done?' done':''}">${ex.name}</div>
+              <div class="node-sets">${ex.setsReps}${ex.tempo?' · '+ex.tempo:''}${getStrengthBadge(key)}</div>
+            </div>
+            <div class="node-check${done?' done':''}" onclick="event.stopPropagation();toggleExercise('${key}')">${done?'✓':''}</div>
           </div>
-          <div class="node-name${done?' done':''}" onclick="openModal(${pi},${ei})">${ex.name}</div>
-          <div class="node-sets">${ex.setsReps}${ex.tempo?' · '+ex.tempo:''}</div>
-          ${getStrengthBadge(key)}
           <div class="node-setloads">
             ${Array.from({length: parseSetsCount(ex.setsReps)}, (_,si) => `
-              <div class="set-load-row">
+              <label class="set-load-row">
                 <span class="set-load-label">S${si+1}</span>
                 <input class="set-load-input" type="number" min="0" step="0.5" placeholder="—"
                   value="${getSetLoad(key,si)}" oninput="setSetLoad('${key}',${si},this.value)">
-                <span class="set-load-unit">kg</span>
-              </div>`).join('')}
+              </label>`).join('')}
+            <button class="node-info" onclick="openModal(${pi},${ei})" aria-label="Chi tiết, tempo, video">i</button>
           </div>
-          <button class="node-info" onclick="openModal(${pi},${ei})">i</button>
         </div>`;
       });
       html += `</div>`;
@@ -8219,14 +8221,14 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 #workout-page .phase-strength{background:rgba(139,108,255,.16) !important;color:var(--ac-hi) !important;border:1px solid rgba(139,108,255,.4) !important;}
 #workout-page .phase-count{color:rgba(167,139,250,.45) !important;}
 /* ── Vertical premium exercise cards (view mode) ── */
-#workout-page .exercise-flow{flex-direction:column !important;overflow:visible !important;gap:13px !important;padding:0 !important;margin-bottom:0 !important;}
+#workout-page .exercise-flow{flex-direction:column !important;overflow:visible !important;gap:9px !important;padding:0 !important;margin-bottom:0 !important;}
 #workout-page .flow-arrow{display:none !important;}
 #workout-page .exercise-node{
   width:100% !important;min-height:0 !important;
   background:linear-gradient(165deg,#1C1338,#150D2A) !important;
   border:1px solid rgba(167,139,250,.13) !important;
   border-left:1px solid rgba(167,139,250,.13) !important;
-  border-radius:20px !important;padding:16px !important;gap:0 !important;
+  border-radius:16px !important;padding:13px !important;gap:0 !important;
 }
 #workout-page .phase-flow-strength .exercise-node,
 #workout-page .phase-flow-warmup .exercise-node,
@@ -8236,53 +8238,78 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   background:linear-gradient(165deg,rgba(139,108,255,.17),#150D2A) !important;
   border-color:rgba(139,108,255,.36) !important;
 }
-#workout-page .node-top{gap:10px;margin-bottom:0;}
+/* ── Compact card: index + name + check on one line ── */
+#workout-page .node-head{display:flex;align-items:flex-start;gap:10px;}
 #workout-page .node-num{
-  width:auto !important;min-width:24px;height:24px;border-radius:8px;padding:0 7px;
-  background:rgba(167,139,250,.1) !important;border:1px solid rgba(167,139,250,.18) !important;
-  color:var(--ac-hi) !important;font-size:11px;
+  width:auto !important;min-width:0;height:auto;border-radius:0;padding:0;margin-top:3px;
+  background:none !important;border:none !important;
+  color:rgba(196,184,232,.42) !important;font-size:11px;font-weight:700;
+  font-variant-numeric:tabular-nums;flex-shrink:0;
 }
+#workout-page .node-title{flex:1;min-width:0;cursor:pointer;}
 #workout-page .node-check{
-  width:40px !important;height:40px !important;border-radius:13px !important;
-  border:1px solid rgba(167,139,250,.25) !important;font-size:16px !important;color:rgba(167,139,250,.5);
+  width:44px !important;height:44px !important;border-radius:13px !important;flex-shrink:0;
+  border:1.5px solid rgba(167,139,250,.3) !important;font-size:18px !important;color:rgba(167,139,250,.45);
+  margin-left:0 !important;
 }
 #workout-page .node-check.done{
   background:linear-gradient(135deg,var(--ac-hi),var(--ac)) !important;border-color:var(--ac) !important;
   color:#160E2B !important;box-shadow:0 8px 18px -8px rgba(139,108,255,.7) !important;
 }
 #workout-page .node-name{
-  font-size:16px !important;font-weight:700 !important;color:#F4F1FB !important;
-  text-transform:none !important;letter-spacing:.2px !important;margin-top:12px;
+  font-size:15.5px !important;font-weight:700 !important;color:#F4F1FB !important;
+  text-transform:none !important;letter-spacing:.2px !important;margin-top:0;
   -webkit-line-clamp:unset !important;display:block !important;
 }
 #workout-page .node-name.done{color:rgba(196,184,232,.4) !important;}
-#workout-page .node-sets{font-size:12.5px !important;color:rgba(196,184,232,.62) !important;margin-top:5px;}
-/* per-set kg log rows — the fast-logging core */
-#workout-page .node-setloads{display:flex !important;flex-direction:column;gap:8px;margin-top:14px;}
+#workout-page .node-sets{
+  font-size:12.5px !important;color:rgba(196,184,232,.6) !important;margin-top:3px;
+  display:flex;align-items:center;gap:7px;flex-wrap:wrap;
+}
+/* strength badge now sits inline on the meta line */
+#workout-page .node-sets .str-badge{margin:0 !important;padding:2px 7px !important;font-size:10.5px !important;border-radius:6px !important;}
+/* per-set kg chips — side by side, max 4 sets so they always fit one row */
+#workout-page .node-setloads{
+  display:flex !important;flex-direction:row !important;gap:8px;margin-top:11px;align-items:stretch;
+}
+/* cap chip width so a 1-set exercise doesn't stretch one box across the card */
 #workout-page .set-load-row{
-  display:flex !important;align-items:center;gap:12px;width:auto !important;
-  background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);border-radius:14px;padding:9px 13px;
+  flex:1 1 0;min-width:0;max-width:104px;display:flex !important;flex-direction:column;align-items:center;
+  justify-content:center;gap:1px;width:auto !important;cursor:text;
+  background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:11px;padding:7px 4px;
+  transition:border-color .15s,background .15s;
+}
+#workout-page .set-load-row:focus-within{
+  border-color:rgba(167,139,250,.45);background:rgba(167,139,250,.09);
 }
 #workout-page .set-load-label{
-  font-size:11px !important;font-weight:700;letter-spacing:.5px;color:var(--ac-hi) !important;
-  width:auto !important;min-width:26px;
+  font-size:10px !important;font-weight:700;letter-spacing:.4px;color:var(--ac-hi) !important;
+  width:auto !important;min-width:0;opacity:.75;
 }
 #workout-page .set-load-input{
-  flex:1 !important;width:auto !important;background:transparent !important;border:none !important;
-  color:#F4F1FB !important;font-size:18px !important;font-weight:700 !important;
-  font-family:'Figtree',sans-serif !important;text-align:left !important;
+  width:100% !important;background:transparent !important;border:none !important;
+  color:#F4F1FB !important;font-size:16px !important;font-weight:700 !important;
+  font-family:'Figtree',sans-serif !important;text-align:center !important;
   font-variant-numeric:tabular-nums;outline:none !important;padding:0 !important;
+  -moz-appearance:textfield;
 }
+#workout-page .set-load-input::-webkit-outer-spin-button,
+#workout-page .set-load-input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
 #workout-page .set-load-input:focus{border:none !important;}
-#workout-page .set-load-input::placeholder{color:rgba(167,139,250,.35) !important;}
-#workout-page .set-load-unit{font-size:12px !important;color:rgba(196,184,232,.45) !important;font-weight:600;}
-/* details / tempo / video button (opens exercise modal) */
+#workout-page .set-load-input::placeholder{color:rgba(167,139,250,.3) !important;font-weight:600;}
+/* details / tempo / video — compact icon button at the end of the set row */
 #workout-page .node-info{
-  position:static !important;width:100% !important;height:auto !important;border-radius:12px !important;
-  margin-top:13px;padding:10px !important;font-size:0 !important;display:flex !important;
-  background:rgba(167,139,250,.08) !important;border:1px solid rgba(167,139,250,.16) !important;color:var(--ac-hi) !important;
+  position:static !important;flex:0 0 auto;width:38px !important;height:auto !important;
+  border-radius:11px !important;margin:0 !important;padding:0 !important;
+  font-size:14px !important;font-weight:700 !important;font-style:italic;
+  display:flex !important;align-items:center;justify-content:center;
+  background:rgba(167,139,250,.07) !important;border:1px solid rgba(167,139,250,.16) !important;
+  color:rgba(196,184,232,.6) !important;
 }
-#workout-page .node-info::before{content:'Chi tiết · tempo · video ›';font-size:12.5px;font-weight:600;margin:auto;letter-spacing:.2px;}
+#workout-page .node-info::before{content:none !important;}
+#workout-page .node-info:active{background:rgba(167,139,250,.16) !important;}
+/* push the info button to the far right when chips don't fill the row */
+#workout-page .node-info{margin-left:auto !important;}
 /* ── Finish button ── */
 #workout-page .finish-btn{
   background:linear-gradient(135deg,var(--ac-lo),var(--ac-hi)) !important;border-radius:18px !important;
