@@ -1419,6 +1419,7 @@ async function finishWorkout() {
     }
 
     exerciseState[activeClient.id] = {};
+    scheduleSaveLoadsFB();   // clear the persisted ticks too, else they reappear next open
     _sessionLogged = true;
     updateFinishBtn();
     renderExercises();
@@ -1648,7 +1649,7 @@ async function uploadVideo(vKey, slot, input) {
       // Save URL to Firestore too
       const vidDocRef = doc(db, 'clients', activeClient.id, 'videos', vKey);
       const existing = await getDoc(vidDocRef);
-      const vidData = existing.exists() ? existing.data() : {};
+      const vidData = existing.exists ? existing.data() : {};
       vidData[slot + 'Url'] = url;
       await setDoc(vidDocRef, vidData);
       renderExercises();
@@ -1664,7 +1665,7 @@ async function deleteVideo(vKey, slot) {
   localStorage.removeItem(getVideoUrlKey(vKey, slot));
   const vidDocRef = doc(db, 'clients', activeClient.id, 'videos', vKey);
   const existing = await getDoc(vidDocRef);
-  if (existing.exists()) {
+  if (existing.exists) {
     const d = existing.data();
     delete d[slot + 'Url'];
     await setDoc(vidDocRef, d);
@@ -1691,7 +1692,7 @@ async function loadVideoUrls(vKey) {
   // Fallback: check Firestore
   try {
     const snap = await getDoc(doc(db, 'clients', activeClient.id, 'videos', vKey));
-    if (snap.exists()) {
+    if (snap.exists) {
       const d = snap.data();
       if (d.coachUrl)  localStorage.setItem(getVideoUrlKey(vKey, 'coach'),  d.coachUrl);
       if (d.clientUrl) localStorage.setItem(getVideoUrlKey(vKey, 'client'), d.clientUrl);
@@ -1725,7 +1726,7 @@ async function refreshVideoSlotsFromFirestore(vKeys) {
     // 1. Try Firestore
     try {
       const snap = await getDoc(doc(db, 'clients', activeClient.id, 'videos', vKey));
-      if (snap.exists()) {
+      if (snap.exists) {
         const d = snap.data();
         if (d.coachUrl  && !coachUrl)  coachUrl  = d.coachUrl;
         if (d.clientUrl && !clientUrl) clientUrl = d.clientUrl;
@@ -1744,7 +1745,7 @@ async function refreshVideoSlotsFromFirestore(vKeys) {
       try {
         const vidDocRef = doc(db, 'clients', activeClient.id, 'videos', vKey);
         const existing  = await getDoc(vidDocRef);
-        const vidData   = existing.exists() ? existing.data() : {};
+        const vidData   = existing.exists ? existing.data() : {};
         if (coachUrl  && !coachCached)  vidData.coachUrl  = coachUrl;
         if (clientUrl && !clientCached) vidData.clientUrl = clientUrl;
         await setDoc(vidDocRef, vidData);
@@ -2090,7 +2091,7 @@ async function hydrateExerciseLoadsForActiveDay() {
   // ── Check sessionLoads (real-time kg backup, updated on every input) ──
   try {
     const slSnap = await getDoc(doc(db, 'clients', activeClient.id, 'sessionLoads', activeDay));
-    if (slSnap.exists()) {
+    if (slSnap.exists) {
       const slData = slSnap.data() || {};
       if (slData.exerciseLoads && Object.keys(slData.exerciseLoads).length > 0) {
         exerciseLoads = { ...exerciseLoads, ...slData.exerciseLoads };
@@ -2099,6 +2100,14 @@ async function hydrateExerciseLoadsForActiveDay() {
       if (slData.setLoads && Object.keys(slData.setLoads).length > 0) {
         setLoads = { ...setLoads, ...slData.setLoads };
         saveSetLoadsToLocal();
+      }
+      // Restore ticked exercises so a half-finished session survives a reload
+      // or continues on another device.
+      if (slData.done && Object.keys(slData.done).length > 0) {
+        if (!exerciseState[activeClient.id]) exerciseState[activeClient.id] = {};
+        Object.keys(slData.done).forEach(k => {
+          if (slData.done[k]) exerciseState[activeClient.id][k] = true;
+        });
       }
     } else if (Object.keys(exerciseLoads).length > 0 || Object.keys(setLoads).length > 0) {
       // sessionLoads not in Firestore yet but we have local data → push directly (bypass _loadsHydrated guard)
@@ -2203,15 +2212,27 @@ window.addEventListener('pagehide', () => {
   clearTimeout(_saveLoadsFBTimer);
   saveLoadsFB();
 });
+/** Ticked-off exercises for the active client + day, as a plain map. */
+function _doneMapForActiveDay() {
+  const all = exerciseState[activeClient?.id] || {};
+  const prefix = activeClient.id + '_' + activeDay + '_';
+  const out = {};
+  Object.keys(all).forEach(k => { if (all[k] && k.startsWith(prefix)) out[k] = true; });
+  return out;
+}
+
 async function saveLoadsFB() {
   if (!activeClient || !activeDay || !_loadsHydrated) return;
   try {
-    // Full overwrite (no merge) so deleted/zeroed kg values don't persist as stale data
+    // Full overwrite (no merge) so deleted/zeroed kg values don't persist as stale data.
+    // `done` rides along in the same doc — no extra read/write quota, and the tick
+    // state stays in sync with the kg values it belongs to.
     await setDoc(
       doc(db, 'clients', activeClient.id, 'sessionLoads', activeDay),
       {
         exerciseLoads: Object.keys(exerciseLoads).length > 0 ? exerciseLoads : {},
         setLoads: Object.keys(setLoads).length > 0 ? setLoads : {},
+        done: _doneMapForActiveDay(),
         updatedAt: serverTimestamp()
       }
     );
@@ -2998,6 +3019,7 @@ function toggleExercise(key) {
   if (!exerciseState[activeClient.id]) exerciseState[activeClient.id] = {};
   const wasDone = exerciseState[activeClient.id][key];
   exerciseState[activeClient.id][key] = !wasDone;
+  scheduleSaveLoadsFB();   // persist the tick to Firestore (2s debounce)
 
   if (!wasDone) {
     if (navigator.vibrate) navigator.vibrate(12); // haptic
@@ -3039,6 +3061,7 @@ function markAllDone() {
     });
   });
   if (!window._workoutStartTime) window._workoutStartTime = Date.now();
+  scheduleSaveLoadsFB();   // persist all ticks
   updateProgress();
   setTimeout(() => showCelebration(total), 200);
 }
@@ -5388,7 +5411,7 @@ async function loadClientProfile() {
   if (!activeClient) return;
   try {
     const snap = await getDoc(doc(db, 'clients', activeClient.id, 'profile', 'data'));
-    if (!snap.exists()) return;
+    if (!snap.exists) return;
     const p = snap.data();
     // Client Info
     const sf = (id, v) => { const el = document.getElementById(id); if (el && v !== undefined) el.value = v; };
