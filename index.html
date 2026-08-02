@@ -4595,14 +4595,15 @@ function _schedRenderCalendar(keepScroll = false) {
         </div>
         ${days.map(d => {
           const ds = _schedFmt(d), evts = evtsByDay[ds]||[];
-          return `<div class="sch-dcol${ds===today?' sch-dcol-today':''}">
+          return `<div class="sch-dcol${ds===today?' sch-dcol-today':''}" data-date="${ds}">
             ${slots.map(m => `<div class="sch-slot${m%60===30?' sch-slot-hr':''}" onclick="event.stopPropagation();schedClickSlot('${ds}','${_minToT(m)}')"></div>`).join('')}
             ${evts.map(e => {
               const sm = _tToMin(e.startTime||'09:00'), em = _tToMin(e.endTime||'10:00');
               const tp = (sm - SCH_START*60)/30*SLOT_H;
               const ht = Math.max((em-sm)/30*SLOT_H, 24);
-              return `<div class="sch-evt sch-evt-${schedKindOf(e)}${e.status==='done'?' sch-evt-done':''}" style="top:${tp}px;height:${ht}px" onclick="event.stopPropagation();schedOpenEvt('${e.id}')">
+              return `<div class="sch-evt sch-evt-${schedKindOf(e)}${e.status==='done'?' sch-evt-done':''}" style="top:${tp}px;height:${ht}px" data-id="${e.id}" onpointerdown="schedDragDown(event,'${e.id}')" onclick="event.stopPropagation();schedOpenEvt('${e.id}')">
                 <span class="sch-evt-ttl">${e.title||'Session'}</span>
+                ${schedSessionUnits(e.startTime,e.endTime) > 1 ? `<span class="sch-evt-x">${schedFmtUnits(schedSessionUnits(e.startTime,e.endTime))}×</span>` : ''}
                 ${ht>34?`<span class="sch-evt-sub">${e.startTime||''} – ${e.endTime||''}</span>`:''}
               </div>`;
             }).join('')}
@@ -4624,6 +4625,144 @@ function _schedRenderCalendar(keepScroll = false) {
       scrollEl.scrollTop = (inWk ? Math.max(0, now.getHours()-1) : 7) * 2 * SLOT_H;
     }
   }
+}
+
+// ── DRAG TO RESCHEDULE ─────────────────────────────────
+// Long-press (400ms) picks a session up, then drag to any slot/day and release.
+// The delay matters: without it, the first finger-move would drag the block
+// instead of scrolling the calendar.
+const SCH_SLOT_H   = 30;   // px per 30-min slot — must match _schedRenderCalendar
+const SCH_HOLD_MS  = 400;
+let _dg = null;            // active drag state, null when idle
+
+function schedDragDown(event, id) {
+  if (event.button != null && event.button !== 0) return;   // ignore right-click
+  const el = event.currentTarget;
+  const evt = _schedEvents.find(e => e.id === id);
+  if (!evt) return;
+
+  _dg = {
+    id, el, evt, armed:false, moved:false,
+    startX:event.clientX, startY:event.clientY,
+    pointerId:event.pointerId,
+    durMin: Math.max(30, _tToMin(evt.endTime||'10:00') - _tToMin(evt.startTime||'09:00')),
+    timer: setTimeout(() => schedDragArm(), SCH_HOLD_MS)
+  };
+
+  window.addEventListener('pointermove', schedDragMove, { passive:false });
+  window.addEventListener('pointerup', schedDragUp);
+  window.addEventListener('pointercancel', schedDragCancel);
+}
+
+function schedDragArm() {
+  if (!_dg) return;
+  _dg.armed = true;
+  _dg.el.classList.add('sch-evt-dragging');
+  try { _dg.el.setPointerCapture(_dg.pointerId); } catch(_e) {}
+  if (navigator.vibrate) navigator.vibrate(15);   // haptic: "picked up"
+  const ghost = document.createElement('div');
+  ghost.className = 'sch-drop-ghost';
+  ghost.id = 'sch-drop-ghost';
+  ghost.style.display = 'none';
+  document.body.appendChild(ghost);   // re-parented into the hovered column on move
+}
+
+function schedDragMove(event) {
+  if (!_dg) return;
+  const dx = Math.abs(event.clientX - _dg.startX);
+  const dy = Math.abs(event.clientY - _dg.startY);
+
+  if (!_dg.armed) {
+    // Moved before the hold completed → user is scrolling, not dragging
+    if (dx > 8 || dy > 8) { clearTimeout(_dg.timer); schedDragTeardown(); }
+    return;
+  }
+
+  event.preventDefault();          // stop the calendar scrolling mid-drag
+  if (dx > 3 || dy > 3) _dg.moved = true;
+
+  const t = schedDropTarget(event.clientX, event.clientY);
+  const ghost = document.getElementById('sch-drop-ghost');
+  if (!ghost) return;
+  if (!t) { ghost.style.display = 'none'; _dg.target = null; return; }
+  _dg.target = t;
+  // Live inside the hovered column — it is position:relative, so top/left
+  // need no scroll maths and the ghost scrolls with the grid.
+  if (ghost.parentElement !== t.col) t.col.appendChild(ghost);
+  ghost.style.display = 'block';
+  ghost.style.left    = '1px';
+  ghost.style.right   = '1px';
+  ghost.style.top     = t.topPx + 'px';
+  ghost.style.height  = (_dg.durMin / 30) * SCH_SLOT_H + 'px';
+  ghost.textContent   = _minToT(t.startMin);
+}
+
+/** Which day column + 30-min slot is under this point? */
+function schedDropTarget(x, y) {
+  const col = document.elementsFromPoint(x, y).find(n => n.classList && n.classList.contains('sch-dcol'));
+  if (!col || !col.dataset.date) return null;
+
+  const rect = col.getBoundingClientRect();
+  const rawMin = SCH_START * 60 + ((y - rect.top) / SCH_SLOT_H) * 30;
+  const snapped = Math.round(rawMin / 30) * 30;                       // snap to :00 / :30
+  const maxStart = SCH_END * 60 - 30;
+  const startMin = Math.min(Math.max(snapped, SCH_START * 60), maxStart);
+
+  return { date: col.dataset.date, startMin, col,
+           topPx: (startMin - SCH_START * 60) / 30 * SCH_SLOT_H };
+}
+
+async function schedDragUp() {
+  if (!_dg) return;
+  const d = _dg;
+  clearTimeout(d.timer);
+
+  if (!d.armed || !d.moved || !d.target) { schedDragTeardown(); return; }
+
+  const t = d.target;
+  const newStart = _minToT(t.startMin);
+  const newEnd   = _minToT(Math.min(t.startMin + d.durMin, SCH_END * 60));
+  const unchanged = t.date === d.evt.date && newStart === d.evt.startTime;
+  schedDragTeardown();
+  if (unchanged) return;
+
+  const prev = { date:d.evt.date, startTime:d.evt.startTime, endTime:d.evt.endTime };
+  d.evt.date = t.date; d.evt.startTime = newStart; d.evt.endTime = newEnd;
+
+  // If dropped outside the visible week the block simply disappears from view —
+  // that can't happen here since drop targets are always columns of this week.
+  _schedRenderCalendar(true);
+
+  try {
+    await updateDoc(doc(db,'bookings',d.id), {
+      date:t.date, startTime:newStart, endTime:newEnd, updatedAt:serverTimestamp()
+    });
+  } catch(err) {
+    console.error('[schedule] reschedule failed', err);
+    Object.assign(d.evt, prev);
+    _schedRenderCalendar(true);
+    alert('Không dời được buổi này. Thử lại nhé.');
+  }
+}
+
+function schedDragCancel() { schedDragTeardown(); }
+
+function schedDragTeardown() {
+  window.removeEventListener('pointermove', schedDragMove);
+  window.removeEventListener('pointerup', schedDragUp);
+  window.removeEventListener('pointercancel', schedDragCancel);
+  if (_dg) {
+    clearTimeout(_dg.timer);
+    _dg.el?.classList.remove('sch-evt-dragging');
+    try { _dg.el?.releasePointerCapture(_dg.pointerId); } catch(_e) {}
+    // Swallow the click that follows a real drag so the detail modal doesn't open
+    if (_dg.armed && _dg.moved) {
+      window.addEventListener('click', e => { e.stopPropagation(); e.preventDefault(); },
+        { capture:true, once:true });
+    }
+  }
+  document.getElementById('sch-drop-ghost')?.remove();
+  _dg = null;
 }
 
 function schedClickSlot(date, startTime) {
@@ -4761,47 +4900,69 @@ async function _schedLoadSummary() {
     where('date','>=',`${y}-${ms}-01`),
     where('date','<=',`${y}-${ms}-31`)
   ));
-  const byTitle={}; let total=0, company=0, freelance=0;
+  const byTitle={}; let total=0, company=0, freelance=0, bookings=0;
   snap.forEach(d => {
     const data = d.data();
     if (data.status === 'done') {
       const t = data.title || 'Session';
       const k = data.kind === 'freelance' ? 'freelance' : 'company';
-      if (!byTitle[t]) byTitle[t] = { n:0, kind:k };
-      byTitle[t].n++;
+      // 1 hour = 1 session. A 2-hour booking counts as 2, 90 min as 1.5.
+      const units = schedSessionUnits(data.startTime, data.endTime);
+      if (!byTitle[t]) byTitle[t] = { n:0, kind:k, bookings:0 };
+      byTitle[t].n += units;
+      byTitle[t].bookings++;
       byTitle[t].kind = k; // latest wins if a name was used for both
-      if (k === 'freelance') freelance++; else company++;
-      total++;
+      if (k === 'freelance') freelance += units; else company += units;
+      total += units;
+      bookings++;
     }
   });
-  return {byTitle, total, company, freelance};
+  return {byTitle, total, company, freelance, bookings};
+}
+
+/** Booking length in "sessions", where one session = 60 minutes. */
+function schedSessionUnits(startTime, endTime) {
+  const mins = _tToMin(endTime || '') - _tToMin(startTime || '');
+  if (!Number.isFinite(mins) || mins <= 0) return 1;   // malformed → count as one
+  return Math.round((mins / 60) * 10) / 10;
+}
+
+/** 1 → "1", 1.5 → "1.5" (no trailing .0) */
+function schedFmtUnits(n) {
+  const r = Math.round((n || 0) * 10) / 10;
+  return Number.isInteger(r) ? String(r) : r.toFixed(1);
 }
 
 function _schedRenderSummary(res) {
   const wrap = document.getElementById('sch-summary-body');
   if (!wrap) return;
-  const { byTitle, total, company, freelance } = res || {};
+  const { byTitle, total, company, freelance, bookings } = res || {};
   if (!total) {
     wrap.innerHTML = '<p class="sch-empty">No sessions marked done this month</p>';
     return;
   }
   const entries = Object.entries(byTitle).sort((a,b) => b[1].n - a[1].n);
   const maxN    = entries[0][1].n;
+  // Only worth explaining the difference when some booking wasn't exactly 1 hour
+  const note = (bookings && Math.abs(total - bookings) > 0.05)
+    ? `<div class="sch-sum-note">${bookings} buổi đã đặt · quy đổi ${schedFmtUnits(total)} session (1 tiếng = 1 session)</div>`
+    : '';
   wrap.innerHTML = `
     <div class="sch-sum-split">
       <div class="sch-sum-box sch-sum-co">
-        <div class="sch-sum-box-num">${company}</div>
+        <div class="sch-sum-box-num">${schedFmtUnits(company)}</div>
         <div class="sch-sum-box-lbl">Công ty</div>
       </div>
       <div class="sch-sum-box sch-sum-fr">
-        <div class="sch-sum-box-num">${freelance}</div>
+        <div class="sch-sum-box-num">${schedFmtUnits(freelance)}</div>
         <div class="sch-sum-box-lbl">Freelance</div>
       </div>
       <div class="sch-sum-box sch-sum-all">
-        <div class="sch-sum-box-num">${total}</div>
+        <div class="sch-sum-box-num">${schedFmtUnits(total)}</div>
         <div class="sch-sum-box-lbl">Tổng</div>
       </div>
     </div>
+    ${note}
     <div class="sch-sum-rows">
       ${entries.map(([t,v]) => `
         <div class="sch-sum-row">
@@ -4809,7 +4970,7 @@ function _schedRenderSummary(res) {
           <div class="sch-sum-bar-wrap">
             <div class="sch-sum-bar sch-sum-bar-${v.kind}" style="width:${Math.round(v.n/maxN*100)}%"></div>
           </div>
-          <span class="sch-sum-rn">${v.n}</span>
+          <span class="sch-sum-rn">${schedFmtUnits(v.n)}</span>
         </div>`).join('')}
     </div>`;
 }
@@ -8588,6 +8749,21 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   transition:opacity .1s;
 }
 .sch-evt:active{opacity:.7;}
+/* drag to reschedule */
+.sch-evt{touch-action:pan-y;}
+.sch-evt-dragging{
+  opacity:.5;transform:scale(1.04);z-index:20 !important;
+  box-shadow:0 10px 26px -8px rgba(0,0,0,.8);touch-action:none;
+}
+.sch-drop-ghost{
+  position:absolute;z-index:15;pointer-events:none;
+  border:2px dashed rgba(139,108,255,.85);border-radius:6px;
+  background:rgba(139,108,255,.18);
+  font-size:10px;font-weight:800;color:#dcd2ff;
+  align-items:flex-start;justify-content:center;padding-top:2px;
+  font-variant-numeric:tabular-nums;
+}
+.sch-drop-ghost[style*="display: block"]{display:flex !important;}
 /* session type — purple = company (default), green = freelance */
 .sch-evt-freelance{background:linear-gradient(145deg,#1f8a5b,#15694a) !important;}
 .sch-evt-done{background:linear-gradient(145deg,rgba(109,40,217,.45),rgba(91,33,182,.35));opacity:.55;}
@@ -8614,6 +8790,12 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .sch-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:middle;flex-shrink:0;}
 .sch-dot-company{background:#8b6cff;}
 .sch-dot-freelance{background:#2db478;}
+.sch-sum-note{font-size:11px;color:rgba(255,255,255,.42);text-align:center;margin:-6px 0 12px;line-height:1.5;}
+.sch-evt-x{
+  position:absolute;top:3px;right:4px;font-size:9px;font-weight:800;
+  background:rgba(0,0,0,.35);border-radius:4px;padding:1px 4px;color:#fff;
+  font-variant-numeric:tabular-nums;
+}
 .sch-sum-bar-freelance{background:linear-gradient(90deg,#1f8a5b,#6ee7a8) !important;}
 .sch-evt-ttl{font-size:12px;font-weight:700;color:#fff;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;}
 .sch-evt-sub{font-size:10px;color:rgba(255,255,255,.75);white-space:nowrap;overflow:hidden;}
