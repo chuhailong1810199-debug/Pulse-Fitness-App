@@ -4601,7 +4601,7 @@ function _schedRenderCalendar(keepScroll = false) {
               const sm = _tToMin(e.startTime||'09:00'), em = _tToMin(e.endTime||'10:00');
               const tp = (sm - SCH_START*60)/30*SLOT_H;
               const ht = Math.max((em-sm)/30*SLOT_H, 24);
-              return `<div class="sch-evt${e.status==='done'?' sch-evt-done':''}" style="top:${tp}px;height:${ht}px" onclick="event.stopPropagation();schedOpenEvt('${e.id}')">
+              return `<div class="sch-evt sch-evt-${schedKindOf(e)}${e.status==='done'?' sch-evt-done':''}" style="top:${tp}px;height:${ht}px" onclick="event.stopPropagation();schedOpenEvt('${e.id}')">
                 <span class="sch-evt-ttl">${e.title||'Session'}</span>
                 ${ht>34?`<span class="sch-evt-sub">${e.startTime||''} – ${e.endTime||''}</span>`:''}
               </div>`;
@@ -4642,6 +4642,10 @@ function schedOpenAddModal(date, startMin, endMin) {
     <div class="sch-modal-ttl">Add Session</div>
     <div class="sch-modal-sub">${dateLbl}</div>
     <input class="sch-modal-inp" id="sch-m-title" placeholder="Client name or note..." autocomplete="off">
+    <div class="sch-kind-pick" id="sch-m-kind" data-kind="company">
+      <button type="button" class="sch-kind-btn sch-kind-co on" onclick="schedPickKind('company')">Công ty</button>
+      <button type="button" class="sch-kind-btn sch-kind-fr" onclick="schedPickKind('freelance')">Freelance</button>
+    </div>
     <div class="sch-modal-row">
       <div class="sch-modal-fld"><label class="sch-modal-lbl">Start</label><input type="time" class="sch-modal-time" id="sch-m-start" value="${_minToT(startMin)}"></div>
       <div class="sch-modal-fld"><label class="sch-modal-lbl">End</label><input type="time" class="sch-modal-time" id="sch-m-end" value="${_minToT(endMin)}"></div>
@@ -4658,18 +4662,31 @@ function schedOpenAddModal(date, startMin, endMin) {
 
 function schedCloseModal() { const m = document.getElementById('sch-modal'); if (m) m.remove(); }
 
+// Session type: 'company' (purple, default) or 'freelance' (green).
+// Bookings saved before this feature have no `kind` — treated as company.
+function schedKindOf(evt) { return (evt && evt.kind === 'freelance') ? 'freelance' : 'company'; }
+
+function schedPickKind(kind) {
+  const box = document.getElementById('sch-m-kind');
+  if (!box) return;
+  box.dataset.kind = kind;
+  box.querySelectorAll('.sch-kind-btn').forEach(b => b.classList.remove('on'));
+  box.querySelector(kind === 'freelance' ? '.sch-kind-fr' : '.sch-kind-co')?.classList.add('on');
+}
+
 async function schedSaveNew(date) {
   const title = document.getElementById('sch-m-title')?.value.trim();
   const start = document.getElementById('sch-m-start')?.value || '09:00';
   const end   = document.getElementById('sch-m-end')?.value   || '10:00';
+  const kind  = document.getElementById('sch-m-kind')?.dataset.kind || 'company';
   if (!title) { document.getElementById('sch-m-title')?.focus(); return; }
   const id  = `bk_${Date.now()}`;
-  const evt = { id, date, startTime:start, endTime:end, title, status:'booked' };
+  const evt = { id, date, startTime:start, endTime:end, title, status:'booked', kind };
   _schedEvents.push(evt);
   schedCloseModal();
   _schedRenderCalendar(true);
   try {
-    await setDoc(doc(db,'bookings',id), { date, startTime:start, endTime:end, title, status:'booked', updatedAt:serverTimestamp() });
+    await setDoc(doc(db,'bookings',id), { date, startTime:start, endTime:end, title, status:'booked', kind, updatedAt:serverTimestamp() });
   } catch(err) {
     console.error('[schedule] save failed', err);
     _schedEvents = _schedEvents.filter(e => e.id !== id);
@@ -4689,7 +4706,11 @@ function schedOpenEvt(id) {
     <button class="sch-modal-x" onclick="schedCloseModal()">✕</button>
     <div class="sch-modal-ttl">${evt.title||'Session'}</div>
     <div class="sch-modal-sub">${evt.date} · ${evt.startTime||''} – ${evt.endTime||''}</div>
-    <div class="sch-modal-acts" style="margin-top:20px">
+    <div class="sch-kind-pick" style="margin-top:16px">
+      <button type="button" class="sch-kind-btn sch-kind-co${schedKindOf(evt)==='company'?' on':''}" onclick="schedSetKind('${id}','company')">Công ty</button>
+      <button type="button" class="sch-kind-btn sch-kind-fr${schedKindOf(evt)==='freelance'?' on':''}" onclick="schedSetKind('${id}','freelance')">Freelance</button>
+    </div>
+    <div class="sch-modal-acts" style="margin-top:16px">
       <button class="sch-modal-btn-c" onclick="schedDeleteEvt('${id}')">🗑 Delete</button>
       <button class="sch-modal-btn-s" onclick="schedToggleDone('${id}')">${isDone?'↩ Undo':'✓ Done'}</button>
     </div>
@@ -4698,12 +4719,28 @@ function schedOpenEvt(id) {
   document.body.appendChild(el);
 }
 
+async function schedSetKind(id, kind) {
+  const evt = _schedEvents.find(e => e.id === id);
+  if (!evt) return;
+  const prev = evt.kind;
+  evt.kind = kind;
+  schedCloseModal();
+  _schedRenderCalendar(true);
+  _schedLoadSummary().then(r => _schedRenderSummary(r)).catch(()=>{});
+  try { await updateDoc(doc(db,'bookings',id), { kind, updatedAt:serverTimestamp() }); }
+  catch(err) {
+    console.error('[schedule] kind update failed', err);
+    evt.kind = prev; _schedRenderCalendar(true);
+    alert('Không lưu được. Thử lại nhé.');
+  }
+}
+
 async function schedToggleDone(id) {
   const evt = _schedEvents.find(e => e.id === id);
   if (!evt) return;
   const ns = evt.status === 'done' ? 'booked' : 'done';
   evt.status = ns; schedCloseModal(); _schedRenderCalendar(true);
-  _schedLoadSummary().then(({byTitle,total}) => _schedRenderSummary(byTitle,total)).catch(()=>{});
+  _schedLoadSummary().then(r => _schedRenderSummary(r)).catch(()=>{});
   try { await updateDoc(doc(db,'bookings',id), {status:ns, updatedAt:serverTimestamp()}); }
   catch(err) { evt.status = ns === 'done' ? 'booked' : 'done'; _schedRenderCalendar(true); }
 }
@@ -4711,7 +4748,7 @@ async function schedToggleDone(id) {
 async function schedDeleteEvt(id) {
   _schedEvents = _schedEvents.filter(e => e.id !== id);
   schedCloseModal(); _schedRenderCalendar(true);
-  _schedLoadSummary().then(({byTitle,total}) => _schedRenderSummary(byTitle,total)).catch(()=>{});
+  _schedLoadSummary().then(r => _schedRenderSummary(r)).catch(()=>{});
   try { await deleteDoc(doc(db,'bookings',id)); } catch(err) { console.error('[schedule] delete failed', err); }
 }
 
@@ -4724,43 +4761,57 @@ async function _schedLoadSummary() {
     where('date','>=',`${y}-${ms}-01`),
     where('date','<=',`${y}-${ms}-31`)
   ));
-  const byTitle={}; let total=0;
+  const byTitle={}; let total=0, company=0, freelance=0;
   snap.forEach(d => {
     const data = d.data();
     if (data.status === 'done') {
       const t = data.title || 'Session';
-      byTitle[t] = (byTitle[t]||0)+1;
+      const k = data.kind === 'freelance' ? 'freelance' : 'company';
+      if (!byTitle[t]) byTitle[t] = { n:0, kind:k };
+      byTitle[t].n++;
+      byTitle[t].kind = k; // latest wins if a name was used for both
+      if (k === 'freelance') freelance++; else company++;
       total++;
     }
   });
-  return {byTitle, total};
+  return {byTitle, total, company, freelance};
 }
 
-function _schedRenderSummary(byTitle, total) {
+function _schedRenderSummary(res) {
   const wrap = document.getElementById('sch-summary-body');
   if (!wrap) return;
-  if (total === 0) {
+  const { byTitle, total, company, freelance } = res || {};
+  if (!total) {
     wrap.innerHTML = '<p class="sch-empty">No sessions marked done this month</p>';
     return;
   }
-  const entries = Object.entries(byTitle).sort((a,b) => b[1]-a[1]);
-  const maxN    = entries[0][1];
-  let html = `
-    <div class="sch-sum-hero">
-      <div class="sch-sum-hero-num">${total}</div>
-      <div class="sch-sum-hero-lbl">sessions this month</div>
+  const entries = Object.entries(byTitle).sort((a,b) => b[1].n - a[1].n);
+  const maxN    = entries[0][1].n;
+  wrap.innerHTML = `
+    <div class="sch-sum-split">
+      <div class="sch-sum-box sch-sum-co">
+        <div class="sch-sum-box-num">${company}</div>
+        <div class="sch-sum-box-lbl">Công ty</div>
+      </div>
+      <div class="sch-sum-box sch-sum-fr">
+        <div class="sch-sum-box-num">${freelance}</div>
+        <div class="sch-sum-box-lbl">Freelance</div>
+      </div>
+      <div class="sch-sum-box sch-sum-all">
+        <div class="sch-sum-box-num">${total}</div>
+        <div class="sch-sum-box-lbl">Tổng</div>
+      </div>
     </div>
     <div class="sch-sum-rows">
-      ${entries.map(([t,n]) => `
+      ${entries.map(([t,v]) => `
         <div class="sch-sum-row">
-          <span class="sch-sum-rname">${t}</span>
+          <span class="sch-sum-rname"><i class="sch-dot sch-dot-${v.kind}"></i>${t}</span>
           <div class="sch-sum-bar-wrap">
-            <div class="sch-sum-bar" style="width:${Math.round(n/maxN*100)}%"></div>
+            <div class="sch-sum-bar sch-sum-bar-${v.kind}" style="width:${Math.round(v.n/maxN*100)}%"></div>
           </div>
-          <span class="sch-sum-rn">${n}</span>
+          <span class="sch-sum-rn">${v.n}</span>
         </div>`).join('')}
     </div>`;
-  wrap.innerHTML = html;
 }
 
 async function renderSchedulePage() {
@@ -4784,7 +4835,7 @@ async function renderSchedulePage() {
   try { _schedEvents = await _schedLoadWeek(_schedWeekStart); } catch(e) { _schedEvents = []; }
   _schedRenderCalendar();
   _schedLoadSummary()
-    .then(({byTitle,total}) => _schedRenderSummary(byTitle,total))
+    .then(r => _schedRenderSummary(r))
     .catch(() => { const w=document.getElementById('sch-summary-body'); if(w) w.innerHTML='<p class="sch-empty">Failed to load data</p>'; });
 }
 
@@ -8537,7 +8588,33 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   transition:opacity .1s;
 }
 .sch-evt:active{opacity:.7;}
+/* session type — purple = company (default), green = freelance */
+.sch-evt-freelance{background:linear-gradient(145deg,#1f8a5b,#15694a) !important;}
 .sch-evt-done{background:linear-gradient(145deg,rgba(109,40,217,.45),rgba(91,33,182,.35));opacity:.55;}
+.sch-evt-freelance.sch-evt-done{background:linear-gradient(145deg,rgba(31,138,91,.45),rgba(21,105,74,.35)) !important;}
+/* type picker (add + edit modals) */
+.sch-kind-pick{display:flex;gap:8px;margin-top:12px;}
+.sch-kind-btn{
+  flex:1;padding:10px;border-radius:11px;font-size:12.5px;font-weight:700;cursor:pointer;
+  background:transparent;border:1px solid rgba(255,255,255,.14);color:rgba(255,255,255,.5);
+  font-family:'Figtree',sans-serif;transition:all .15s;
+}
+.sch-kind-btn.on.sch-kind-co{background:rgba(139,108,255,.18);border-color:rgba(139,108,255,.55);color:#bca8ff;}
+.sch-kind-btn.on.sch-kind-fr{background:rgba(31,138,91,.2);border-color:rgba(45,180,120,.6);color:#6ee7a8;}
+/* monthly split */
+.sch-sum-split{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-bottom:16px;}
+.sch-sum-box{border-radius:13px;padding:12px 8px;text-align:center;border:1px solid rgba(255,255,255,.08);}
+.sch-sum-co{background:rgba(139,108,255,.12);border-color:rgba(139,108,255,.28);}
+.sch-sum-fr{background:rgba(31,138,91,.13);border-color:rgba(45,180,120,.3);}
+.sch-sum-all{background:rgba(255,255,255,.05);}
+.sch-sum-box-num{font-size:26px;font-weight:800;line-height:1;color:#fff;font-variant-numeric:tabular-nums;}
+.sch-sum-co .sch-sum-box-num{color:#bca8ff;}
+.sch-sum-fr .sch-sum-box-num{color:#6ee7a8;}
+.sch-sum-box-lbl{font-size:10.5px;font-weight:600;letter-spacing:.6px;color:rgba(255,255,255,.5);margin-top:5px;}
+.sch-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:middle;flex-shrink:0;}
+.sch-dot-company{background:#8b6cff;}
+.sch-dot-freelance{background:#2db478;}
+.sch-sum-bar-freelance{background:linear-gradient(90deg,#1f8a5b,#6ee7a8) !important;}
 .sch-evt-ttl{font-size:12px;font-weight:700;color:#fff;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;}
 .sch-evt-sub{font-size:10px;color:rgba(255,255,255,.75);white-space:nowrap;overflow:hidden;}
 
