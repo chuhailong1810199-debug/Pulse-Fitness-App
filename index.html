@@ -1419,7 +1419,10 @@ async function finishWorkout() {
     }
 
     exerciseState[activeClient.id] = {};
-    scheduleSaveLoadsFB();   // clear the persisted ticks too, else they reappear next open
+    // Clear persisted ticks immediately, not on the 2s debounce — people close the
+    // app right after finishing, and stale ticks would reappear next time.
+    clearTimeout(_saveLoadsFBTimer);
+    saveLoadsFB();
     _sessionLogged = true;
     updateFinishBtn();
     renderExercises();
