@@ -1680,13 +1680,29 @@ exports.analyzeMealPhoto = onCall(
     memory: "256MiB",
   },
   async (request) => {
-    const { imageBase64, mimeType } = request.data || {};
+    const { imageBase64, mimeType, userHint } = request.data || {};
 
     if (!imageBase64) {
       throw new HttpsError("invalid-argument", "imageBase64 is required");
     }
 
-    const prompt = `You are a nutrition expert. Analyze this meal photo and estimate its nutritional content.
+    // The person who ate the meal knows what it was — their correction beats
+    // anything the model can infer from a flat photo (hidden oil, broth, portion).
+    const hint = (userHint || "").trim().slice(0, 600);
+    const hintBlock = hint ? `
+
+THE PERSON WHO ATE THIS MEAL HAS DESCRIBED IT — TREAT THIS AS GROUND TRUTH:
+"${hint}"
+
+How to use it:
+- If they name a dish, use that dish even when the photo suggests otherwise. They were there; you were not.
+- If they give quantities, weights or counts, use those numbers exactly instead of estimating from the image.
+- If they mention cooking method or ingredients you cannot see (oil, butter, broth, sugar, sauce), add those calories — invisible fats and sugars are the single biggest source of error in photo estimates.
+- If they mention something not visible in the photo, still include it.
+- If their description conflicts with the image, follow the description.
+- Set "confidence" to "high" when their description covers the whole meal.` : "";
+
+    const prompt = `You are a nutrition expert. Analyze this meal photo and estimate its nutritional content.${hintBlock}
 
 Rules:
 - Identify every visible food and drink item; list each distinct dish as a separate entry in "foods"

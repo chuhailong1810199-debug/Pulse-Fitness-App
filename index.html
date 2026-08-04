@@ -3469,6 +3469,8 @@ let _nutritionData = null;   // today's log
 let _macroTargets  = null;   // from client doc
 let _macroMeta     = null;   // AI reasoning / BMR / TDEE behind the targets
 let _aiMealResult  = null;   // last Gemini result
+let _lastMealPhoto = null;   // base64 of the photo being reviewed (memory only)
+let _lastMealHint  = '';     // the client's correction, saved with the meal
 
 function _nutritionDateKey() {
   const d = new Date();
@@ -3821,6 +3823,10 @@ function openNutritionModal() {
 function closeNutritionModal() {
   document.getElementById('nlog-overlay').classList.add('hidden');
   _aiMealResult = null;
+  _lastMealPhoto = null;   // free the base64 — it is never persisted
+  _lastMealHint  = '';
+  const hintBox = document.getElementById('nlog-hint');
+  if (hintBox) hintBox.value = '';
   // reset photo input
   const inp = document.getElementById('nlog-photo-input');
   if (inp) inp.value = '';
@@ -3865,6 +3871,10 @@ async function handleMealPhoto(input) {
       reader.readAsDataURL(file);
     });
 
+    // Held in memory only, for "tính lại" — never uploaded to Storage, and
+    // dropped when the modal closes.
+    _lastMealPhoto = base64;
+
     const fn = firebase.app().functions('asia-southeast1').httpsCallable('analyzeMealPhoto');
     const result = await fn({ imageBase64: base64, mimeType: 'image/jpeg' });
     _aiMealResult = result.data;
@@ -3879,7 +3889,31 @@ async function handleMealPhoto(input) {
   }
 }
 
-function renderAiResults(data) {
+/** Re-run the estimate with the client's own description as ground truth. */
+async function reanalyseMeal() {
+  const box = document.getElementById('nlog-hint');
+  const btn = document.getElementById('nlog-fix-btn');
+  const hint = (box?.value || '').trim();
+  if (!hint) { box?.focus(); return; }
+  if (!_lastMealPhoto) { alert('Ảnh không còn — chụp lại giúp mình nhé.'); return; }
+
+  const label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Đang tính lại…'; }
+  try {
+    const fn = firebase.app().functions('asia-southeast1').httpsCallable('analyzeMealPhoto');
+    const res = await fn({ imageBase64: _lastMealPhoto, mimeType: 'image/jpeg', userHint: hint });
+    _aiMealResult = res.data;
+    _lastMealHint = hint;
+    renderAiResults(_aiMealResult, hint);
+  } catch (err) {
+    console.error('[reanalyseMeal]', err);
+    alert(err.message || 'Không tính lại được. Thử lại nhé.');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = label || 'Tính lại'; }
+  }
+}
+
+function renderAiResults(data, hint) {
   const foodsList = document.getElementById('nlog-foods-list');
   const totalRow  = document.getElementById('nlog-total-row');
   const confEl    = document.getElementById('nlog-confidence');
@@ -3907,7 +3941,7 @@ function renderAiResults(data) {
       <div class="nlog-total-chip"><div class="nlog-total-chip-val">${tot.fat || 0}g</div><div class="nlog-total-chip-lbl">fat</div></div>`;
   }
 
-  const confMap = { low: '⚠️ Low confidence', medium: '🟡 Medium confidence', high: '✅ High confidence' };
+  const confMap = { low: 'Low confidence', medium: 'Medium confidence', high: 'High confidence' };
   if (confEl) confEl.textContent = confMap[data.confidence] || '';
   if (noteEl) noteEl.textContent = data.note || '';
 }
@@ -3938,6 +3972,7 @@ async function saveNutritionLog(source) {
       })),
       confidence: _aiMealResult.confidence || null,
       aiNote: _aiMealResult.note || null,
+      userHint: _lastMealHint || null,   // the client's own correction, if any
       source: 'ai',
       timestamp: Date.now(),
     };
@@ -7619,6 +7654,15 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
         <div class="nlog-section-label">Total</div>
         <div class="nlog-total-row" id="nlog-total-row"></div>
         <div class="nlog-note" id="nlog-note"></div>
+
+        <div class="nlog-fix">
+          <div class="nlog-fix-head">Pulse nhận sai món?</div>
+          <div class="nlog-fix-sub">Ghi rõ món gì, bao nhiêu, có nhiều dầu mỡ hay nước dùng không.</div>
+          <textarea class="nlog-fix-input" id="nlog-hint" rows="3"
+            placeholder="VD: Miến vịt, khoảng 1 tô lớn, có 5 miếng thịt vịt và nhiều mỡ hành"></textarea>
+          <button class="nlog-fix-btn" id="nlog-fix-btn" onclick="reanalyseMeal()">Tính lại</button>
+        </div>
+
         <button class="nlog-save-btn" onclick="saveNutritionLog('ai')">Save to Log</button>
       </div>
 
@@ -8952,6 +8996,26 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .nmi-item-name span{color:rgba(188,168,255,.4);font-size:10.5px;}
 .nmi-item-macros{font-size:10.5px;color:rgba(188,168,255,.5);white-space:nowrap;flex-shrink:0;}
 .nmi-conf{font-size:10px;color:rgba(188,168,255,.38);font-style:italic;margin-top:7px;}
+
+/* correction box in the review step */
+.nlog-fix{background:rgba(139,108,255,.06);border:1px solid rgba(139,108,255,.16);border-radius:13px;padding:12px;margin-bottom:16px;}
+.nlog-fix-head{font-size:13px;font-weight:700;color:#F4F1FB;}
+.nlog-fix-sub{font-size:11px;color:rgba(188,168,255,.5);margin:3px 0 9px;line-height:1.45;}
+.nlog-fix-input{
+  width:100%;box-sizing:border-box;background:rgba(255,255,255,.05);
+  border:1px solid rgba(139,108,255,.25);border-radius:10px;padding:9px 11px;
+  color:#F4F1FB;font-size:13px;font-family:'Figtree',sans-serif;line-height:1.5;
+  outline:none;resize:vertical;
+}
+.nlog-fix-input:focus{border-color:rgba(139,108,255,.6);}
+.nlog-fix-input::placeholder{color:rgba(188,168,255,.32);}
+.nlog-fix-btn{
+  width:100%;margin-top:9px;background:rgba(139,108,255,.16);
+  border:1px solid rgba(139,108,255,.34);border-radius:10px;padding:10px;
+  color:#bca8ff;font-size:13px;font-weight:700;cursor:pointer;font-family:'Figtree',sans-serif;
+}
+.nlog-fix-btn:disabled{opacity:.5;cursor:wait;}
+
 .nweek-val{font-size:12px;font-weight:700;color:#F4F1FB;text-align:right;white-space:nowrap;}
 .nweek-val span{color:rgba(188,168,255,.4);font-weight:500;font-size:10px;}
 .nweek-meals{font-size:10px;color:rgba(188,168,255,.4);text-align:right;}
