@@ -4966,19 +4966,37 @@ async function _schedLoadSummary() {
     const data = d.data();
     if (data.status === 'done') {
       const t = data.title || 'Session';
+      const key = schedNameKey(t);       // "Thái Sơn" and "Thái sơn" group together
       const k = data.kind === 'freelance' ? 'freelance' : 'company';
-      // 1 hour = 1 session. A 2-hour booking counts as 2, 90 min as 1.5.
       const units = schedSessionUnits(data.startTime, data.endTime);
-      if (!byTitle[t]) byTitle[t] = { n:0, kind:k, bookings:0 };
-      byTitle[t].n += units;
-      byTitle[t].bookings++;
-      byTitle[t].kind = k; // latest wins if a name was used for both
+      if (!byTitle[key]) byTitle[key] = { n:0, kind:k, bookings:0, variants:{} };
+      byTitle[key].n += units;
+      byTitle[key].bookings++;
+      byTitle[key].kind = k; // latest wins if a name was used for both
+      byTitle[key].variants[t] = (byTitle[key].variants[t] || 0) + 1;
       if (k === 'freelance') freelance += units; else company += units;
       total += units;
       bookings++;
     }
   });
   return {byTitle, total, company, freelance, bookings};
+}
+
+/** Group key for a client name — case and spacing shouldn't split one person in two. */
+function schedNameKey(title) {
+  return (title || 'Session').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/** Show the spelling used most often; ties go to the one with most capitals. */
+function schedDisplayName(variants) {
+  const list = Object.keys(variants || {});
+  if (!list.length) return 'Session';
+  return list.sort((a, b) => {
+    const d = variants[b] - variants[a];
+    if (d) return d;
+    const caps = s => (s.match(/\p{Lu}/gu) || []).length;
+    return caps(b) - caps(a);
+  })[0];
 }
 
 /**
@@ -5028,9 +5046,9 @@ function _schedRenderSummary(res) {
     </div>
     ${note}
     <div class="sch-sum-rows">
-      ${entries.map(([t,v]) => `
+      ${entries.map(([, v]) => `
         <div class="sch-sum-row">
-          <span class="sch-sum-rname"><i class="sch-dot sch-dot-${v.kind}"></i>${t}</span>
+          <span class="sch-sum-rname"><i class="sch-dot sch-dot-${v.kind}"></i>${schedDisplayName(v.variants)}</span>
           <div class="sch-sum-bar-wrap">
             <div class="sch-sum-bar sch-sum-bar-${v.kind}" style="width:${Math.round(v.n/maxN*100)}%"></div>
           </div>
