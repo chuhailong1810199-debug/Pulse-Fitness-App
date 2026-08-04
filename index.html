@@ -4981,11 +4981,14 @@ async function _schedLoadSummary() {
   return {byTitle, total, company, freelance, bookings};
 }
 
-/** Booking length in "sessions", where one session = 60 minutes. */
+/**
+ * Booking length in "sessions". Every started hour counts as a full session:
+ * 30 min → 1, 60 min → 1, 90 min → 2, 120 min → 2. Always a whole number.
+ */
 function schedSessionUnits(startTime, endTime) {
   const mins = _tToMin(endTime || '') - _tToMin(startTime || '');
   if (!Number.isFinite(mins) || mins <= 0) return 1;   // malformed → count as one
-  return Math.round((mins / 60) * 10) / 10;
+  return Math.max(1, Math.ceil(mins / 60));
 }
 
 /** 1 → "1", 1.5 → "1.5" (no trailing .0) */
@@ -5006,7 +5009,7 @@ function _schedRenderSummary(res) {
   const maxN    = entries[0][1].n;
   // Only worth explaining the difference when some booking wasn't exactly 1 hour
   const note = (bookings && Math.abs(total - bookings) > 0.05)
-    ? `<div class="sch-sum-note">${bookings} buổi đã đặt · quy đổi ${schedFmtUnits(total)} session (1 tiếng = 1 session)</div>`
+    ? `<div class="sch-sum-note">${bookings} buổi đã đặt · quy đổi ${schedFmtUnits(total)} session (mỗi tiếng bắt đầu tính 1 session)</div>`
     : '';
   wrap.innerHTML = `
     <div class="sch-sum-split">
