@@ -5432,6 +5432,194 @@ function escHtml(str) {
 let _cpMeasurements = []; // in-memory list for current session
 let _cpWeightChart = null;
 
+// ── EXPORT TRAINING PROGRAM TO EXCEL (coach report) ────────────────────────
+// Fills the company's own .xlsx template so the layout, formulas and styling
+// stay exactly as the company expects. Nutrition/Meal sheets are already gone
+// from report-template.xlsx.
+const XLSX_TPL   = '/report-template.xlsx';
+const XLSX_COLG  = { A: 8, B: 15, C: 22, D: 29 };  // H, O, V, AC — one group per workout
+const XLSX_TPLN  = 7;      // exercise rows Training Plan has per phase
+const XLSX_BLK0  = 12;     // first exercise block row on a workout sheet
+const XLSX_BLKH  = 11;     // rows per block
+const XLSX_LOADC = [4, 6, 8, 10];   // D F H J
+const XLSX_REPC  = [3, 5, 7, 9];    // C E G I
+
+function _xlsxSetsReps(sr) {
+  const s = String(sr || '').replace(/×/g, 'x').trim();
+  const m = s.match(/^\s*(\d+)\s*x\s*(.+)$/i);
+  return m ? { sets: parseInt(m[1]), reps: m[2].trim() } : { sets: '', reps: s };
+}
+
+function _loadExcelJS() {
+  if (window.ExcelJS) return Promise.resolve();
+  return new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+    s.onload = res; s.onerror = () => rej(new Error('Không tải được thư viện Excel'));
+    document.head.appendChild(s);
+  });
+}
+
+/**
+ * Duplicate the template's first exercise block (11 rows) further down the sheet,
+ * carrying styles, borders, row heights and merges. Needed for clients whose
+ * sessions run past the template's 7 exercises.
+ */
+function _xlsxCloneBlock(ws, dstTop) {
+  for (let dr = 0; dr < XLSX_BLKH; dr++) {
+    const src = ws.getRow(XLSX_BLK0 + dr), dst = ws.getRow(dstTop + dr);
+    if (src.height) dst.height = src.height;
+    for (let c = 1; c <= 12; c++) {
+      const s = src.getCell(c), d = dst.getCell(c);
+      const v = s.value;
+      d.value = (v && typeof v === 'object' && v.formula) ? null : v;
+      if (s.style) d.style = JSON.parse(JSON.stringify(s.style));
+    }
+  }
+  (ws.model.merges || []).slice().forEach(ref => {
+    const m = /^([A-Z]+)(\d+):([A-Z]+)(\d+)$/.exec(ref);
+    if (!m) return;
+    const r1 = +m[2], r2 = +m[4];
+    if (r1 < XLSX_BLK0 || r1 > XLSX_BLK0 + XLSX_BLKH - 1) return;
+    try {
+      ws.mergeCells(`${m[1]}${r1 - XLSX_BLK0 + dstTop}:${m[3]}${r2 - XLSX_BLK0 + dstTop}`);
+    } catch (_e) { /* already merged */ }
+  });
+}
+
+/** All completed sessions for this client, newest last, with per-set kg. */
+async function _fetchSessionHistory(clientId) {
+  const snap = await getDocs(query(
+    collection(db, 'clients', clientId, 'workoutHistory'),
+    orderBy('date', 'asc'), limit(200)
+  ));
+  const byDay = {};
+  await Promise.all(snap.docs.map(async d => {
+    const meta = d.data();
+    const day  = meta.day;
+    if (!day) return;
+    const exSnap = await getDocs(
+      collection(db, 'clients', clientId, 'workoutHistory', d.id, 'exercises'));
+    const loads = {};
+    exSnap.forEach(e => {
+      const x = e.data();
+      if (!x.exerciseKey) return;
+      const tail = x.exerciseKey.split('_').slice(-2).join('_');
+      const arr  = Array.isArray(x.setLoads) ? x.setLoads.filter(v => v > 0) : [];
+      loads[tail] = arr.length ? arr : (x.loadKg > 0 ? [x.loadKg] : []);
+    });
+    (byDay[day] = byDay[day] || []).push({
+      date: meta.date?.toDate?.() || null, loads
+    });
+  }));
+  Object.values(byDay).forEach(a => a.sort((x, y) => (x.date || 0) - (y.date || 0)));
+  return byDay;
+}
+
+async function exportClientExcel() {
+  if (!activeClient) return;
+  const btn = document.getElementById('export-xlsx-btn');
+  const old = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '...'; }
+
+  try {
+    await _loadExcelJS();
+    const resp = await fetch(XLSX_TPL);
+    if (!resp.ok) throw new Error('Không tìm thấy report-template.xlsx');
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(await resp.arrayBuffer());
+
+    const prog = activeClient.program || {};
+    const days = Object.keys(prog).sort().slice(0, 4);
+    const hist = await _fetchSessionHistory(activeClient.id);
+    const letters = ['A', 'B', 'C', 'D'];
+
+    wb.getWorksheet('Client Profile').getCell('C7').value = activeClient.name || activeClient.id;
+    const tp = wb.getWorksheet('Training Plan 1');
+
+    // wipe the template's exercise grid, keep its shape
+    Object.values(XLSX_COLG).forEach(grp => {
+      [6, 16, 26].forEach(first => {
+        for (let i = 0; i < XLSX_TPLN; i++)
+          for (let off = 0; off < 6; off++) tp.getRow(first + i).getCell(grp + off).value = null;
+      });
+    });
+    for (let r = 6; r <= 12; r++) tp.getRow(r).getCell(3).value = null;
+
+    const dayRows = [6, 8, 10, 12];
+    days.forEach((dk, i) => {
+      const L = letters[i], code = `1-${L}`, grp = XLSX_COLG[L];
+      const dayObj = prog[dk] || {};
+      const list = [];
+      (dayObj.phases || []).forEach((p, pi) =>
+        (p.exercises || []).forEach((ex, ei) => list.push({ ...ex, key: `${pi}_${ei}` })));
+
+      tp.getRow(dayRows[i]).getCell(3).value = dayObj.label || dk;
+      tp.getRow(dayRows[i]).getCell(4).value = code;
+      tp.getRow(4).getCell(grp).value = code;
+
+      list.slice(0, XLSX_TPLN).forEach((e, j) => {
+        const { sets, reps } = _xlsxSetsReps(e.setsReps);
+        const row = tp.getRow(6 + j);
+        row.getCell(grp + 0).value = e.name || '';
+        row.getCell(grp + 1).value = sets;
+        row.getCell(grp + 2).value = reps;
+        row.getCell(grp + 4).value = e.tempo || null;   // RIR + Rest left for the coach
+      });
+
+      // ── workout sheet: one WEEK row per completed session, in date order
+      const ws = wb.getWorksheet(`1-${L}`);
+      if (!ws) return;
+      const sessions = hist[dk] || [];
+
+      // grow the sheet if this session has more exercises than the template holds
+      for (let b = XLSX_TPLN; b < list.length; b++) {
+        _xlsxCloneBlock(ws, XLSX_BLK0 + b * XLSX_BLKH);
+      }
+
+      // Session Check-in: dates only (DIET/SLEEP/STRESS/RATING removed from template)
+      sessions.slice(0, 6).forEach((s, si) => {
+        if (s.date) ws.getRow(5 + si).getCell(2).value = s.date;
+      });
+
+      list.forEach((e, j) => {
+        if (j >= XLSX_TPLN) {                 // past the template's 7 rows → write inline
+          const { sets, reps } = _xlsxSetsReps(e.setsReps);
+          const r = ws.getRow(XLSX_BLK0 + j * XLSX_BLKH + 1);
+          r.getCell(1).value = e.name || '';
+          r.getCell(6).value = sets;
+          r.getCell(7).value = reps;
+          r.getCell(9).value = e.tempo || null;
+        }
+        const { reps } = _xlsxSetsReps(e.setsReps);
+        const parts = String(reps).split(/[.\s]+/).filter(x => /^\d+$/.test(x));
+        sessions.slice(0, 6).forEach((s, si) => {
+          const kgs = s.loads[e.key];
+          if (!kgs || !kgs.length) return;
+          const row = ws.getRow(XLSX_BLK0 + j * XLSX_BLKH + 4 + si);
+          kgs.slice(0, 4).forEach((kg, k) => {
+            row.getCell(XLSX_LOADC[k]).value = kg;
+            if (parts.length) row.getCell(XLSX_REPC[k]).value = parseInt(parts[k] ?? parts[0]);
+          });
+        });
+      });
+    });
+
+    const buf  = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${(activeClient.name || activeClient.id).replace(/[\\/:*?"<>|]/g, '')}.xlsx`;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+  } catch (err) {
+    console.error('[exportClientExcel]', err);
+    alert('Xuất Excel thất bại: ' + (err.message || 'lỗi không rõ'));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = old || 'Excel'; }
+  }
+}
+
 function openClientProfile() {
   if (!activeClient) return;
   document.getElementById('cp-client-name').textContent = activeClient.name || 'Profile';
@@ -7476,6 +7664,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <button class="add-client-btn" onclick="document.getElementById('add-client-modal').classList.add('open')">+ Add</button>
     <button class="add-client-btn" onclick="openEditClientModal()" style="background:#1a0c06;border-color:rgba(255,255,255,0.60);color:rgba(255,255,255,0.88);">Edit</button>
     <button class="add-client-btn" onclick="openClientProfile()" style="background:#0a1a2e;border-color:#2a3a4e;color:#4488ff;">Profile</button>
+    <button class="add-client-btn" id="export-xlsx-btn" onclick="exportClientExcel()" style="background:#0a2e18;border-color:#2a4e3a;color:#4fd18b;" title="Xuất báo cáo Excel">Excel</button>
   </div>
 
   <div class="nav">
