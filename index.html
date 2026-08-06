@@ -8874,6 +8874,15 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 #app-screen .client-bar .add-client-btn:nth-of-type(1)::before{content:'+';font-size:22px;font-weight:600;}
 #app-screen .client-bar .add-client-btn:nth-of-type(2)::before{content:'✎';font-size:15px;}
 #app-screen .client-bar .add-client-btn:nth-of-type(3)::before{content:'◎';font-size:15px;}
+/* 4th button = Excel export. The rule above sets font-size:0 to hide label text,
+   so every button in this bar needs its own ::before glyph or it renders empty. */
+#app-screen .client-bar .add-client-btn:nth-of-type(4)::before{content:'⤓';font-size:18px;font-weight:600;}
+#app-screen .client-bar #export-xlsx-btn{
+  background:rgba(79,209,139,.12) !important;border-color:rgba(79,209,139,.3) !important;
+  color:#4fd18b !important;
+}
+#app-screen .client-bar #export-xlsx-btn:hover{background:rgba(79,209,139,.22) !important;border-color:rgba(79,209,139,.5) !important;}
+#app-screen .client-bar #export-xlsx-btn:disabled{opacity:.5;}
 /* ── Nav ── */
 #app-screen .nav{
   background:linear-gradient(150deg,#1c1338,#15102b) !important;border:1px solid rgba(167,139,250,.14) !important;
