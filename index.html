@@ -5460,11 +5460,12 @@ function _xlsxSetsReps(sr) {
   return m ? { sets: parseInt(m[1]), reps: m[2].trim() } : { sets: '', reps: s };
 }
 
-function _loadFflate() {
-  if (window.fflate) return Promise.resolve();
+function _loadJSZip() {
+  if (window.JSZip) return Promise.resolve();
   return new Promise((res, rej) => {
     const s = document.createElement('script');
-    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/fflate/0.8.2/umd/index.js';
+    // fflate is not published on cdnjs (404); JSZip is.
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
     s.onload = res; s.onerror = () => rej(new Error('Không tải được thư viện nén'));
     document.head.appendChild(s);
   });
@@ -5530,18 +5531,17 @@ async function exportClientExcel() {
   if (btn) btn.disabled = true;
 
   try {
-    await _loadFflate();
+    await _loadJSZip();
     const resp = await fetch(XLSX_TPL);
     if (!resp.ok) throw new Error('Không tìm thấy report-template.xlsx trên server');
-    const zip = fflate.unzipSync(new Uint8Array(await resp.arrayBuffer()));
+    const zip = await JSZip.loadAsync(await resp.arrayBuffer());
 
-    const dec = new TextDecoder(), enc = new TextEncoder();
-    const readXml  = n => dec.decode(zip[n]);
-    const writeXml = (n, x) => { zip[n] = enc.encode(x); };
+    const readXml  = n => zip.file(n).async('string');
+    const writeXml = (n, x) => { zip.file(n, x); };
 
     // sheet name -> xml part
-    const wbXml = readXml('xl/workbook.xml');
-    const relXml = readXml('xl/_rels/workbook.xml.rels');
+    const wbXml  = await readXml('xl/workbook.xml');
+    const relXml = await readXml('xl/_rels/workbook.xml.rels');
     const rid = {};
     for (const m of relXml.matchAll(/Target="([^"]+)"\s+Id="(rId\d+)"/g)) rid[m[2]] = m[1];
     const sheetFile = {};
@@ -5556,12 +5556,12 @@ async function exportClientExcel() {
 
     // client name
     writeXml(sheetFile['Client Profile'],
-      _xlsxWriteCells(readXml(sheetFile['Client Profile']),
+      _xlsxWriteCells(await readXml(sheetFile['Client Profile']),
         { C7: activeClient.name || activeClient.id }));
 
     // ── Training Plan 1 ──
     const tpFile = sheetFile['Training Plan 1'];
-    let tpXml = readXml(tpFile);
+    let tpXml = await readXml(tpFile);
     const tpEdits = {};
     for (const g of Object.values(XLSX_COLG))
       for (const first of [6, 16, 26])
@@ -5633,11 +5633,15 @@ async function exportClientExcel() {
           });
         });
       }
-      writeXml(f, _xlsxWriteCells(readXml(f), edits));
+      writeXml(f, _xlsxWriteCells(await readXml(f), edits));
     }
 
-    const out  = fflate.zipSync(zip, { level: 6 });
-    const blob = new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const blob = await zip.generateAsync({
+      type: 'blob',
+      compression: 'DEFLATE',
+      compressionOptions: { level: 6 },
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = (activeClient.name || activeClient.id).replace(/[\\/:*?"<>|]/g, '') + '.xlsx';
