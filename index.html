@@ -2602,6 +2602,8 @@ function renderExercises() {
             <div class="ex-number">${ei+1}</div>
             <div class="exercise-name${done?' done':''}" onclick="toggleEditCard('${key}')">${ex.name}</div>
             <button class="info-btn" onclick="openModal(${pi},${ei})">i</button>
+            <button class="drag-handle" aria-label="Kéo để đổi thứ tự" title="Kéo để đổi thứ tự"
+              onpointerdown="dragStart(event,${pi},${ei})"></button>
           </div>
           <div class="sets-row">
             <span class="sets-text">${ex.setsReps}</span>
@@ -2719,6 +2721,7 @@ function initSwipeDelete() {
     let startX = 0, startY = 0, curX = 0, swiping = false, locked = false;
 
     card.addEventListener('touchstart', e => {
+      if (_drag) return;                   // a reorder drag owns this gesture
       startX = e.touches[0].clientX;
       startY = e.touches[0].clientY;
       curX = 0; swiping = false; locked = false;
@@ -2726,7 +2729,7 @@ function initSwipeDelete() {
     }, { passive: true });
 
     card.addEventListener('touchmove', e => {
-      if (locked) return;
+      if (locked || _drag) return;
       const dx = e.touches[0].clientX - startX;
       const dy = e.touches[0].clientY - startY;
       if (!swiping) {
@@ -2829,6 +2832,137 @@ function lpMove(event) {
   const dx = Math.abs(event.clientX - _lpStartX);
   const dy = Math.abs(event.clientY - _lpStartY);
   if (dx > 8 || dy > 8) { clearTimeout(_lpTimer); _lpTimer = null; }
+}
+
+// ── DRAG TO REORDER EXERCISES WITHIN A PHASE (edit mode) ────────────────────
+// Moving an exercise to a *different* phase already has two UIs (the Move
+// button and the long-press picker); neither can reorder inside a phase.
+// Both other card gestures are taken — swipe right deletes, long press opens
+// the phase picker — so reordering gets its own grip. Drags start on the grip
+// only, which is why nothing here has to negotiate with those two.
+let _drag = null;
+
+/**
+ * Session state is keyed by position (clientId_day_phaseIdx_exIdx), so moving
+ * a row has to carry its keys along or the done ticks and typed kg stay behind
+ * on whatever exercise slides into that slot. Same defect class as the Excel
+ * export's positional history matching.
+ */
+function _reorderStateKeys(pi, from, to) {
+  const base = activeClient.id + '_' + activeDay + '_' + pi + '_';
+  const map = { [from]: to };                       // old index -> new index
+  if (from < to) for (let i = from + 1; i <= to; i++) map[i] = i - 1;
+  else           for (let i = to; i < from; i++)     map[i] = i + 1;
+
+  if (!exerciseState[activeClient.id]) exerciseState[activeClient.id] = {};
+  [exerciseState[activeClient.id], setLoads, exerciseLoads].forEach(store => {
+    const moved = {};
+    for (const oldIdx in map) {                     // the map is a permutation of
+      const k = base + oldIdx;                      // one index range, so every
+      if (k in store) { moved[base + map[oldIdx]] = store[k]; delete store[k]; }
+    }
+    Object.assign(store, moved);                    // ...write only after deleting
+  });
+  saveSetLoadsToLocal();
+  saveExerciseLoadsToLocal();
+  scheduleSaveLoadsFB();
+}
+
+function dragStart(ev, pi, ei) {
+  if (!editMode || _drag) return;
+  ev.preventDefault();
+  ev.stopPropagation();          // keep lpDown() from arming the phase picker
+  lpUp();
+
+  const zone  = document.getElementById('drop-zone-' + pi);
+  const items = zone ? Array.from(zone.children).filter(n => n.classList.contains('swipe-wrap')) : [];
+  if (items.length < 2 || !items[ei]) return;       // nothing to reorder against
+
+  const rects = items.map(n => n.getBoundingClientRect());
+  const sy    = window.scrollY;
+  _drag = {
+    pi, from: ei, to: ei, items, el: items[ei],
+    // rows are uniform enough that one step covers every shift
+    step: rects[ei].height + Math.max(0, rects[1].top - rects[0].bottom),
+    // document coords, so page scrolling during the drag doesn't skew them
+    mids: rects.map(r => r.top + sy + r.height / 2),
+    y0: ev.clientY + sy,
+    clientY: ev.clientY,
+    raf: 0,
+  };
+
+  _drag.el.classList.add('dragging');
+  items.forEach((n, i) => { if (i !== ei) n.classList.add('drag-shift'); });
+  document.body.classList.add('reordering');
+  if (navigator.vibrate) navigator.vibrate(15);
+
+  window.addEventListener('pointermove', dragMove, { passive: false });
+  window.addEventListener('pointerup', dragEnd);
+  window.addEventListener('pointercancel', dragEnd);
+  _drag.raf = requestAnimationFrame(_dragAutoScroll);
+}
+
+function dragMove(ev) {
+  if (!_drag) return;
+  ev.preventDefault();
+  _drag.clientY = ev.clientY;
+  _dragPaint();
+}
+
+function _dragPaint() {
+  const d = _drag; if (!d) return;
+  const dy = (d.clientY + window.scrollY) - d.y0;
+  d.el.style.transform = `translateY(${dy}px)`;
+
+  // Landing slot = how many other rows the dragged centre now sits below.
+  // That is already the index in the array *after* the row is spliced out.
+  const centre = d.mids[d.from] + dy;
+  let to = 0;
+  d.mids.forEach((m, i) => { if (i !== d.from && centre > m) to++; });
+  d.to = to;
+
+  d.items.forEach((n, i) => {
+    if (i === d.from) return;
+    let shift = 0;
+    if (to > d.from && i > d.from && i <= to) shift = -d.step;
+    else if (to < d.from && i >= to && i < d.from) shift = d.step;
+    n.style.transform = shift ? `translateY(${shift}px)` : '';
+  });
+}
+
+/** Nudge the page when the finger nears an edge — a phase can be taller than the screen. */
+function _dragAutoScroll() {
+  const d = _drag; if (!d) return;
+  const EDGE = 90, MAX = 14;
+  const y = d.clientY;
+  let v = 0;
+  if (y < EDGE) v = -MAX * (1 - y / EDGE);
+  else if (y > innerHeight - EDGE) v = MAX * (1 - (innerHeight - y) / EDGE);
+  if (v) { window.scrollBy(0, v); _dragPaint(); }
+  d.raf = requestAnimationFrame(_dragAutoScroll);
+}
+
+async function dragEnd() {
+  const d = _drag; if (!d) return;
+  _drag = null;
+  cancelAnimationFrame(d.raf);
+  window.removeEventListener('pointermove', dragMove);
+  window.removeEventListener('pointerup', dragEnd);
+  window.removeEventListener('pointercancel', dragEnd);
+  document.body.classList.remove('reordering');
+  d.items.forEach(n => { n.style.transform = ''; n.classList.remove('drag-shift', 'dragging'); });
+
+  if (d.to === d.from) return;
+  const arr = getOrCreateProgram()[activeDay].phases[d.pi].exercises;
+  arr.splice(d.to, 0, arr.splice(d.from, 1)[0]);
+  _reorderStateKeys(d.pi, d.from, d.to);
+  renderExercises();                       // repaint now; the write below is async
+  try {
+    await saveProgramToFirestore();
+  } catch (e) {
+    console.error('[reorder] save failed', e);
+    alert('Đã đổi thứ tự trên máy nhưng lưu lên server thất bại. Tải lại trang để xem thứ tự thật.');
+  }
 }
 
 function showMovePicker(pi, ei) {
@@ -6462,6 +6596,39 @@ h1 span{color:#7665ff;}
 .exercise-name.done{color:rgba(255,255,255,0.35);text-decoration:line-through;}
 .info-btn{width:20px;height:20px;border-radius:50%;border:1px solid rgba(255,255,255,0.16);background:transparent;color:rgba(255,255,255,0.60);font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s;}
 .info-btn:hover{border-color:#7665ff;color:#9b8dff;}
+
+/* ── Drag handle / reorder within a phase (edit mode only) ────────────────
+   touch-action:none is load-bearing: it hands us the vertical gesture that
+   would otherwise scroll the page, so a drag starting on the grip is a drag. */
+.drag-handle{
+  width:26px;height:28px;flex-shrink:0;margin-left:-2px;padding:0;
+  border:none;background:transparent;cursor:grab;position:relative;
+  touch-action:none;-webkit-tap-highlight-color:transparent;
+}
+.drag-handle::before{
+  content:'';position:absolute;inset:0;margin:auto;width:9px;height:15px;
+  color:rgba(255,255,255,0.38);
+  background-image:radial-gradient(currentColor 1.35px,transparent 1.45px);
+  background-size:5px 5px;
+  transition:color .15s;
+}
+.drag-handle:hover::before{color:rgba(255,255,255,0.78);}
+.drag-handle:active{cursor:grabbing;}
+
+.swipe-wrap.dragging{position:relative;z-index:40;}
+.swipe-wrap.dragging .exercise-card{
+  border-color:rgba(118,101,255,0.6);
+  box-shadow:0 14px 30px rgba(0,0,0,0.5);
+  transform:scale(1.015);
+  animation:none;                       /* cancel the cardIn entrance animation */
+}
+.swipe-wrap.dragging .drag-handle::before{color:#9b8dff;}
+/* only the *other* rows animate; the dragged one must track the finger 1:1 */
+.swipe-wrap.drag-shift{transition:transform .18s cubic-bezier(.2,0,.2,1);}
+body.reordering{user-select:none;-webkit-user-select:none;}
+body.reordering .exercise-card{cursor:grabbing;}
+@media (prefers-reduced-motion:reduce){.swipe-wrap.drag-shift{transition:none;}}
+
 /* ── Program Table (redesigned view) ── */
 .program-table-wrap{margin-top:.25rem;overflow-x:auto;-webkit-overflow-scrolling:touch;}
 .pt-day-title{font-size:15px;font-weight:700;color:#fff;padding-bottom:12px;margin-bottom:4px;border-bottom:1px solid rgba(255,255,255,0.07);}
