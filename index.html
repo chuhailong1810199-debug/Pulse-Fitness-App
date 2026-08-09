@@ -5499,7 +5499,15 @@ function _xlsxWriteCells(xml, edits) {
   return xml;
 }
 
-/** All completed sessions for this client, oldest first, with per-set kg. */
+/** Normalised exercise name — the stable key for matching history to the program. */
+const _exNameKey = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+
+/**
+ * All completed sessions for this client, oldest first, with per-set kg.
+ * Each session exposes loads twice: byName (stable across program edits) and
+ * byPos ("phaseIdx_exIdx", the legacy key — only a fallback, because inserting
+ * or deleting an exercise silently shifts every later index).
+ */
 async function _fetchSessionHistory(clientId) {
   const snap = await getDocs(query(
     collection(db, 'clients', clientId, 'workoutHistory'),
@@ -5511,15 +5519,30 @@ async function _fetchSessionHistory(clientId) {
     if (!meta.day) return;
     const exSnap = await getDocs(
       collection(db, 'clients', clientId, 'workoutHistory', d.id, 'exercises'));
-    const loads = {};
+    const byPos = {}, byName = {}, nameHits = {}, posName = {};
     exSnap.forEach(e => {
       const x = e.data();
       if (!x.exerciseKey) return;
-      const tail = x.exerciseKey.split('_').slice(-2).join('_');
-      const arr  = Array.isArray(x.setLoads) ? x.setLoads.filter(v => v > 0) : [];
-      loads[tail] = arr.length ? arr : (x.loadKg > 0 ? [x.loadKg] : []);
+      const arr = Array.isArray(x.setLoads) ? x.setLoads.filter(v => v > 0) : [];
+      const kgs = arr.length ? arr : (x.loadKg > 0 ? [x.loadKg] : []);
+      if (!kgs.length) return;
+      const pos = x.exerciseKey.split('_').slice(-2).join('_');
+      const n   = _exNameKey(x.exerciseName);   // '' on pre-2026 docs
+      byPos[pos] = kgs;
+      posName[pos] = n;
+      if (!n) return;
+      nameHits[n] = (nameHits[n] || 0) + 1;
+      byName[n] = kgs;
     });
-    (byDay[meta.day] = byDay[meta.day] || []).push({ date: meta.date?.toDate?.() || null, loads });
+    // Same name logged twice in one session -> can't identify a row by name.
+    for (const n in nameHits) if (nameHits[n] > 1) delete byName[n];
+    // Positional matching is only safe for rows name-matching can never claim
+    // (no name stored, or an ambiguous one). Allowing it as a blanket fallback
+    // hands a newly inserted exercise the weights of whatever used to sit there.
+    const posOk = new Set(
+      Object.keys(posName).filter(p => !posName[p] || !byName[posName[p]]));
+    (byDay[meta.day] = byDay[meta.day] || []).push(
+      { date: meta.date?.toDate?.() || null, byPos, byName, posOk });
   }));
   Object.values(byDay).forEach(a => a.sort((x, y) => (x.date || 0) - (y.date || 0)));
   return byDay;
@@ -5578,7 +5601,12 @@ async function exportClientExcel() {
       const dayObj = prog[dk] || {};
       const list = [];
       (dayObj.phases || []).forEach((p, pi) =>
-        (p.exercises || []).forEach((ex, ei) => list.push({ ...ex, key: pi + '_' + ei })));
+        (p.exercises || []).forEach((ex, ei) =>
+          list.push({ ...ex, key: pi + '_' + ei, nameKey: _exNameKey(ex.name) })));
+      // A name that appears twice in the same day can't identify a row on its own.
+      const dup = {};
+      list.forEach(e => { if (e.nameKey) dup[e.nameKey] = (dup[e.nameKey] || 0) + 1; });
+      list.forEach(e => { if (dup[e.nameKey] > 1) e.nameKey = ''; });
       perDay[L] = { dk, list };
 
       tpEdits['C' + dayRows[i]] = dayObj.label || dk;
@@ -5615,7 +5643,8 @@ async function exportClientExcel() {
       for (let r = 5; r <= 10; r++) edits['B' + r] = null;
 
       if (d) {
-        const sessions = (hist[d.dk] || []).slice(0, 6);
+        // Template holds 6 WEEK rows; show the 6 most recent sessions, not the first 6.
+        const sessions = (hist[d.dk] || []).slice(-6);
         sessions.forEach((s, si) => { if (s.date) edits['B' + (5 + si)] = s.date; });
 
         d.list.slice(0, XLSX_BLOCKS).forEach((e, j) => {
@@ -5629,7 +5658,10 @@ async function exportClientExcel() {
           }
           const parts = String(reps).split(/[.\s]+/).filter(x => /^\d+$/.test(x));
           sessions.forEach((s, si) => {
-            const kgs = s.loads[e.key];
+            // Match on name so the log survives reordering/inserting exercises.
+            // Position is a fallback only for rows the name index can't cover.
+            const kgs = (e.nameKey && s.byName[e.nameKey])
+                     || (s.posOk.has(e.key) ? s.byPos[e.key] : null);
             if (!kgs || !kgs.length) return;
             const r = top + 4 + si;
             kgs.slice(0, 4).forEach((kg, k) => {
