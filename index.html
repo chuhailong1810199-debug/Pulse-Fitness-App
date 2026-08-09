@@ -2834,34 +2834,43 @@ function lpMove(event) {
   if (dx > 8 || dy > 8) { clearTimeout(_lpTimer); _lpTimer = null; }
 }
 
-// ── DRAG TO REORDER EXERCISES WITHIN A PHASE (edit mode) ────────────────────
-// Moving an exercise to a *different* phase already has two UIs (the Move
-// button and the long-press picker); neither can reorder inside a phase.
-// Both other card gestures are taken — swipe right deletes, long press opens
-// the phase picker — so reordering gets its own grip. Drags start on the grip
-// only, which is why nothing here has to negotiate with those two.
+// ── DRAG TO REORDER EXERCISES (edit mode) ──────────────────────────────────
+// Reorders within a phase and moves between phases. Both other card gestures
+// are taken — swipe right deletes, long press opens the phase picker — so
+// dragging gets its own grip and never has to negotiate with those two.
 let _drag = null;
 
 /**
- * Session state is keyed by position (clientId_day_phaseIdx_exIdx), so moving
- * a row has to carry its keys along or the done ticks and typed kg stay behind
- * on whatever exercise slides into that slot. Same defect class as the Excel
- * export's positional history matching.
+ * Session state is keyed by position (clientId_day_phaseIdx_exIdx), so moving a
+ * row has to carry its keys along or the done ticks and typed kg stay behind on
+ * whatever exercise slides into that slot. Same defect class as the Excel
+ * export's old positional history matching.
+ *
+ * MUST be called before the exercises arrays are spliced — it reads the
+ * pre-move lengths to know which trailing rows shift.
  */
-function _reorderStateKeys(pi, from, to) {
-  const base = activeClient.id + '_' + activeDay + '_' + pi + '_';
-  const map = { [from]: to };                       // old index -> new index
-  if (from < to) for (let i = from + 1; i <= to; i++) map[i] = i - 1;
-  else           for (let i = to; i < from; i++)     map[i] = i + 1;
+function _moveStateKeys(fromPi, fromEi, toPi, toEi) {
+  const B = pi => activeClient.id + '_' + activeDay + '_' + pi + '_';
+  const phases = getOrCreateProgram()[activeDay].phases;
+  const pairs = [];                                   // [oldKey, newKey]
+
+  if (fromPi === toPi) {
+    pairs.push([B(fromPi) + fromEi, B(toPi) + toEi]);
+    if (fromEi < toEi) for (let i = fromEi + 1; i <= toEi; i++) pairs.push([B(fromPi) + i, B(fromPi) + (i - 1)]);
+    else               for (let i = toEi; i < fromEi; i++)      pairs.push([B(fromPi) + i, B(fromPi) + (i + 1)]);
+  } else {
+    pairs.push([B(fromPi) + fromEi, B(toPi) + toEi]);
+    // source closes up behind the row that left...
+    for (let i = fromEi + 1; i < phases[fromPi].exercises.length; i++) pairs.push([B(fromPi) + i, B(fromPi) + (i - 1)]);
+    // ...target opens up to receive it
+    for (let i = phases[toPi].exercises.length - 1; i >= toEi; i--)    pairs.push([B(toPi) + i, B(toPi) + (i + 1)]);
+  }
 
   if (!exerciseState[activeClient.id]) exerciseState[activeClient.id] = {};
   [exerciseState[activeClient.id], setLoads, exerciseLoads].forEach(store => {
-    const moved = {};
-    for (const oldIdx in map) {                     // the map is a permutation of
-      const k = base + oldIdx;                      // one index range, so every
-      if (k in store) { moved[base + map[oldIdx]] = store[k]; delete store[k]; }
-    }
-    Object.assign(store, moved);                    // ...write only after deleting
+    const held = {};
+    for (const [ok] of pairs) if (ok in store) { held[ok] = store[ok]; delete store[ok]; }
+    for (const [ok, nk] of pairs) if (ok in held) store[nk] = held[ok];   // write only after every delete
   });
   saveSetLoadsToLocal();
   saveExerciseLoadsToLocal();
@@ -2874,26 +2883,44 @@ function dragStart(ev, pi, ei) {
   ev.stopPropagation();          // keep lpDown() from arming the phase picker
   lpUp();
 
-  const zone  = document.getElementById('drop-zone-' + pi);
-  const items = zone ? Array.from(zone.children).filter(n => n.classList.contains('swipe-wrap')) : [];
-  if (items.length < 2 || !items[ei]) return;       // nothing to reorder against
+  // Give empty phases a real target area, then measure — the min-height only
+  // applies while dragging, so it has to be on before any rect is read.
+  document.body.classList.add('reordering');
 
-  const rects = items.map(n => n.getBoundingClientRect());
-  const sy    = window.scrollY;
+  const zones = [];
+  const items = [];
+  document.querySelectorAll('.phase-exercises-wrap').forEach(zoneEl => {
+    const zpi = parseInt(zoneEl.id.replace('drop-zone-', ''));
+    if (!Number.isFinite(zpi)) return;
+    const rows = Array.from(zoneEl.children).filter(n => n.classList.contains('swipe-wrap'));
+    const zr = zoneEl.getBoundingClientRect();
+    const sy = window.scrollY;
+    zones.push({
+      pi: zpi, el: zoneEl,
+      top: zr.top + sy, bot: zr.bottom + sy,
+      mids: rows.map(n => { const r = n.getBoundingClientRect(); return r.top + sy + r.height / 2; }),
+    });
+    rows.forEach((el, i) => items.push({ el, pi: zpi, i }));
+  });
+
+  const self = items.find(it => it.pi === pi && it.i === ei);
+  if (!self || items.length < 2) { document.body.classList.remove('reordering'); return; }
+
+  const r = self.el.getBoundingClientRect();
+  const sy = window.scrollY;
+  const sib = items.find(it => it.pi === pi && it.i === ei + 1);
   _drag = {
-    pi, from: ei, to: ei, items, el: items[ei],
-    // rows are uniform enough that one step covers every shift
-    step: rects[ei].height + Math.max(0, rects[1].top - rects[0].bottom),
-    // document coords, so page scrolling during the drag doesn't skew them
-    mids: rects.map(r => r.top + sy + r.height / 2),
+    pi, from: ei, toPi: pi, to: ei, items, zones, el: self.el,
+    // rows are near enough uniform that one step covers every gap
+    step: r.height + (sib ? Math.max(0, sib.el.getBoundingClientRect().top - r.bottom) : 10),
     y0: ev.clientY + sy,
+    startMid: r.top + sy + r.height / 2,
     clientY: ev.clientY,
     raf: 0,
   };
 
-  _drag.el.classList.add('dragging');
-  items.forEach((n, i) => { if (i !== ei) n.classList.add('drag-shift'); });
-  document.body.classList.add('reordering');
+  self.el.classList.add('dragging');
+  items.forEach(it => { if (it !== self) it.el.classList.add('drag-shift'); });
   if (navigator.vibrate) navigator.vibrate(15);
 
   window.addEventListener('pointermove', dragMove, { passive: false });
@@ -2914,23 +2941,42 @@ function _dragPaint() {
   const dy = (d.clientY + window.scrollY) - d.y0;
   d.el.style.transform = `translateY(${dy}px)`;
 
-  // Landing slot = how many other rows the dragged centre now sits below.
-  // That is already the index in the array *after* the row is spliced out.
-  const centre = d.mids[d.from] + dy;
-  let to = 0;
-  d.mids.forEach((m, i) => { if (i !== d.from && centre > m) to++; });
-  d.to = to;
+  // Which phase is the dragged row over? Bands are the zones' original extents,
+  // so they stay put while rows shift around underneath.
+  const centre = d.startMid + dy;
+  let zone = d.zones[0], best = Infinity;
+  for (const z of d.zones) {
+    const gap = centre < z.top ? z.top - centre : (centre > z.bot ? centre - z.bot : 0);
+    if (gap < best) { best = gap; zone = z; }
+  }
 
-  d.items.forEach((n, i) => {
-    if (i === d.from) return;
+  // Landing slot = how many rows of that phase the dragged centre now sits below.
+  // Skipping itself makes this the index in the array *after* it is spliced out,
+  // which is exactly what splice() wants in both the same-phase and cross-phase case.
+  let to = 0;
+  zone.mids.forEach((m, i) => {
+    if (zone.pi === d.pi && i === d.from) return;
+    if (centre > m) to++;
+  });
+  d.toPi = zone.pi; d.to = to;
+
+  d.zones.forEach(z => z.el.classList.toggle('drop-target', z.pi === zone.pi && z.pi !== d.pi));
+
+  d.items.forEach(it => {
+    if (it.pi === d.pi && it.i === d.from) return;          // the dragged row
     let shift = 0;
-    if (to > d.from && i > d.from && i <= to) shift = -d.step;
-    else if (to < d.from && i >= to && i < d.from) shift = d.step;
-    n.style.transform = shift ? `translateY(${shift}px)` : '';
+    if (d.pi === zone.pi) {                                  // reshuffle in place
+      if (to > d.from && it.pi === d.pi && it.i > d.from && it.i <= to) shift = -d.step;
+      else if (to < d.from && it.pi === d.pi && it.i >= to && it.i < d.from) shift = d.step;
+    } else {
+      if (it.pi === d.pi && it.i > d.from) shift = -d.step;  // close the gap left behind
+      else if (it.pi === zone.pi && it.i >= to) shift = d.step;  // open the landing gap
+    }
+    it.el.style.transform = shift ? `translateY(${shift}px)` : '';
   });
 }
 
-/** Nudge the page when the finger nears an edge — a phase can be taller than the screen. */
+/** Nudge the page when the finger nears an edge — the day can be taller than the screen. */
 function _dragAutoScroll() {
   const d = _drag; if (!d) return;
   const EDGE = 90, MAX = 14;
@@ -2950,13 +2996,14 @@ async function dragEnd() {
   window.removeEventListener('pointerup', dragEnd);
   window.removeEventListener('pointercancel', dragEnd);
   document.body.classList.remove('reordering');
-  d.items.forEach(n => { n.style.transform = ''; n.classList.remove('drag-shift', 'dragging'); });
+  d.zones.forEach(z => z.el.classList.remove('drop-target'));
+  d.items.forEach(it => { it.el.style.transform = ''; it.el.classList.remove('drag-shift', 'dragging'); });
 
-  if (d.to === d.from) return;
-  const arr = getOrCreateProgram()[activeDay].phases[d.pi].exercises;
-  arr.splice(d.to, 0, arr.splice(d.from, 1)[0]);
-  _reorderStateKeys(d.pi, d.from, d.to);
-  renderExercises();                       // repaint now; the write below is async
+  if (d.toPi === d.pi && d.to === d.from) return;
+  const phases = getOrCreateProgram()[activeDay].phases;
+  _moveStateKeys(d.pi, d.from, d.toPi, d.to);          // before the splices — reads pre-move lengths
+  phases[d.toPi].exercises.splice(d.to, 0, phases[d.pi].exercises.splice(d.from, 1)[0]);
+  renderExercises();                                   // repaint now; the write below is async
   try {
     await saveProgramToFirestore();
   } catch (e) {
@@ -2964,7 +3011,6 @@ async function dragEnd() {
     alert('Đã đổi thứ tự trên máy nhưng lưu lên server thất bại. Tải lại trang để xem thứ tự thật.');
   }
 }
-
 function showMovePicker(pi, ei) {
   if (navigator.vibrate) navigator.vibrate(50);
   const prog = getOrCreateProgram();
@@ -6627,6 +6673,12 @@ h1 span{color:#7665ff;}
 .swipe-wrap.drag-shift{transition:transform .18s cubic-bezier(.2,0,.2,1);}
 body.reordering{user-select:none;-webkit-user-select:none;}
 body.reordering .exercise-card{cursor:grabbing;}
+/* an emptied phase would otherwise collapse to nothing and be impossible to drop into */
+body.reordering .phase-exercises-wrap{min-height:46px;border-radius:14px;transition:background .15s,box-shadow .15s;}
+.phase-exercises-wrap.drop-target{
+  background:rgba(118,101,255,0.10);
+  box-shadow:inset 0 0 0 1px rgba(118,101,255,0.45);
+}
 @media (prefers-reduced-motion:reduce){.swipe-wrap.drag-shift{transition:none;}}
 
 /* ── Program Table (redesigned view) ── */
