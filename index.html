@@ -5437,7 +5437,7 @@ let _cpWeightChart = null;
 // JS xlsx library we tried mangles or refuses it. So we edit the .xlsx zip
 // directly and only swap cell VALUES — everything else stays byte-identical.
 const XLSX_TPL   = '/report-template.xlsx';
-const XLSX_COLG  = { A: 'H', B: 'O', C: 'V', D: 'AC' };  // Training Plan column groups
+const XLSX_COLG  = { A: 'H', B: 'O', C: 'V', D: 'AC', E: 'AJ' };  // Training Plan column groups
 const XLSX_TPLN  = 7;      // exercises Training Plan holds per phase (formula-linked)
 const XLSX_BLK0  = 12;     // first exercise block row on a workout sheet
 const XLSX_BLKH  = 11;     // rows per block
@@ -5550,9 +5550,11 @@ async function exportClientExcel() {
     }
 
     const prog = activeClient.program || {};
-    const days = Object.keys(prog).sort().slice(0, 4);
+    const days = Object.keys(prog).sort().slice(0, 5);
     const hist = await _fetchSessionHistory(activeClient.id);
-    const letters = ['A', 'B', 'C', 'D'];
+    const letters = ['A', 'B', 'C', 'D', 'E'];
+    // 5 sessions sit on consecutive days (Mon–Fri); fewer alternate with rest days
+    const dayRowsFor = n => (n >= 5 ? [6, 7, 8, 9, 10] : [6, 8, 10, 12]);
 
     // client name
     writeXml(sheetFile['Client Profile'],
@@ -5569,7 +5571,7 @@ async function exportClientExcel() {
           for (let off = 0; off < 6; off++) tpEdits[_colShift(g, off) + (first + i)] = null;
     for (let r = 6; r <= 12; r++) { tpEdits['C' + r] = null; tpEdits['D' + r] = null; }
 
-    const dayRows = [6, 8, 10, 12];
+    const dayRows = dayRowsFor(days.length);
     const perDay  = {};
     days.forEach((dk, i) => {
       const L = letters[i], code = '1-' + L, g = XLSX_COLG[L];
@@ -5590,6 +5592,10 @@ async function exportClientExcel() {
         if (e.tempo) tpEdits[_colShift(g, 4) + (6 + j)] = e.tempo;   // RIR/Rest left blank
       });
     });
+    // The template hyperlinks D6/D8/D10/D12 to the workout sheets. Clearing a cell
+    // value leaves the <hyperlink> behind and Excel then shows its target as text
+    // ("'1-D'!A1"), so drop the whole D6:D12 hyperlink range.
+    tpXml = tpXml.replace(/<hyperlink[^>]*ref="D(?:[6-9]|1[0-2])"[^>]*\/>/g, '');
     writeXml(tpFile, _xlsxWriteCells(tpXml, tpEdits));
 
     // ── workout sheets: one WEEK row per completed session ──
