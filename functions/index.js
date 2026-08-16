@@ -1630,21 +1630,31 @@ async function callGemini(apiKey, input, schema, label) {
     const msg = (err.message || "").toLowerCase();
     console.error(`[callGemini] ${label} failed — status=${status} msg=${err.message}`);
 
-    if (status === 401 || status === 403 || msg.includes("api key") || msg.includes("unauthenticated")) {
-      throw new HttpsError("failed-precondition",
-        "Invalid Gemini API key. Check the GEMINI_API_KEY secret — the key must come from aistudio.google.com and start with 'AIza'.");
-    }
-    if (status === 404 || msg.includes("not found") || msg.includes("model")) {
-      throw new HttpsError("failed-precondition",
-        `Model "${GEMINI_MODEL}" is not available for this API key. The model may have been renamed, or the key lacks access.`);
-    }
-    if (status === 429 || msg.includes("quota") || msg.includes("rate limit")) {
-      throw new HttpsError("resource-exhausted",
-        "Gemini request limit reached. Please try again in a few minutes.");
-    }
-    if (status === 503 || status === 500 || msg.includes("overloaded")) {
-      throw new HttpsError("unavailable", "Gemini is overloaded — please try again in a few minutes.");
-    }
+    // Classify on the status code first. Matching the message alone misfiles
+    // errors, because Gemini's quota text embeds "model: gemini-3.6-flash" —
+    // that made every rate limit surface as "model not available for this API
+    // key", i.e. a passing 429 looked like a permanently broken key.
+    const wait = (err.message || "").match(/retry in ([\d.]+)\s*s/i);
+    const RATE = () => new HttpsError("resource-exhausted",
+      "Gemini request limit reached." +
+      (wait ? ` Try again in about ${Math.ceil(parseFloat(wait[1]))}s.` : " Please try again in a minute.") +
+      " If this keeps happening the API key is still on the free tier — enable billing in Google AI Studio to raise the limit.");
+    const BUSY = () => new HttpsError("unavailable", "Gemini is overloaded — please try again in a few minutes.");
+    const KEY  = () => new HttpsError("failed-precondition",
+      "Invalid Gemini API key. Check the GEMINI_API_KEY secret — the key must come from aistudio.google.com and start with 'AIza'.");
+    const MODEL = () => new HttpsError("failed-precondition",
+      `Model "${GEMINI_MODEL}" is not available for this API key. The model may have been renamed, or the key lacks access.`);
+
+    if (status === 429) throw RATE();
+    if (status === 503 || status === 500) throw BUSY();
+    if (status === 401 || status === 403) throw KEY();
+    if (status === 404) throw MODEL();
+
+    // No usable status — fall back to the message, most specific first.
+    if (msg.includes("quota") || msg.includes("rate limit") || msg.includes("resource_exhausted")) throw RATE();
+    if (msg.includes("overloaded") || msg.includes("unavailable")) throw BUSY();
+    if (msg.includes("api key") || msg.includes("unauthenticated") || msg.includes("permission denied")) throw KEY();
+    if (msg.includes("not found") || msg.includes("does not exist") || msg.includes("not supported")) throw MODEL();
     throw new HttpsError("internal", `Gemini error (${label}): ${err.message}`);
   }
 }
