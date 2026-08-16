@@ -8124,19 +8124,27 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 
       <!-- Step 0: Choose input method -->
       <div class="nlog-step active" id="nlog-step-0">
-        <div class="nlog-option-row">
+        <div class="nlog-option-row nlog-option-row-3">
           <div class="nlog-option" onclick="document.getElementById('nlog-photo-input').click()">
             <div class="nlog-option-icon">📷</div>
-            <div class="nlog-option-label">Photo</div>
-            <div class="nlog-option-sub">Estimate from image</div>
+            <div class="nlog-option-label">Camera</div>
+            <div class="nlog-option-sub">Take a photo</div>
+          </div>
+          <div class="nlog-option" onclick="document.getElementById('nlog-library-input').click()">
+            <div class="nlog-option-icon">🖼️</div>
+            <div class="nlog-option-label">Library</div>
+            <div class="nlog-option-sub">From gallery</div>
           </div>
           <div class="nlog-option" onclick="showNlogStep('manual')">
             <div class="nlog-option-icon">✏️</div>
             <div class="nlog-option-label">Manual</div>
-            <div class="nlog-option-sub">Enter numbers directly</div>
+            <div class="nlog-option-sub">Type numbers</div>
           </div>
         </div>
+        <!-- Two inputs on purpose: `capture` forces the camera and hides the
+             gallery, so one element cannot offer both paths reliably. -->
         <input type="file" id="nlog-photo-input" accept="image/*" capture="environment" style="display:none" onchange="handleMealPhoto(this)">
+        <input type="file" id="nlog-library-input" accept="image/*" style="display:none" onchange="handleMealPhoto(this)">
       </div>
 
       <!-- Step 1: Analyzing -->
@@ -9544,6 +9552,10 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .nlog-step{display:none;}
 .nlog-step.active{display:block;}
 .nlog-option-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;}
+/* three-up needs tighter gutters to keep the sub-labels on one line at 360px */
+.nlog-option-row-3{grid-template-columns:1fr 1fr 1fr;gap:8px;}
+.nlog-option-row-3 .nlog-option{padding:16px 6px;}
+.nlog-option-row-3 .nlog-option-sub{font-size:10px;line-height:1.25;}
 .nlog-option{background:rgba(139,108,255,.1);border:1.5px solid rgba(139,108,255,.25);border-radius:14px;padding:20px 12px;text-align:center;cursor:pointer;transition:background .15s,border .15s;}
 .nlog-option:active{background:rgba(139,108,255,.2);}
 .nlog-option-icon{font-size:28px;margin-bottom:6px;}
