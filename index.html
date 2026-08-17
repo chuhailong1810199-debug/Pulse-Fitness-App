@@ -705,6 +705,10 @@ async function switchClient(id) {
   await new Promise(r => setTimeout(r, 180));
 
   // ── Switch data ──
+  // Drop any pending debounced save — it would carry the OLD client's kg values
+  // and, before _ownKeysOnly() existed, wrote them into the new client's document.
+  clearTimeout(_saveLoadsFBTimer);
+
   activeClient = next;
   _historyCache = null; // clear cache for new client
   _nutritionData = null; _macroTargets = null; _macroMeta = null; // clear nutrition for new client
@@ -2224,6 +2228,20 @@ function _doneMapForActiveDay() {
   return out;
 }
 
+/**
+ * Keep only entries belonging to the client + day being saved.
+ * `setLoads` / `exerciseLoads` are module-level objects shared across clients, so a
+ * debounced save that fires just after a client switch used to write the PREVIOUS
+ * client's kg into the new client's document. That really happened: Nguyên's and
+ * Anh Đạo's loads ended up inside Sang's sessionLoads.
+ */
+function _ownKeysOnly(obj) {
+  const prefix = activeClient.id + '_' + activeDay + '_';
+  const out = {};
+  Object.keys(obj || {}).forEach(k => { if (k.startsWith(prefix)) out[k] = obj[k]; });
+  return out;
+}
+
 async function saveLoadsFB() {
   if (!activeClient || !activeDay || !_loadsHydrated) return;
   try {
@@ -2233,8 +2251,8 @@ async function saveLoadsFB() {
     await setDoc(
       doc(db, 'clients', activeClient.id, 'sessionLoads', activeDay),
       {
-        exerciseLoads: Object.keys(exerciseLoads).length > 0 ? exerciseLoads : {},
-        setLoads: Object.keys(setLoads).length > 0 ? setLoads : {},
+        exerciseLoads: _ownKeysOnly(exerciseLoads),
+        setLoads: _ownKeysOnly(setLoads),
         done: _doneMapForActiveDay(),
         updatedAt: serverTimestamp()
       }
