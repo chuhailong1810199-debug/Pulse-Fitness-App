@@ -1615,15 +1615,39 @@ const GEMINI_MODEL = "gemini-3.6-flash";
  * Run a Gemini Interactions call and convert SDK/API failures into readable
  * HttpsErrors. Without this, any thrown error surfaces in the app as "INTERNAL".
  */
-async function callGemini(apiKey, input, schema, label) {
-  const { GoogleGenAI } = require("@google/genai");
-  const client = new GoogleGenAI({ apiKey });
+async function callGemini(apiKey, input, schema, label, thinking) {
+  // require() and the constructor must live INSIDE the try. When they sat outside,
+  // a missing package or a bad key threw an unhandled error and the client only
+  // ever saw the generic "internal" — no way to tell what actually broke.
+  let client;
   try {
-    const interaction = await client.interactions.create({
+    if (!apiKey || typeof apiKey !== "string" || apiKey.length < 10) {
+      throw new HttpsError("failed-precondition",
+        "GEMINI_API_KEY chưa được cấu hình. Chạy: firebase functions:secrets:set GEMINI_API_KEY");
+    }
+    const { GoogleGenAI } = require("@google/genai");
+    client = new GoogleGenAI({ apiKey });
+  } catch (err) {
+    if (err instanceof HttpsError) throw err;
+    console.error(`[callGemini] init failed — ${err.code || ""} ${err.message}`);
+    if (String(err.code) === "MODULE_NOT_FOUND" || /cannot find module/i.test(err.message || "")) {
+      throw new HttpsError("failed-precondition",
+        "Thiếu package @google/genai trên server. Chạy: cd functions && npm install, rồi deploy lại.");
+    }
+    throw new HttpsError("internal", `Không khởi tạo được Gemini: ${err.message}`);
+  }
+
+  try {
+    const req = {
       model: GEMINI_MODEL,
       input,
       response_format: { type: "text", mime_type: "application/json", schema },
-    });
+    };
+    // Gemini 3 does extended reasoning by default. Reading a meal photo does not
+    // need it, and the thinking budget is what pushed this past the 60s function
+    // timeout — clients saw a bare "internal" after a full minute of waiting.
+    if (thinking) req.generation_config = { thinking_level: thinking };
+    const interaction = await client.interactions.create(req);
     return interaction.output_text;
   } catch (err) {
     const status = err.status || err.code || (err.error && err.error.code);
@@ -1645,6 +1669,12 @@ async function callGemini(apiKey, input, schema, label) {
     const MODEL = () => new HttpsError("failed-precondition",
       `Model "${GEMINI_MODEL}" is not available for this API key. The model may have been renamed, or the key lacks access.`);
 
+    // Gemini itself hung. Without this the client only ever saw "internal".
+    if (msg.includes("deadline") || msg.includes("timeout") || msg.includes("timed out") ||
+        status === 504 || err.code === "ETIMEDOUT" || err.name === "AbortError") {
+      throw new HttpsError("deadline-exceeded",
+        "Gemini phản hồi quá chậm. Thử lại, hoặc nhập tay bằng nút Manual.");
+    }
     if (status === 429) throw RATE();
     if (status === 503 || status === 500) throw BUSY();
     if (status === 401 || status === 403) throw KEY();
@@ -1686,8 +1716,11 @@ exports.analyzeMealPhoto = onCall(
   {
     secrets: [GEMINI_API_KEY],
     region: "asia-southeast1",
-    timeoutSeconds: 60,
-    memory: "256MiB",
+    // 60s was not enough: the function was killed mid-call and the client got a
+    // bare "internal" after exactly 60s. thinking_level "minimal" should bring
+    // this well under 15s; the wider budget is just a safety net.
+    timeoutSeconds: 120,
+    memory: "512MiB",
   },
   async (request) => {
     const { imageBase64, mimeType, userHint } = request.data || {};
@@ -1766,7 +1799,8 @@ Rules:
         { type: "image", data: imageBase64, mime_type: mimeType || "image/jpeg" },
       ],
       schema,
-      "meal photo"
+      "meal photo",
+      "minimal"          // identifying food needs recognition, not deliberation
     );
 
     const parsed = parseGeminiJson(outputText, "meal photo");
