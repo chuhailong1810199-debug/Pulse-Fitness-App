@@ -6053,13 +6053,18 @@ function renderYouthPage() {
         </div>
         <input class="yt-date" type="date" value="${_youthDate}" onchange="youthSetDate(this.value)">
       </div>
-      ${age == null ? `<div class="yt-warn">Add a date of birth in the client profile — age gating and the
-        maturity estimate both need it. Every test is shown until then.</div>` : ''}
+      ${youthMissing(age).length ? `<div class="yt-warn">
+        <b>Before the maturity estimate can be produced:</b> ${youthMissing(age).join(', ')}.
+        ${age == null ? 'Age gating is off until there is a date of birth, so the whole battery is shown.' : ''}
+        <button class="yt-warn-go" onclick="openClientProfile()">Open client profile</button>
+      </div>` : ''}
       ${mat ? `<div class="yt-mat">
           <span class="yt-mat-band yt-band-${mat.band.split('-')[0].toLowerCase()}">${mat.band}</span>
           <span>${mat.mo > 0 ? '+' : ''}${mat.mo} yrs from PHV · predicted peak at ${mat.aphv}</span>
           ${mat.reliable ? '' : '<span class="yt-mat-warn">outside 8–16y, treat as indicative</span>'}
-        </div>` : `<div class="yt-mat yt-mat-idle">Height, sitting height and weight give a maturity estimate.</div>`}
+        </div>` : `<div class="yt-mat yt-mat-idle">${youthMissing(age).length
+          ? 'Maturity estimate needs: ' + youthMissing(age).join(', ')
+          : 'Height, sitting height and weight give a maturity estimate.'}</div>`}
       <div class="yt-actions">
         <button class="yt-save" id="youth-save" onclick="saveYouthSession()">Save test session</button>
         <span class="yt-count" id="youth-count">${Object.keys(_youthDraft).length} recorded</span>
@@ -6096,6 +6101,21 @@ function renderYouthPage() {
   }
   html += `</div>`;
   wrap.innerHTML = html;
+}
+
+/**
+ * What is still missing before a maturity estimate is possible. Date of birth
+ * and sex live on the client profile and are easy to leave blank on a new
+ * athlete; without either, the estimate silently never appears, so name them.
+ */
+function youthMissing(age) {
+  const out = [];
+  if (age == null) out.push('date of birth');
+  if (!(_youthProfile && _youthProfile.gender)) out.push('sex');
+  ['height', 'sitting', 'weight'].forEach(id => {
+    if (!(youthDraftVal(id) > 0)) out.push(YOUTH_BY_ID[id].n.toLowerCase());
+  });
+  return out;
 }
 
 function youthDraftVal(id) {
@@ -10357,6 +10377,9 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .yt-sub{font-size:12px;color:rgba(255,255,255,.55);margin-top:2px;}
 .yt-date{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.16);border-radius:9px;color:#fff;padding:6px 8px;font-size:12px;}
 .yt-warn{margin-top:10px;font-size:12px;line-height:1.45;color:#ffd479;background:rgba(255,196,0,.09);border:1px solid rgba(255,196,0,.25);border-radius:10px;padding:8px 10px;}
+.yt-warn b{color:#ffe4a8;}
+.yt-warn-go{display:block;margin-top:8px;background:rgba(255,196,0,.14);border:1px solid rgba(255,196,0,.4);
+  border-radius:8px;color:#ffd479;font-size:11px;font-weight:700;padding:6px 12px;cursor:pointer;}
 .yt-mat{margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:rgba(255,255,255,.7);}
 .yt-mat-idle{color:rgba(255,255,255,.4);}
 .yt-mat-band{padding:2px 9px;border-radius:7px;font-size:10px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;}
