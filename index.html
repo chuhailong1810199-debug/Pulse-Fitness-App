@@ -105,6 +105,7 @@ let exerciseLoads = {};
 let setLoads = {}; // exerciseKey → [kg_set1, kg_set2, ...]
 let _saveLoadsFBTimer = null;
 let _loadsHydrated = false; // guard: prevent saving empty data before hydration completes
+let _clientBodyweight = null;     // latest known kg for the active client, from checkpoints
 let strengthHistory  = {};        // positional exerciseKey → [{date, kg}] — legacy fallback only
 let strengthByName   = {};        // normalised exercise name → [{date, kg}] — the real index
 let strengthPosOk    = new Set(); // positions no name can claim (unnamed / ambiguous docs)
@@ -639,7 +640,8 @@ async function loadApp() {
   // ── Parallel fetch: loads + strength history run simultaneously ──
   await Promise.all([
     hydrateExerciseLoadsForActiveDay(),
-    loadStrengthHistory()
+    loadStrengthHistory(),
+    loadClientBodyweight()
   ]);
   renderExercises();
   initDaySwipe();
@@ -727,6 +729,7 @@ async function switchClient(id) {
   renderDayTabs(); // render tabs with correct day before hydration
   await hydrateExerciseLoadsForActiveDay(); // hydrate first, then subscribe to avoid snapshot race
   await loadStrengthHistory();
+  await loadClientBodyweight();             // before render: the +kg inputs need it
   renderExercises();
   subscribeProgram(); // subscribe AFTER hydration so initial snapshot doesn't clear exerciseLoads
   await renderStats();
@@ -1208,6 +1211,39 @@ async function resetAssessment() {
   openBaselineScreen();
 }
 
+/**
+ * Bodyweight for the active client, newest checkpoint first, falling back to the
+ * baseline assessment. Bodyweight exercises are logged as "+kg added" and this
+ * is what turns that into a real load, so it has to be loaded before the day is
+ * rendered.
+ */
+async function loadClientBodyweight() {
+  _clientBodyweight = null;
+  if (!activeClient) return;
+  try {
+    const snap = await getDocs(query(
+      collection(db, 'clients', activeClient.id, 'checkpoints'),
+      orderBy('date', 'desc'), limit(1)
+    ));
+    const w = parseFloat(snap.docs[0] && snap.docs[0].data().weight);
+    if (Number.isFinite(w) && w > 0) { _clientBodyweight = w; return; }
+  } catch (_e) {}
+  try {
+    const base = await getDoc(doc(db, 'clients', activeClient.id, 'assessment', 'baseline'));
+    const w = parseFloat(base.exists && base.data().weight);
+    if (Number.isFinite(w) && w > 0) _clientBodyweight = w;
+  } catch (_e) {}
+}
+
+/** True when the program row behind a positional key is a bodyweight movement. */
+function isBodyweightKey(key) {
+  const m = String(key || '').match(/_(\d+)_(\d+)$/);
+  if (!m) return false;
+  const day = getProgram()[activeDay];
+  const ex = day && day.phases && day.phases[+m[1]] && day.phases[+m[1]].exercises[+m[2]];
+  return !!(ex && ex.bw);
+}
+
 // ── CHECKPOINTS (Firestore) ────────────────────────────
 async function getCPs() {
   if (!activeClient) return [];
@@ -1382,12 +1418,27 @@ async function finishWorkout() {
       const single = str.match(/(\d+)/);
       return { sets: parseInt(single?.[1] || 1), reps: 1 };
     }
+    /**
+     * A bodyweight row that was ticked but never typed still moved the athlete's
+     * own weight. Without this it is dropped by the load > 0 guard below and
+     * gets no history at all — which is why bodyweight had to be typed into the
+     * kg box by hand in the first place.
+     */
+    const perSetFor = (ex, exerciseKey) => {
+      const typed = (setLoads[exerciseKey] || []).filter(v => Number.isFinite(v) && v > 0);
+      if (typed.length > 0 || !ex.bw || !(_clientBodyweight > 0)) return typed;
+      const ticked = (exerciseState[activeClient.id] || {})[exerciseKey];
+      if (!ticked) return typed;
+      const { sets } = parseSetsReps(ex.setsReps);
+      return Array(Math.max(1, sets)).fill(_clientBodyweight);
+    };
+
     let totalVolume = 0;
     if (day) {
       day.phases.forEach((phase, pi) => {
         phase.exercises.forEach((ex, ei) => {
           const exerciseKey = activeClient.id + '_' + activeDay + '_' + pi + '_' + ei;
-          const perSet = (setLoads[exerciseKey] || []).filter(v => Number.isFinite(v) && v > 0);
+          const perSet = perSetFor(ex, exerciseKey);
           const { sets, reps } = parseSetsReps(ex.setsReps);
           if (perSet.length > 0) {
             totalVolume += perSet.reduce((s, kg) => s + kg * reps, 0);
@@ -1410,7 +1461,7 @@ async function finishWorkout() {
       day.phases.forEach((phase, pi) => {
         phase.exercises.forEach((ex, ei) => {
           const exerciseKey = activeClient.id + '_' + activeDay + '_' + pi + '_' + ei;
-          const perSet = (setLoads[exerciseKey] || []).filter(v => Number.isFinite(v) && v > 0);
+          const perSet = perSetFor(ex, exerciseKey);
           const loadKg = perSet.length > 0 ? Math.max(...perSet) : parseFloat(exerciseLoads[exerciseKey]);
           if (!Number.isFinite(loadKg) || loadKg <= 0) return;
           const { sets, reps } = parseSetsReps(ex.setsReps);
@@ -1418,7 +1469,9 @@ async function finishWorkout() {
             ? Math.round(perSet.reduce((s, kg) => s + kg * reps, 0))
             : Math.round(sets * reps * loadKg);
           const exerciseRef = doc(db, 'clients', activeClient.id, 'workoutHistory', sessionRef.id, 'exercises', exerciseKey);
-          batch.set(exerciseRef, { exerciseKey, loadKg, exerciseName: ex.name || '', day: activeDay, sets, reps, tonnage, setLoads: perSet });
+          batch.set(exerciseRef, { exerciseKey, loadKg, exerciseName: ex.name || '', day: activeDay, sets, reps, tonnage, setLoads: perSet,
+            ...(ex.bw ? { isBodyweight: true, bodyweightKg: _clientBodyweight || null,
+                          addedKg: _clientBodyweight > 0 ? +(loadKg - _clientBodyweight).toFixed(2) : null } : {}) });
           writeCount++;
         });
       });
@@ -2033,7 +2086,9 @@ function saveExerciseLoadsToLocal() {
 }
 
 function setExerciseLoad(exerciseKey, rawValue) {
-  const val = parseFloat(rawValue);
+  let val = parseFloat(rawValue);
+  const bw = isBodyweightKey(exerciseKey) && _clientBodyweight > 0 ? _clientBodyweight : 0;
+  if (bw) val = bw + (Number.isFinite(val) ? val : (String(rawValue).trim() === '' ? 0 : NaN));
   if (!Number.isFinite(val) || val <= 0) {
     delete exerciseLoads[exerciseKey];
   } else {
@@ -2045,7 +2100,12 @@ function setExerciseLoad(exerciseKey, rawValue) {
 
 function getExerciseLoadValue(exerciseKey) {
   const val = exerciseLoads[exerciseKey];
-  return Number.isFinite(val) ? String(val) : '';
+  if (!Number.isFinite(val)) return '';
+  if (isBodyweightKey(exerciseKey) && _clientBodyweight > 0) {
+    const added = +(val - _clientBodyweight).toFixed(2);
+    return added === 0 ? '0' : String(added);
+  }
+  return String(val);
 }
 
 // ── PER-SET LOAD STORAGE ─────────────────────────────────
@@ -2056,12 +2116,28 @@ function saveSetLoadsToLocal() {
   const k = getSetLoadStorageKey();
   if (k) localStorage.setItem(k, JSON.stringify(setLoads));
 }
+/**
+ * Bodyweight rows are typed as the weight ADDED to the athlete (negative for a
+ * band that takes weight off), but stored as the load actually moved, so that
+ * history, volume, the export and the sparkline all keep reading one number
+ * that means the same thing everywhere.
+ */
 function getSetLoad(key, si) {
   const v = (setLoads[key] || [])[si];
-  return Number.isFinite(v) && v > 0 ? String(v) : '';
+  if (!(Number.isFinite(v) && v > 0)) return '';
+  if (isBodyweightKey(key) && _clientBodyweight > 0) {
+    const added = +(v - _clientBodyweight).toFixed(2);
+    return added === 0 ? '0' : String(added);
+  }
+  return String(v);
 }
 function setSetLoad(key, si, rawValue) {
-  const val = parseFloat(rawValue);
+  let val = parseFloat(rawValue);
+  const bw = isBodyweightKey(key) && _clientBodyweight > 0 ? _clientBodyweight : 0;
+  if (bw) {
+    // blank means "nothing added", not "not logged" — the athlete still moved bw
+    val = bw + (Number.isFinite(val) ? val : (String(rawValue).trim() === '' ? 0 : NaN));
+  }
   if (!setLoads[key]) setLoads[key] = [];
   setLoads[key][si] = Number.isFinite(val) && val > 0 ? val : null;
   // keep exerciseLoads in sync (max of all sets, for backward-compat)
@@ -2657,7 +2733,7 @@ function renderExercises() {
             <span class="node-num">${String(ei+1).padStart(2,'0')}</span>
             <div class="node-title" onclick="openModal(${pi},${ei})">
               <div class="node-name${done?' done':''}">${ex.name}</div>
-              <div class="node-sets">${ex.setsReps}${ex.tempo?' · '+ex.tempo:''}${getStrengthBadge(key, ex.name)}</div>
+              <div class="node-sets">${ex.setsReps}${ex.tempo?' · '+ex.tempo:''}${ex.bw?`<span class="bw-chip" title="Loads are entered as weight added to bodyweight">BW ${_clientBodyweight>0?_clientBodyweight+'kg':'—'}</span>`:''}${getStrengthBadge(key, ex.name)}</div>
             </div>
             <div class="node-check${done?' done':''}" onclick="event.stopPropagation();toggleExercise('${key}')">${done?'✓':''}</div>
           </div>
@@ -2665,7 +2741,7 @@ function renderExercises() {
             ${Array.from({length: parseSetsCount(ex.setsReps)}, (_,si) => `
               <label class="set-load-row">
                 <span class="set-load-label">S${si+1}</span>
-                <input class="set-load-input" type="number" min="0" step="0.5" placeholder="—"
+                <input class="set-load-input${ex.bw?' set-load-bw':''}" type="number" ${ex.bw?'':'min="0" '}step="0.5" placeholder="${ex.bw?'+0':'—'}"
                   value="${getSetLoad(key,si)}" oninput="setSetLoad('${key}',${si},this.value)">
               </label>`).join('')}
             <button class="node-info" onclick="openModal(${pi},${ei})" aria-label="Chi tiết, tempo, video">i</button>
@@ -3260,6 +3336,8 @@ function openModal(pi, ei) {
   // Reset to view state — edit/delete available to all users
   document.getElementById('modal-setsreps-row').style.display  = '';
   document.getElementById('modal-setsreps-edit').style.display = 'none';
+  const bwBox = document.getElementById('modal-bw');
+  if (bwBox) bwBox.checked = !!(ex && ex.bw);
   const sparkWrap = document.getElementById('modal-strength-history');
   if (sparkWrap) {
     const day   = getProgram()[activeDay];
@@ -3285,6 +3363,21 @@ function startEditSetsReps() {
   document.getElementById('modal-setsreps-row').style.display  = 'none';
   document.getElementById('modal-setsreps-edit').style.display = '';
   document.getElementById('modal-setsreps-input').focus();
+}
+
+async function saveModalBodyweight(on) {
+  const modalEl = document.getElementById('modal');
+  const pi = parseInt(modalEl.dataset.pi), ei = parseInt(modalEl.dataset.ei);
+  const ex = getOrCreateProgram()[activeDay].phases[pi].exercises[ei];
+  if (!ex) return;
+  if (on) ex.bw = true; else delete ex.bw;
+  // Stored loads are absolute, so what the inputs *mean* just changed. Drop this
+  // exercise's typed values rather than silently reinterpreting them as +kg.
+  const key = activeClient.id + '_' + activeDay + '_' + pi + '_' + ei;
+  delete setLoads[key]; delete exerciseLoads[key];
+  saveSetLoadsToLocal(); saveExerciseLoadsToLocal(); scheduleSaveLoadsFB();
+  await saveProgramToFirestore();
+  renderExercises();
 }
 
 async function saveModalSetsReps() {
@@ -6900,6 +6993,12 @@ body.reordering .phase-exercises-wrap{min-height:46px;border-radius:14px;transit
 .str-modal-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:rgba(255,255,255,0.40);margin-bottom:10px;}
 .str-sparkline-wrap{margin-bottom:10px;}
 .str-spark-labels{display:flex;justify-content:space-between;font-size:11px;color:rgba(255,255,255,0.45);margin-top:4px;}
+.bw-chip{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:6px;font-size:9px;font-weight:800;letter-spacing:.4px;
+  background:rgba(118,101,255,.16);border:1px solid rgba(118,101,255,.4);color:#b9aaff;vertical-align:middle;}
+.set-load-input.set-load-bw{border-color:rgba(118,101,255,.45);}
+.modal-bw-toggle{display:flex;gap:9px;align-items:flex-start;margin:10px 0 4px;font-size:12px;line-height:1.4;color:rgba(255,255,255,0.72);cursor:pointer;}
+.modal-bw-toggle input{margin-top:2px;flex-shrink:0;width:16px;height:16px;accent-color:#7665ff;}
+.modal-bw-toggle b{color:#9b8dff;font-weight:700;}
 .str-spark-hint{font-size:9px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;color:rgba(255,255,255,0.32);}
 .str-hist-list{display:flex;flex-direction:column;gap:4px;}
 .str-hist-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.06);}
@@ -8452,6 +8551,10 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
             <input class="modal-input" id="modal-setsreps-input" placeholder="e.g. 4 × 8" onkeydown="if(event.key==='Enter')saveModalSetsReps()">
             <button class="modal-save-btn" onclick="saveModalSetsReps()">Save</button>
           </div>
+          <label class="modal-bw-toggle">
+            <input type="checkbox" id="modal-bw" onchange="saveModalBodyweight(this.checked)">
+            <span>Bodyweight exercise — log <b>+kg added</b> instead of total (negative for band assistance)</span>
+          </label>
           <button class="modal-delete-btn" onclick="deleteExerciseFromModal()">🗑 Delete this exercise</button>
         </div>
       </div>
