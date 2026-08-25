@@ -2160,8 +2160,8 @@ async function hydrateExerciseLoadsForActiveDay() {
     ));
     if (!exSnap.docs.length) return;
 
-    const restored = {}, restoredSets = {};
     const OLD_DAY_NAMES = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+    const rows = [];
     exSnap.forEach(d => {
       const data = d.data() || {};
       let key = data.exerciseKey || d.id;
@@ -2175,12 +2175,44 @@ async function hydrateExerciseLoadsForActiveDay() {
         }
       }
       const load = parseFloat(data.loadKg);
-      if (Number.isFinite(load) && load > 0) restored[key] = load;
-      if (Array.isArray(data.setLoads) && data.setLoads.length > 0) restoredSets[key] = data.setLoads;
+      const sets = Array.isArray(data.setLoads) && data.setLoads.length > 0 ? data.setLoads : null;
+      if (!(Number.isFinite(load) && load > 0) && !sets) return;
+      const m = key.match(/_(\d+)_(\d+)$/);
+      rows.push({
+        key, pi: m ? +m[1] : 0, ei: m ? +m[2] : 0,
+        n: _exNameKey(data.exerciseName),
+        rec: { load: Number.isFinite(load) && load > 0 ? load : null, sets }
+      });
     });
-    // Only overwrite if sessionLoads didn't already have this key
-    Object.keys(restored).forEach(k => { if (!exerciseLoads[k]) exerciseLoads[k] = restored[k]; });
-    Object.keys(restoredSets).forEach(k => { if (!setLoads[k]) setLoads[k] = restoredSets[k]; });
+
+    // Index last session by name. Sorting by the logged position first gives
+    // duplicate names the same ordinals _stateIdsForDay() will ask for.
+    rows.sort((a, b) => a.pi - b.pi || a.ei - b.ei);
+    const byId = {}, byPos = {}, named = new Set(), seen = {};
+    rows.forEach(r => {
+      byPos[r.key] = r.rec;
+      if (!r.n) return;
+      seen[r.n] = (seen[r.n] || 0) + 1;
+      byId[r.n + '#' + seen[r.n]] = r.rec;
+      named.add(r.key);
+    });
+
+    // Prefill each row of the CURRENT program by name, so last session's weight
+    // follows its exercise across reorders instead of staying on the slot.
+    // The logged position is consulted only for rows written before
+    // exerciseName existed — there is nothing else to identify those by.
+    const idOf = {};
+    _stateIdsForDay().forEach(({ id, key }) => { idOf[key] = id; });
+    const dayNow = getProgram()[activeDay];
+    ((dayNow && dayNow.phases) || []).forEach((p, pi) => (p.exercises || []).forEach((e, ei) => {
+      const key = activeClient.id + '_' + activeDay + '_' + pi + '_' + ei;
+      const id  = idOf[key];
+      const rec = (id && byId[id]) || (!named.has(key) ? byPos[key] : null);
+      if (!rec) return;
+      // Only fill gaps — anything already typed or synced this session wins.
+      if (rec.load != null && !exerciseLoads[key]) exerciseLoads[key] = rec.load;
+      if (rec.sets && !setLoads[key]) setLoads[key] = rec.sets;
+    }));
     saveExerciseLoadsToLocal();
     saveSetLoadsToLocal();
   } catch (_e) {}
@@ -2837,19 +2869,25 @@ async function confirmMove(key, fromPi, ei) {
   const toPi = parseInt(document.getElementById('movesel_'+key).value);
   if (toPi === fromPi) return;
   const prog = getOrCreateProgram();
+  const snap = _snapshotDayStateByName();
   const ex = prog[activeDay].phases[fromPi].exercises.splice(ei, 1)[0];
   prog[activeDay].phases[toPi].exercises.push(ex);
+  _reseatDayStateByName(snap);
   await saveProgramToFirestore();
   renderExercises();
 }
 async function deleteExercise(pi, ei) {
   if (!confirm('Delete this exercise?')) return;
+  const snap = _snapshotDayStateByName();
   getOrCreateProgram()[activeDay].phases[pi].exercises.splice(ei, 1);
+  _reseatDayStateByName(snap);
   await saveProgramToFirestore(); renderExercises();
 }
 async function deletePhase(pi) {
   if (!confirm('Delete this phase?')) return;
+  const snap = _snapshotDayStateByName();
   getOrCreateProgram()[activeDay].phases.splice(pi, 1);
+  _reseatDayStateByName(snap);
   await saveProgramToFirestore(); renderExercises();
 }
 
@@ -2896,39 +2934,56 @@ function lpMove(event) {
 let _drag = null;
 
 /**
- * Session state is keyed by position (clientId_day_phaseIdx_exIdx), so moving a
- * row has to carry its keys along or the done ticks and typed kg stay behind on
- * whatever exercise slides into that slot. Same defect class as the Excel
- * export's old positional history matching.
+ * Live session state (done ticks, typed kg) is stored under a positional key,
+ * because two rows can carry the same exercise name and each still needs its
+ * own input. Position is only ever the seat, though — ownership is decided by
+ * name. Any edit that moves rows around therefore snapshots the state by name
+ * first and re-seats it afterwards, so a value follows its exercise instead of
+ * staying behind on the slot.
  *
- * MUST be called before the exercises arrays are spliced — it reads the
- * pre-move lengths to know which trailing rows shift.
+ * Snapshot BEFORE mutating the program, re-seat AFTER. Identical names in one
+ * day are told apart by their order of appearance, which is all that is left to
+ * distinguish them.
  */
-function _moveStateKeys(fromPi, fromEi, toPi, toEi) {
-  const B = pi => activeClient.id + '_' + activeDay + '_' + pi + '_';
-  const phases = getOrCreateProgram()[activeDay].phases;
-  const pairs = [];                                   // [oldKey, newKey]
+function _stateIdsForDay() {
+  const day = getProgram()[activeDay], seen = {}, out = [];
+  (day && day.phases || []).forEach((p, pi) => (p.exercises || []).forEach((e, ei) => {
+    const n = _exNameKey(e.name);
+    if (!n) return;                                   // unnamed row: nothing to track it by
+    seen[n] = (seen[n] || 0) + 1;
+    out.push({ id: n + '#' + seen[n], key: activeClient.id + '_' + activeDay + '_' + pi + '_' + ei });
+  }));
+  return out;
+}
 
-  if (fromPi === toPi) {
-    pairs.push([B(fromPi) + fromEi, B(toPi) + toEi]);
-    if (fromEi < toEi) for (let i = fromEi + 1; i <= toEi; i++) pairs.push([B(fromPi) + i, B(fromPi) + (i - 1)]);
-    else               for (let i = toEi; i < fromEi; i++)      pairs.push([B(fromPi) + i, B(fromPi) + (i + 1)]);
-  } else {
-    pairs.push([B(fromPi) + fromEi, B(toPi) + toEi]);
-    // source closes up behind the row that left...
-    for (let i = fromEi + 1; i < phases[fromPi].exercises.length; i++) pairs.push([B(fromPi) + i, B(fromPi) + (i - 1)]);
-    // ...target opens up to receive it
-    for (let i = phases[toPi].exercises.length - 1; i >= toEi; i--)    pairs.push([B(toPi) + i, B(toPi) + (i + 1)]);
-  }
-
-  if (!exerciseState[activeClient.id]) exerciseState[activeClient.id] = {};
-  [exerciseState[activeClient.id], setLoads, exerciseLoads].forEach(store => {
-    const held = {};
-    for (const [ok] of pairs) if (ok in store) { held[ok] = store[ok]; delete store[ok]; }
-    for (const [ok, nk] of pairs) if (ok in held) store[nk] = held[ok];   // write only after every delete
+function _snapshotDayStateByName() {
+  const done = exerciseState[activeClient.id] || {};
+  const snap = {};
+  _stateIdsForDay().forEach(({ id, key }) => {
+    snap[id] = { load: exerciseLoads[key], sets: setLoads[key], done: !!done[key] };
   });
-  saveSetLoadsToLocal();
+  return snap;
+}
+
+function _reseatDayStateByName(snap) {
+  const cid = activeClient.id;
+  const mine = k => k.indexOf(cid + '_' + activeDay + '_') === 0;
+  const done = exerciseState[cid] = exerciseState[cid] || {};
+  // Clear only this client+day, then rebuild it; other days and clients are
+  // untouched, which is what keeps one client's loads off another's rows.
+  Object.keys(exerciseLoads).forEach(k => { if (mine(k)) delete exerciseLoads[k]; });
+  Object.keys(setLoads).forEach(k => { if (mine(k)) delete setLoads[k]; });
+  Object.keys(done).forEach(k => { if (mine(k)) delete done[k]; });
+
+  _stateIdsForDay().forEach(({ id, key }) => {
+    const rec = snap[id];
+    if (!rec) return;                                 // new or renamed row: starts empty
+    if (Number.isFinite(rec.load)) exerciseLoads[key] = rec.load;
+    if (Array.isArray(rec.sets) && rec.sets.length) setLoads[key] = rec.sets;
+    if (rec.done) done[key] = true;
+  });
   saveExerciseLoadsToLocal();
+  saveSetLoadsToLocal();
   scheduleSaveLoadsFB();
 }
 
@@ -3056,8 +3111,9 @@ async function dragEnd() {
 
   if (d.toPi === d.pi && d.to === d.from) return;
   const phases = getOrCreateProgram()[activeDay].phases;
-  _moveStateKeys(d.pi, d.from, d.toPi, d.to);          // before the splices — reads pre-move lengths
+  const snap = _snapshotDayStateByName();
   phases[d.toPi].exercises.splice(d.to, 0, phases[d.pi].exercises.splice(d.from, 1)[0]);
+  _reseatDayStateByName(snap);
   renderExercises();                                   // repaint now; the write below is async
   try {
     await saveProgramToFirestore();
@@ -3246,7 +3302,9 @@ async function deleteExerciseFromModal() {
   if (!confirm('Delete "' + name + '"?')) return;
   const modalEl = document.getElementById('modal');
   const pi = parseInt(modalEl.dataset.pi), ei = parseInt(modalEl.dataset.ei);
+  const snap = _snapshotDayStateByName();
   getOrCreateProgram()[activeDay].phases[pi].exercises.splice(ei, 1);
+  _reseatDayStateByName(snap);
   await saveProgramToFirestore();
   closeModal('modal');
   renderExercises();
