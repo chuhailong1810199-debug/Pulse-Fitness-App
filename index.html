@@ -6013,6 +6013,8 @@ async function saveYouthSession() {
     await setDoc(doc(db, 'clients', activeClient.id, 'youthTests', _youthDate), rec, { merge: true });
     _youthDraft = {};
     await loadYouthData();
+    // An emptied form is indistinguishable from a lost one. Show what was saved.
+    openYouthReport(_youthDate);
   } catch (e) {
     console.error('[saveYouthSession]', e);
     alert('Could not save the test session: ' + (e.message || 'unknown error'));
@@ -6073,6 +6075,26 @@ function renderYouthPage() {
     html += `</div>`;
   });
   if (hidden > 0) html += `<div class="yt-hidden">${hidden} test${hidden > 1 ? 's' : ''} hidden — minimum age not reached</div>`;
+
+  html += `<div class="yt-cat"><div class="yt-cat-name">Previous screens<span>${_youthSessions.length}</span></div>`;
+  if (!_youthSessions.length) {
+    html += `<div class="yt-empty">No screen recorded yet. The first one becomes the baseline —
+      trends, growth velocity and comparisons all start from it.</div>`;
+  } else {
+    _youthSessions.forEach((ss, i) => {
+      const n = Object.keys(ss.results || {}).length;
+      const v = youthGrowthVelocity(_youthSessions[i + 1], ss);
+      html += `<div class="yt-hist" onclick="openYouthReport('${ss.dateKey}')">
+        <div><div class="yt-hist-date">${ss.dateKey}${i === 0 ? '<span class="yt-latest">latest</span>' : ''}</div>
+          <div class="yt-hist-meta">${n} test${n === 1 ? '' : 's'}${
+            ss.ageYears != null ? ' · ' + ss.ageYears.toFixed(1) + ' yrs' : ''}${
+            ss.maturity ? ' · ' + ss.maturity.band : ''}${
+            v != null ? ' · ' + v + ' cm/yr' : ''}</div></div>
+        <span class="yt-hist-go">Report →</span>
+      </div>`;
+    });
+  }
+  html += `</div>`;
   wrap.innerHTML = html;
 }
 
@@ -6129,10 +6151,11 @@ function youthTrend(t, cur, prev) {
   return { diff, dir: better ? 'up' : 'down' };
 }
 
-function openYouthReport() {
-  const s = _youthSessions[0];
+function openYouthReport(dateKey) {
+  const i = dateKey ? _youthSessions.findIndex(x => x.dateKey === dateKey) : 0;
+  const s = _youthSessions[i < 0 ? 0 : i];
   if (!s) return;
-  const prev = _youthSessions[1] || null;
+  const prev = _youthSessions[(i < 0 ? 0 : i) + 1] || null;   // the one before it in time
   const age = s.ageYears, mat = s.maturity, der = youthDerived(s);
   const vel = youthGrowthVelocity(prev, s);
 
@@ -6192,6 +6215,8 @@ function openYouthReport() {
       <thead><tr><th>Test</th><th>This time</th><th>Last time</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
+    ${prev ? '' : `<div class="yr-first">First screen on record — these numbers become the baseline
+      everything later is measured against. Nothing to compare yet.</div>`}
     <div class="yr-foot">Arrows show change since the previous screen. For sprints and reaction time a lower
     number is better, and the arrow already accounts for that.</div>`;
   document.getElementById('youth-report').classList.add('open');
@@ -10251,6 +10276,18 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .yt-asym-ok{color:rgba(126,224,168,.85);}
 .yt-asym-watch{color:#ffd479;}
 .yt-asym-high{color:#ff8080;}
+.yt-hist{display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer;
+  background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:11px;padding:10px 12px;margin-bottom:7px;}
+.yt-hist:hover{border-color:rgba(118,101,255,.5);background:rgba(118,101,255,.08);}
+.yt-hist-date{font-size:13px;font-weight:700;color:#fff;display:flex;align-items:center;gap:7px;}
+.yt-latest{font-size:8.5px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:#9b8dff;
+  background:rgba(118,101,255,.16);border:1px solid rgba(118,101,255,.35);border-radius:5px;padding:1px 5px;}
+.yt-hist-meta{font-size:10.5px;color:rgba(255,255,255,.42);margin-top:2px;}
+.yt-hist-go{font-size:11px;font-weight:700;color:#9b8dff;white-space:nowrap;}
+.yt-empty{font-size:12px;line-height:1.5;color:rgba(255,255,255,.4);background:rgba(255,255,255,.03);
+  border:1px dashed rgba(255,255,255,.14);border-radius:11px;padding:12px;}
+.yr-first{margin-top:12px;font-size:12px;line-height:1.5;color:#9b8dff;background:rgba(118,101,255,.09);
+  border:1px solid rgba(118,101,255,.25);border-radius:10px;padding:10px 12px;}
 .yt-hidden{font-size:11px;color:rgba(255,255,255,.3);text-align:center;padding:10px 0 4px;}
 /* report */
 #youth-report{position:fixed;inset:0;background:rgba(6,6,12,.9);z-index:220;display:none;overflow-y:auto;padding:16px;}
