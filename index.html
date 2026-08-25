@@ -5936,7 +5936,13 @@ function youthMaturity(o) {
     : -9.376 + 0.0001882 * (leg * sitting) + 0.0022 * (age * leg)
       + 0.005841 * (age * sitting) - 0.002658 * (age * weight)
       + 0.07693 * (weight / height * 100);
-  return { mo: +mo.toFixed(2), aphv: +(age - mo).toFixed(2),
+  // Mirwald reports a standard error of 0.59y (boys) / 0.57y (girls). Printing
+  // an APHV to two decimals implies a precision the equation does not have, so
+  // the band is carried with the estimate and shown wherever it is shown.
+  const se = male ? 0.59 : 0.57;
+  const aphv = age - mo;
+  return { mo: +mo.toFixed(2), aphv: +aphv.toFixed(1), se,
+           aphvLo: +(aphv - se).toFixed(1), aphvHi: +(aphv + se).toFixed(1),
            band: mo < -1 ? 'Pre-PHV' : mo > 1 ? 'Post-PHV' : 'Circa-PHV',
            reliable: age >= 8 && age <= 16 };
 }
@@ -6084,7 +6090,7 @@ function renderYouthPage() {
       </div>` : ''}
       ${mat ? `<div class="yt-mat">
           <span class="yt-mat-band yt-band-${mat.band.split('-')[0].toLowerCase()}">${mat.band}</span>
-          <span>${mat.mo > 0 ? '+' : ''}${mat.mo} yrs from PHV · predicted peak at ${mat.aphv}</span>
+          <span>${mat.mo > 0 ? '+' : ''}${mat.mo} yrs from PHV · peak around ${mat.aphvLo}–${mat.aphvHi}</span>
           ${mat.reliable ? '' : '<span class="yt-mat-warn">outside 8–16y, treat as indicative</span>'}
         </div>` : `<div class="yt-mat yt-mat-idle">${youthMissing(age).length
           ? 'Maturity estimate needs: ' + youthMissing(age).join(', ')
@@ -6330,11 +6336,14 @@ function openYouthReport(dateKey) {
     ${mat ? `<div class="yr-card">
       <div class="yr-card-t">Growth &amp; maturity</div>
       <p><b>${mat.band}</b> — about <b>${Math.abs(mat.mo)} year${Math.abs(mat.mo) === 1 ? '' : 's'}
-      ${mat.mo < 0 ? 'before' : 'after'}</b> the fastest growing period, which is predicted around age
-      <b>${mat.aphv}</b>.</p>
+      ${mat.mo < 0 ? 'before' : 'after'}</b> the fastest growing period, which is predicted to fall
+      somewhere around <b>age ${mat.aphvLo} to ${mat.aphvHi}</b>.</p>
       <p class="yr-note">Children of the same age mature at very different rates. This estimate helps decide
       what to train now — it is not a measure of ability, and it says nothing about eventual height.
-      ${mat.reliable ? '' : ' Outside the 8–16 age range the estimate is indicative only.'}</p>
+      It comes from the Mirwald (2002) anthropometric equations, which carry a standard error of about
+      ${mat.se} of a year, so the range above matters more than any single number. The method is also known
+      to lose accuracy for children maturing unusually early or late.
+      ${mat.reliable ? '' : ' Outside the 8–16 age range it is indicative only.'}</p>
       ${vel != null ? `<p>Currently growing about <b>${vel} cm per year</b>.</p>` : ''}
       ${der.bmi ? `<p>BMI ${der.bmi}${der.spanRatio ? ` · arm span ${der.spanRatio}× height` : ''}</p>` : ''}
     </div>` : ''}
