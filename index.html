@@ -4496,6 +4496,7 @@ function showPage(page) {
   document.getElementById('log-page').classList.toggle('active', page === 'log');
   document.getElementById('schedule-page').classList.toggle('active', page === 'schedule');
   document.getElementById('nutrition-page').classList.toggle('active', page === 'nutrition');
+  document.getElementById('youth-page').classList.toggle('active', page === 'youth');
   if (page === 'progress') {
     ensureChartJS().then(() => {
       checkCheckpointReminder();
@@ -4507,6 +4508,9 @@ function showPage(page) {
   }
   if (page === 'nutrition') {
     loadNutritionData();
+  }
+  if (page === 'youth') {
+    loadYouthData();
   }
   if (page === 'log') {
     renderWorkoutLog();
@@ -5828,6 +5832,372 @@ function escHtml(str) {
 // ── CLIENT PROFILE & ASSESSMENT (FTN-13) ───────────────
 let _cpMeasurements = []; // in-memory list for current session
 let _cpWeightChart = null;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// YOUTH DEVELOPMENT TEST BATTERY
+// 32 tests over 9 categories. Every test is age-gated, so an 8-year-old is
+// never shown a force-plate pull. Growth reuses the client's own dob/gender
+// from their profile, which is what makes the maturity estimate possible.
+// ═══════════════════════════════════════════════════════════════════════════
+const YOUTH_TESTS = [
+ {c:'Growth',id:'height',n:'Height',u:'cm',k:'num',min:0,eq:'Stadiometer',s:'Growth velocity'},
+ {c:'Growth',id:'weight',n:'Body Weight',u:'kg',k:'num',min:0,eq:'Scale',s:'BMI'},
+ {c:'Growth',id:'sitting',n:'Sitting Height',u:'cm',k:'num',min:8,eq:'Stadiometer/box',s:'Maturation'},
+ {c:'Growth',id:'armspan',n:'Arm Span',u:'cm',k:'num',min:0,eq:'Tape',s:'Arm span / height'},
+ {c:'Movement',id:'squat',n:'Squat',u:'',k:'score',min:0,eq:'Bodyweight',s:'Mobility / control'},
+ {c:'Movement',id:'hinge',n:'Hinge',u:'',k:'score',min:0,eq:'Bodyweight',s:'Control'},
+ {c:'Movement',id:'lunge',n:'Lunge',u:'',k:'score',min:0,eq:'Bodyweight',s:'L/R difference',lr:1},
+ {c:'Movement',id:'slsquat',n:'Single-Leg Squat',u:'',k:'score',min:10,eq:'Bodyweight',s:'L/R difference',lr:1},
+ {c:'Movement',id:'landing',n:'Landing',u:'',k:'score',min:8,eq:'Box',s:'L/R difference',lr:1},
+ {c:'Mobility',id:'ankle',n:'Ankle Dorsiflexion',u:'cm',k:'lr',min:0,eq:'Knee-to-wall',s:'L/R difference'},
+ {c:'Mobility',id:'hiprot',n:'Hip Rotation',u:'°',k:'lr',min:10,eq:'Goniometer',s:'L/R difference'},
+ {c:'Mobility',id:'shflex',n:'Shoulder Flexion',u:'°',k:'lr',min:10,eq:'Goniometer',s:'L/R difference'},
+ {c:'Mobility',id:'tspine',n:'T-Spine Rotation',u:'°',k:'lr',min:10,eq:'Measurement app',s:'L/R difference'},
+ {c:'Strength',id:'pushup',n:'Push-Up',u:'reps',k:'num',min:8,eq:'None',s:'Technique score'},
+ {c:'Strength',id:'pullup',n:'Pull-Up',u:'reps',k:'num',min:10,eq:'Bar',s:'Relative strength'},
+ {c:'Strength',id:'splitsq',n:'Split Squat',u:'reps',k:'lr',min:10,eq:'DB',s:'L/R difference'},
+ {c:'Strength',id:'imtp',n:'Isometric Mid-Thigh Pull',u:'N',k:'num',min:12,eq:'Force plate / dyno',s:'Relative force'},
+ {c:'Power',id:'cmj',n:'Countermovement Jump',u:'cm',k:'num',min:8,eq:'Jump mat',s:'Peak power'},
+ {c:'Power',id:'broad',n:'Broad Jump',u:'cm',k:'num',min:8,eq:'Tape',s:'L/R landing'},
+ {c:'Power',id:'slhop',n:'Single-Leg Hop',u:'cm',k:'lr',min:10,eq:'Tape',s:'L/R difference'},
+ {c:'Power',id:'mbthrow',n:'Medicine Ball Throw',u:'m',k:'num',min:8,eq:'Med ball',s:'—'},
+ {c:'Speed',id:'sp5',n:'5 m Sprint',u:'sec',k:'num',min:8,eq:'Timing gates',s:'Acceleration',low:1},
+ {c:'Speed',id:'sp10',n:'10 m Sprint',u:'sec',k:'num',min:8,eq:'Timing gates',s:'—',low:1},
+ {c:'Speed',id:'sp20',n:'20 m Sprint',u:'sec',k:'num',min:10,eq:'Timing gates',s:'Max velocity',low:1},
+ {c:'Agility',id:'cod505',n:'505 COD',u:'sec',k:'lr',min:12,eq:'Timing gates',s:'L/R difference',low:1},
+ {c:'Agility',id:'reactagi',n:'Reactive Agility',u:'sec',k:'num',min:12,eq:'Lights / video',s:'Decision accuracy',low:1},
+ {c:'Coordination',id:'slbal',n:'Single-Leg Balance',u:'sec',k:'lr',min:6,eq:'Stopwatch',s:'L/R difference'},
+ {c:'Coordination',id:'catch',n:'Catch & Throw',u:'',k:'score',min:6,eq:'Ball',s:'Accuracy'},
+ {c:'Coordination',id:'reaction',n:'Reaction Time',u:'ms',k:'num',min:8,eq:'App / device',s:'—',low:1},
+ {c:'Fitness',id:'shuttle',n:'20 m Shuttle',u:'level',k:'num',min:10,eq:'Cones / audio',s:'HR'},
+ {c:'Fitness',id:'run6',n:'6-Min Run',u:'m',k:'num',min:8,eq:'Track',s:'Pace'},
+ {c:'Fitness',id:'repsprint',n:'Repeated Sprint',u:'sec',k:'num',min:12,eq:'Timing gates',s:'Sprint decrement %',low:1},
+];
+const YOUTH_CATS = ['Growth','Movement','Mobility','Strength','Power','Speed','Agility','Coordination','Fitness'];
+const YOUTH_BY_ID = {}; YOUTH_TESTS.forEach(t => { YOUTH_BY_ID[t.id] = t; });
+
+let _youthSessions = [];      // newest first
+let _youthDraft    = {};      // testId -> {v|l|r}
+let _youthDate     = '';
+let _youthProfile  = null;    // {dob, gender} off the client doc
+
+/** Decimal age in years at a given date. */
+function youthAge(dob, onDate) {
+  if (!dob) return null;
+  const b = new Date(dob), d = onDate ? new Date(onDate) : new Date();
+  if (isNaN(b) || isNaN(d)) return null;
+  const a = (d - b) / (365.2425 * 24 * 3600 * 1000);
+  return a > 0 && a < 100 ? +a.toFixed(2) : null;
+}
+
+/** Tests this athlete is old enough for. Unknown age shows the whole battery. */
+function youthEligible(age) {
+  return YOUTH_TESTS.filter(t => age == null || age + 0.5 >= t.min);
+}
+
+/**
+ * Maturity offset — years from peak height velocity — Mirwald et al. (2002).
+ * This is why sitting height is in the battery: leg length relative to trunk is
+ * what carries the maturity signal. Validated roughly 8-16y, so outside that
+ * range the result is shown but marked unreliable rather than hidden.
+ */
+function youthMaturity(o) {
+  const { sex, age, height, sitting, weight } = o || {};
+  if (![age, height, sitting, weight].every(v => Number.isFinite(v) && v > 0) || !sex) return null;
+  const leg = height - sitting;
+  if (leg <= 0) return null;
+  const male = String(sex).toLowerCase().startsWith('m');
+  const mo = male
+    ? -9.236 + 0.0002708 * (leg * sitting) - 0.001663 * (age * leg)
+      + 0.007216 * (age * sitting) + 0.02292 * (weight / height * 100)
+    : -9.376 + 0.0001882 * (leg * sitting) + 0.0022 * (age * leg)
+      + 0.005841 * (age * sitting) - 0.002658 * (age * weight)
+      + 0.07693 * (weight / height * 100);
+  return { mo: +mo.toFixed(2), aphv: +(age - mo).toFixed(2),
+           band: mo < -1 ? 'Pre-PHV' : mo > 1 ? 'Post-PHV' : 'Circa-PHV',
+           reliable: age >= 8 && age <= 16 };
+}
+
+/** Left/right imbalance as a share of the stronger side. */
+function youthAsym(l, r) {
+  if (!Number.isFinite(l) || !Number.isFinite(r) || (l <= 0 && r <= 0)) return null;
+  const hi = Math.max(l, r), lo = Math.min(l, r);
+  if (hi === 0) return null;
+  const pct = +(((hi - lo) / hi) * 100).toFixed(1);
+  return { pct, side: l === r ? null : (l < r ? 'L' : 'R'),
+           flag: pct >= 15 ? 'high' : pct >= 10 ? 'watch' : 'ok' };
+}
+
+/** Height gain per year between two sessions that are far enough apart. */
+function youthGrowthVelocity(prev, cur) {
+  if (!prev || !cur) return null;
+  const dy = (new Date(cur.dateKey) - new Date(prev.dateKey)) / (365.2425 * 24 * 3600 * 1000);
+  if (!(dy > 0.15)) return null;                 // closer than ~8 weeks is noise
+  const a = youthVal(prev, 'height'), b = youthVal(cur, 'height');
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  return +((b - a) / dy).toFixed(1);
+}
+
+/** Primary number for a test in a session — the mean of both sides when paired. */
+function youthVal(session, id) {
+  const r = session && session.results && session.results[id];
+  if (!r) return null;
+  if (Number.isFinite(r.v)) return r.v;
+  const l = r.l, rr = r.r;
+  if (Number.isFinite(l) && Number.isFinite(rr)) return +((l + rr) / 2).toFixed(2);
+  return Number.isFinite(l) ? l : (Number.isFinite(rr) ? rr : null);
+}
+
+/** Secondary metrics the battery asks for that fall out of the numbers we hold. */
+function youthDerived(session) {
+  const out = {};
+  const h = youthVal(session, 'height'), w = youthVal(session, 'weight');
+  const span = youthVal(session, 'armspan'), imtp = youthVal(session, 'imtp');
+  const pull = youthVal(session, 'pullup');
+  if (h > 0 && w > 0) out.bmi = +(w / Math.pow(h / 100, 2)).toFixed(1);
+  if (h > 0 && span > 0) out.spanRatio = +(span / h).toFixed(3);
+  if (w > 0 && imtp > 0) out.relForce = +(imtp / w).toFixed(1);       // N per kg
+  if (w > 0 && Number.isFinite(pull)) out.relPull = +(pull / w * 100).toFixed(1);
+  return out;
+}
+
+// ── DATA ────────────────────────────────────────────────────────────────────
+async function loadYouthData() {
+  if (!activeClient) return;
+  _youthProfile = null; _youthSessions = []; _youthDraft = {};
+  try {
+    const p = await getDoc(doc(db, 'clients', activeClient.id, 'profile', 'data'));
+    if (p.exists) _youthProfile = p.data();
+  } catch (_e) {}
+  try {
+    const snap = await getDocs(query(
+      collection(db, 'clients', activeClient.id, 'youthTests'), orderBy('dateKey', 'desc'), limit(24)));
+    _youthSessions = snap.docs.map(d => d.data());
+  } catch (_e) {}
+  if (!_youthDate) _youthDate = new Date().toISOString().slice(0, 10);
+  renderYouthPage();
+}
+
+function youthSet(id, field, raw) {
+  const v = parseFloat(raw);
+  const rec = _youthDraft[id] || (_youthDraft[id] = {});
+  if (Number.isFinite(v)) rec[field] = v; else delete rec[field];
+  if (!Object.keys(rec).length) delete _youthDraft[id];
+  youthRefreshSummary();
+}
+function youthScore(id, field, n) {
+  const rec = _youthDraft[id] || (_youthDraft[id] = {});
+  if (rec[field] === n) delete rec[field]; else rec[field] = n;
+  if (!Object.keys(rec).length) delete _youthDraft[id];
+  renderYouthPage();
+}
+function youthSetDate(v) { _youthDate = v; renderYouthPage(); }
+
+async function saveYouthSession() {
+  if (!activeClient) return;
+  const n = Object.keys(_youthDraft).length;
+  if (!n) { alert('Nothing entered yet.'); return; }
+  const btn = document.getElementById('youth-save');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  try {
+    const age = youthAge(_youthProfile && _youthProfile.dob, _youthDate);
+    const rec = {
+      dateKey: _youthDate, date: serverTimestamp(), ageYears: age,
+      gender: (_youthProfile && _youthProfile.gender) || null,
+      results: JSON.parse(JSON.stringify(_youthDraft)),
+    };
+    rec.maturity = youthMaturity({
+      sex: rec.gender, age,
+      height: youthVal(rec, 'height'), sitting: youthVal(rec, 'sitting'), weight: youthVal(rec, 'weight'),
+    });
+    await setDoc(doc(db, 'clients', activeClient.id, 'youthTests', _youthDate), rec, { merge: true });
+    _youthDraft = {};
+    await loadYouthData();
+  } catch (e) {
+    console.error('[saveYouthSession]', e);
+    alert('Could not save the test session: ' + (e.message || 'unknown error'));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save test session'; }
+  }
+}
+
+// ── RENDER ──────────────────────────────────────────────────────────────────
+function youthRefreshSummary() {
+  const el = document.getElementById('youth-count');
+  if (el) el.textContent = Object.keys(_youthDraft).length + ' recorded';
+}
+
+function renderYouthPage() {
+  const wrap = document.getElementById('youth-body');
+  if (!wrap || !activeClient) return;
+  const dob = _youthProfile && _youthProfile.dob;
+  const age = youthAge(dob, _youthDate);
+  const prev = _youthSessions[0] || null;
+  const tests = youthEligible(age);
+  const hidden = YOUTH_TESTS.length - tests.length;
+
+  const mat = youthMaturity({
+    sex: _youthProfile && _youthProfile.gender, age,
+    height: youthDraftVal('height'), sitting: youthDraftVal('sitting'), weight: youthDraftVal('weight'),
+  }) || (prev && prev.maturity) || null;
+
+  let html = `
+    <div class="yt-head">
+      <div class="yt-head-row">
+        <div>
+          <div class="yt-athlete">${escHtml(activeClient.name || activeClient.id)}</div>
+          <div class="yt-sub">${age != null ? age.toFixed(1) + ' yrs' : 'No date of birth on file'}
+            ${_youthProfile && _youthProfile.gender ? ' · ' + escHtml(_youthProfile.gender) : ''}</div>
+        </div>
+        <input class="yt-date" type="date" value="${_youthDate}" onchange="youthSetDate(this.value)">
+      </div>
+      ${age == null ? `<div class="yt-warn">Add a date of birth in the client profile — age gating and the
+        maturity estimate both need it. Every test is shown until then.</div>` : ''}
+      ${mat ? `<div class="yt-mat">
+          <span class="yt-mat-band yt-band-${mat.band.split('-')[0].toLowerCase()}">${mat.band}</span>
+          <span>${mat.mo > 0 ? '+' : ''}${mat.mo} yrs from PHV · predicted peak at ${mat.aphv}</span>
+          ${mat.reliable ? '' : '<span class="yt-mat-warn">outside 8–16y, treat as indicative</span>'}
+        </div>` : `<div class="yt-mat yt-mat-idle">Height, sitting height and weight give a maturity estimate.</div>`}
+      <div class="yt-actions">
+        <button class="yt-save" id="youth-save" onclick="saveYouthSession()">Save test session</button>
+        <span class="yt-count" id="youth-count">${Object.keys(_youthDraft).length} recorded</span>
+        ${_youthSessions.length ? `<button class="yt-report" onclick="openYouthReport()">Report</button>` : ''}
+      </div>
+    </div>`;
+
+  YOUTH_CATS.forEach(cat => {
+    const list = tests.filter(t => t.c === cat);
+    if (!list.length) return;
+    html += `<div class="yt-cat"><div class="yt-cat-name">${cat}<span>${list.length}</span></div>`;
+    list.forEach(t => { html += youthRow(t, prev); });
+    html += `</div>`;
+  });
+  if (hidden > 0) html += `<div class="yt-hidden">${hidden} test${hidden > 1 ? 's' : ''} hidden — minimum age not reached</div>`;
+  wrap.innerHTML = html;
+}
+
+function youthDraftVal(id) {
+  const d = _youthDraft[id];
+  if (d && Number.isFinite(d.v)) return d.v;
+  const prev = _youthSessions[0];
+  return prev ? youthVal(prev, id) : null;
+}
+
+function youthRow(t, prev) {
+  const d = _youthDraft[t.id] || {};
+  const paired = t.k === 'lr' || t.lr;
+  const prevTxt = prev && youthVal(prev, t.id) != null
+    ? `<span class="yt-prev">last ${youthVal(prev, t.id)}${t.u ? ' ' + t.u : ''}</span>` : '';
+  let input;
+  if (t.k === 'score') {
+    const picker = (f) => `<div class="yt-scores">${[1,2,3,4,5].map(n =>
+      `<button class="yt-score${d[f] === n ? ' on' : ''}" onclick="youthScore('${t.id}','${f}',${n})">${n}</button>`).join('')}</div>`;
+    input = paired
+      ? `<div class="yt-lr"><span class="yt-side">L</span>${picker('l')}</div><div class="yt-lr"><span class="yt-side">R</span>${picker('r')}</div>`
+      : picker('v');
+  } else if (paired) {
+    input = `<div class="yt-lr">
+        <span class="yt-side">L</span><input class="yt-in" type="number" step="0.1" inputmode="decimal"
+          value="${Number.isFinite(d.l) ? d.l : ''}" oninput="youthSet('${t.id}','l',this.value)">
+        <span class="yt-side">R</span><input class="yt-in" type="number" step="0.1" inputmode="decimal"
+          value="${Number.isFinite(d.r) ? d.r : ''}" oninput="youthSet('${t.id}','r',this.value)">
+      </div>`;
+  } else {
+    input = `<input class="yt-in yt-in-solo" type="number" step="0.1" inputmode="decimal"
+      value="${Number.isFinite(d.v) ? d.v : ''}" oninput="youthSet('${t.id}','v',this.value)">`;
+  }
+  const a = paired ? youthAsym(d.l, d.r) : null;
+  return `<div class="yt-row">
+      <div class="yt-row-top">
+        <div><div class="yt-name">${t.n}</div>
+          <div class="yt-meta">${t.u || 'score 1–5'} · ${t.eq}${t.min ? ' · ' + t.min + '+' : ''}</div></div>
+        ${prevTxt}
+      </div>
+      ${input}
+      ${a ? `<div class="yt-asym yt-asym-${a.flag}">${a.pct}% ${a.side ? a.side + ' lower' : 'even'}${
+        a.flag === 'high' ? ' — above 15%' : a.flag === 'watch' ? ' — watch' : ''}</div>` : ''}
+    </div>`;
+}
+
+// ── PARENT REPORT ───────────────────────────────────────────────────────────
+/** Better/worse for this test — sprints and reaction times improve downwards. */
+function youthTrend(t, cur, prev) {
+  if (!Number.isFinite(cur) || !Number.isFinite(prev)) return null;
+  const diff = +(cur - prev).toFixed(2);
+  if (diff === 0) return { diff, dir: 'same' };
+  const better = t.low ? diff < 0 : diff > 0;
+  return { diff, dir: better ? 'up' : 'down' };
+}
+
+function openYouthReport() {
+  const s = _youthSessions[0];
+  if (!s) return;
+  const prev = _youthSessions[1] || null;
+  const age = s.ageYears, mat = s.maturity, der = youthDerived(s);
+  const vel = youthGrowthVelocity(prev, s);
+
+  const flags = [];
+  YOUTH_TESTS.forEach(t => {
+    const r = s.results && s.results[t.id];
+    if (!r) return;
+    const a = youthAsym(r.l, r.r);
+    if (a && a.flag !== 'ok') flags.push({ t, a });
+  });
+
+  let rows = '';
+  YOUTH_CATS.forEach(cat => {
+    const list = YOUTH_TESTS.filter(t => t.c === cat && s.results && s.results[t.id]);
+    if (!list.length) return;
+    rows += `<tr class="yr-cat"><td colspan="4">${cat}</td></tr>`;
+    list.forEach(t => {
+      const cur = youthVal(s, t.id), was = prev ? youthVal(prev, t.id) : null;
+      const tr = youthTrend(t, cur, was);
+      const r = s.results[t.id];
+      const sides = Number.isFinite(r.l) && Number.isFinite(r.r) ? `L ${r.l} / R ${r.r}` : '';
+      rows += `<tr>
+        <td>${t.n}</td>
+        <td class="yr-val">${cur != null ? cur : '—'}<span class="yr-u">${t.u || ''}</span>
+            ${sides ? `<div class="yr-sides">${sides}</div>` : ''}</td>
+        <td class="yr-was">${was != null ? was : '—'}</td>
+        <td class="yr-tr yr-${tr ? tr.dir : 'none'}">${tr ? (tr.dir === 'same' ? '→' :
+            (tr.dir === 'up' ? '▲' : '▼') + ' ' + Math.abs(tr.diff)) : ''}</td>
+      </tr>`;
+    });
+  });
+
+  document.getElementById('youth-report-body').innerHTML = `
+    <div class="yr-head">
+      <div class="yr-title">${escHtml(activeClient.name || activeClient.id)}</div>
+      <div class="yr-sub">Youth development screen · ${s.dateKey}${age != null ? ' · ' + age.toFixed(1) + ' years' : ''}</div>
+    </div>
+    ${mat ? `<div class="yr-card">
+      <div class="yr-card-t">Growth &amp; maturity</div>
+      <p><b>${mat.band}</b> — about <b>${Math.abs(mat.mo)} year${Math.abs(mat.mo) === 1 ? '' : 's'}
+      ${mat.mo < 0 ? 'before' : 'after'}</b> the fastest growing period, which is predicted around age
+      <b>${mat.aphv}</b>.</p>
+      <p class="yr-note">Children of the same age mature at very different rates. This estimate helps decide
+      what to train now — it is not a measure of ability, and it says nothing about eventual height.
+      ${mat.reliable ? '' : ' Outside the 8–16 age range the estimate is indicative only.'}</p>
+      ${vel != null ? `<p>Currently growing about <b>${vel} cm per year</b>.</p>` : ''}
+      ${der.bmi ? `<p>BMI ${der.bmi}${der.spanRatio ? ` · arm span ${der.spanRatio}× height` : ''}</p>` : ''}
+    </div>` : ''}
+    ${flags.length ? `<div class="yr-card yr-flagcard">
+      <div class="yr-card-t">Worth a closer look</div>
+      <ul>${flags.map(f => `<li><b>${f.t.n}</b> — ${f.a.pct}% difference, ${f.a.side === 'L' ? 'left' : 'right'}
+        side lower${f.a.flag === 'high' ? ' (above the 15% action line)' : ''}</li>`).join('')}</ul>
+      <p class="yr-note">A side-to-side gap is common while growing and usually responds to training.
+      It is flagged so it can be watched, not because anything is wrong.</p>
+    </div>` : ''}
+    <table class="yr-table">
+      <thead><tr><th>Test</th><th>This time</th><th>Last time</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="yr-foot">Arrows show change since the previous screen. For sprints and reaction time a lower
+    number is better, and the arrow already accounts for that.</div>`;
+  document.getElementById('youth-report').classList.add('open');
+}
+function closeYouthReport() { document.getElementById('youth-report').classList.remove('open'); }
+function printYouthReport() { window.print(); }
 
 // ── EXPORT TRAINING PROGRAM TO EXCEL (coach report) ────────────────────────
 // The company template contains 87 Excel Tables and 39 embedded images; every
@@ -8187,6 +8557,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <div class="nav-tab active" data-page="workout" onclick="showPage('workout')">Workout</div>
     <div class="nav-tab" data-page="progress" onclick="showPage('progress')">Progress</div>
     <div class="nav-tab" data-page="nutrition" onclick="showPage('nutrition')">Nutrition</div>
+    <div class="nav-tab" data-page="youth" onclick="showPage('youth')">Youth</div>
     <div class="nav-tab" data-page="log" onclick="showPage('log')">Log</div>
     <div class="nav-tab" id="schedule-nav-tab" data-page="schedule" style="display:none" onclick="showPage('schedule')">Schedule</div>
   </div>
@@ -8289,6 +8660,20 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   </div>
 
   <!-- PROGRESS PAGE -->
+  <!-- ── YOUTH DEVELOPMENT TEST BATTERY ───────────────────────────────── -->
+  <div id="youth-page">
+    <div id="youth-body"></div>
+  </div>
+  <div id="youth-report">
+    <div class="yr-sheet">
+      <div class="yr-bar">
+        <button onclick="printYouthReport()">Print / PDF</button>
+        <button onclick="closeYouthReport()">Close</button>
+      </div>
+      <div id="youth-report-body"></div>
+    </div>
+  </div>
+
   <div class="progress-page" id="progress-page">
     <!-- COACH DASHBOARD (Step 5) -->
     <div id="coach-dashboard" style="display:none"></div>
@@ -9824,6 +10209,89 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .macro-target-btn:hover{background:rgba(139,108,255,.08);}
 .macro-target-btn:active{background:rgba(139,108,255,.14);}
 .nlog-target-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;}
+
+/* ── Youth development test battery ─────────────────────────────────────── */
+#youth-page{display:none;padding:0 16px 120px;}
+#youth-page.active{display:block;}
+.yt-head{background:rgba(118,101,255,.08);border:1px solid rgba(118,101,255,.22);border-radius:16px;padding:14px;margin:12px 0 16px;}
+.yt-head-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
+.yt-athlete{font-size:17px;font-weight:800;color:#fff;}
+.yt-sub{font-size:12px;color:rgba(255,255,255,.55);margin-top:2px;}
+.yt-date{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.16);border-radius:9px;color:#fff;padding:6px 8px;font-size:12px;}
+.yt-warn{margin-top:10px;font-size:12px;line-height:1.45;color:#ffd479;background:rgba(255,196,0,.09);border:1px solid rgba(255,196,0,.25);border-radius:10px;padding:8px 10px;}
+.yt-mat{margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;color:rgba(255,255,255,.7);}
+.yt-mat-idle{color:rgba(255,255,255,.4);}
+.yt-mat-band{padding:2px 9px;border-radius:7px;font-size:10px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;}
+.yt-band-pre{background:rgba(90,190,255,.16);border:1px solid rgba(90,190,255,.4);color:#8fd4ff;}
+.yt-band-circa{background:rgba(255,196,0,.16);border:1px solid rgba(255,196,0,.4);color:#ffd479;}
+.yt-band-post{background:rgba(79,209,139,.16);border:1px solid rgba(79,209,139,.4);color:#7ee0a8;}
+.yt-mat-warn{font-size:10px;color:rgba(255,255,255,.4);}
+.yt-actions{margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.yt-save{background:#7665ff;border:none;border-radius:10px;color:#fff;font-weight:700;font-size:13px;padding:9px 16px;cursor:pointer;}
+.yt-save:disabled{opacity:.55;}
+.yt-report{background:transparent;border:1px solid rgba(255,255,255,.22);border-radius:10px;color:rgba(255,255,255,.8);font-size:12px;font-weight:700;padding:8px 14px;cursor:pointer;}
+.yt-count{font-size:11px;color:rgba(255,255,255,.45);}
+.yt-cat{margin-bottom:18px;}
+.yt-cat-name{font-size:11px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:#9b8dff;margin-bottom:8px;display:flex;gap:8px;align-items:center;}
+.yt-cat-name span{font-size:9px;color:rgba(255,255,255,.3);border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:1px 5px;}
+.yt-row{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:11px 12px;margin-bottom:8px;}
+.yt-row-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:8px;}
+.yt-name{font-size:14px;font-weight:700;color:#fff;}
+.yt-meta{font-size:10.5px;color:rgba(255,255,255,.4);margin-top:2px;}
+.yt-prev{font-size:10.5px;color:rgba(255,255,255,.35);white-space:nowrap;}
+.yt-lr{display:flex;align-items:center;gap:7px;margin-top:5px;}
+.yt-side{font-size:10px;font-weight:800;color:rgba(255,255,255,.42);width:12px;flex-shrink:0;}
+.yt-in{flex:1;min-width:0;background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.16);border-radius:8px;color:#fff;font-size:15px;font-weight:700;padding:7px 9px;}
+.yt-in-solo{width:100%;}
+.yt-in:focus{outline:none;border-color:#7665ff;}
+.yt-scores{display:flex;gap:5px;flex:1;}
+.yt-score{flex:1;background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.14);border-radius:8px;color:rgba(255,255,255,.55);font-size:13px;font-weight:700;padding:7px 0;cursor:pointer;}
+.yt-score.on{background:#7665ff;border-color:#7665ff;color:#fff;}
+.yt-asym{margin-top:7px;font-size:10.5px;font-weight:700;}
+.yt-asym-ok{color:rgba(126,224,168,.85);}
+.yt-asym-watch{color:#ffd479;}
+.yt-asym-high{color:#ff8080;}
+.yt-hidden{font-size:11px;color:rgba(255,255,255,.3);text-align:center;padding:10px 0 4px;}
+/* report */
+#youth-report{position:fixed;inset:0;background:rgba(6,6,12,.9);z-index:220;display:none;overflow-y:auto;padding:16px;}
+#youth-report.open{display:block;}
+.yr-sheet{max-width:760px;margin:0 auto;background:#14121c;border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:20px;}
+.yr-bar{display:flex;justify-content:flex-end;gap:8px;margin-bottom:14px;}
+.yr-bar button{background:transparent;border:1px solid rgba(255,255,255,.22);border-radius:9px;color:rgba(255,255,255,.8);font-size:12px;font-weight:700;padding:7px 13px;cursor:pointer;}
+.yr-head{border-bottom:1px solid rgba(255,255,255,.12);padding-bottom:12px;margin-bottom:14px;}
+.yr-title{font-size:20px;font-weight:800;color:#fff;}
+.yr-sub{font-size:12px;color:rgba(255,255,255,.5);margin-top:3px;}
+.yr-card{background:rgba(118,101,255,.08);border:1px solid rgba(118,101,255,.2);border-radius:12px;padding:13px;margin-bottom:12px;}
+.yr-flagcard{background:rgba(255,196,0,.07);border-color:rgba(255,196,0,.25);}
+.yr-card-t{font-size:10.5px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:#9b8dff;margin-bottom:7px;}
+.yr-card p{margin:0 0 7px;font-size:13px;line-height:1.55;color:rgba(255,255,255,.82);}
+.yr-card ul{margin:0 0 7px;padding-left:18px;font-size:13px;line-height:1.6;color:rgba(255,255,255,.82);}
+.yr-note{font-size:11.5px !important;color:rgba(255,255,255,.5) !important;}
+.yr-table{width:100%;border-collapse:collapse;font-size:12.5px;}
+.yr-table th{text-align:left;font-size:9.5px;letter-spacing:.8px;text-transform:uppercase;color:rgba(255,255,255,.35);padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.12);}
+.yr-table td{padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06);color:rgba(255,255,255,.85);}
+.yr-cat td{font-size:9.5px;font-weight:800;letter-spacing:1.1px;text-transform:uppercase;color:#9b8dff;padding-top:13px;}
+.yr-val{font-weight:800;color:#fff;white-space:nowrap;}
+.yr-u{font-size:9.5px;font-weight:600;color:rgba(255,255,255,.4);margin-left:3px;}
+.yr-sides{font-size:10px;font-weight:600;color:rgba(255,255,255,.42);margin-top:2px;}
+.yr-was{color:rgba(255,255,255,.42);}
+.yr-tr{font-weight:800;white-space:nowrap;}
+.yr-up{color:#7ee0a8;} .yr-down{color:#ff8f8f;} .yr-same{color:rgba(255,255,255,.35);}
+.yr-foot{margin-top:14px;font-size:11px;line-height:1.5;color:rgba(255,255,255,.4);}
+@media print{
+  body *{visibility:hidden;}
+  #youth-report,#youth-report *{visibility:visible;}
+  #youth-report{position:absolute;inset:0;background:#fff;padding:0;overflow:visible;}
+  .yr-sheet{background:#fff;border:none;max-width:none;}
+  .yr-bar{display:none;}
+  .yr-title,.yr-val{color:#000;}
+  .yr-sub,.yr-was,.yr-foot,.yr-note,.yr-sides,.yr-u{color:#555 !important;}
+  .yr-card{background:#f4f2ff;border-color:#ccc;}
+  .yr-flagcard{background:#fff8e6;}
+  .yr-card p,.yr-card ul,.yr-table td{color:#111;}
+  .yr-card-t,.yr-cat td{color:#5a4bd0;}
+}
+
 </style>
 </body>
 </html>
