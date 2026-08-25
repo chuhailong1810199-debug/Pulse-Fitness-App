@@ -1177,6 +1177,9 @@ async function saveBaseline() {
     smm:   parseFloat(document.getElementById('bl-smm').value)   || null,
   };
   await setDoc(doc(db, 'clients', activeClient.id, 'assessment', 'baseline'), bl);
+  // Baseline is the bodyweight fallback when no checkpoint exists yet.
+  await loadClientBodyweight();
+  renderExercises();
   document.getElementById('baseline-screen').classList.add('hidden');
   renderProgressData();
 }
@@ -1269,6 +1272,10 @@ async function saveCheckpoint() {
   };
   await addDoc(collection(db, 'clients', activeClient.id, 'checkpoints'), cp);
   closeModal('update-modal');
+  // Bodyweight rows convert their +kg against this number, so a fresh weigh-in
+  // has to reach them now rather than at the next page load.
+  await loadClientBodyweight();
+  renderExercises();
   renderProgressData();
 }
 
@@ -2777,7 +2784,7 @@ function renderExercises() {
             ${ex.tempo ? `<span class="tempo-text">@ ${ex.tempo}</span>` : ''}
             <span class="badge">${ex.type||''}</span>
             <div class="weight-load">
-              <input class="weight-input" id="weight_${key}" type="number" min="0" step="0.5" placeholder="kg" value="${getExerciseLoadValue(key)}" oninput="setExerciseLoad('${key}', this.value)">
+              <input class="weight-input" id="weight_${key}" type="number" ${ex.bw?'':'min="0" '}step="0.5" placeholder="${ex.bw?'+kg':'kg'}" value="${getExerciseLoadValue(key)}" oninput="setExerciseLoad('${key}', this.value)">
               <span class="weight-unit">kg</span>
             </div>
           </div>
