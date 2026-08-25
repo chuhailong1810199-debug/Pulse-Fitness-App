@@ -2408,9 +2408,13 @@ function getStrengthSparkline(exerciseKey, exName) {
     const y = H - pad - ((v - min) / range) * (H - pad * 2);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(' ');
+  // The two end labels are a pair: the left is the oldest session, the right is
+  // the latest, so the delta between them has to be measured against the oldest
+  // too. Comparing against the previous session instead put "78kg" next to
+  // "+23.5kg" on a series that had in fact fallen from 78 to 37.5.
+  const first  = vals[0];
   const latest = vals[vals.length - 1];
-  const prev   = vals[vals.length - 2];
-  const delta  = +(latest - prev).toFixed(1);
+  const delta  = +(latest - first).toFixed(1);
   const col    = delta > 0 ? 'oklch(72% .20 145)' : delta < 0 ? 'oklch(65% .22 25)' : 'oklch(72% .16 295)';
   return `<div class="str-sparkline-wrap">
     <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" fill="none">
@@ -2422,7 +2426,7 @@ function getStrengthSparkline(exerciseKey, exName) {
       }).join('')}
     </svg>
     <div class="str-spark-labels">
-      <span>${vals[0]}kg</span><span style="color:${col};font-weight:800;">${latest}kg ${delta>0?'↑ +'+delta:delta<0?'↓ '+delta:'→'}kg</span>
+      <span>${first}kg <span class="str-spark-hint">first</span></span><span style="color:${col};font-weight:800;">${latest}kg ${delta>0?'↑ +'+delta:delta<0?'↓ '+delta:'→ 0'}kg <span class="str-spark-hint">total</span></span>
     </div>
   </div>`;
 }
@@ -6896,6 +6900,7 @@ body.reordering .phase-exercises-wrap{min-height:46px;border-radius:14px;transit
 .str-modal-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:rgba(255,255,255,0.40);margin-bottom:10px;}
 .str-sparkline-wrap{margin-bottom:10px;}
 .str-spark-labels{display:flex;justify-content:space-between;font-size:11px;color:rgba(255,255,255,0.45);margin-top:4px;}
+.str-spark-hint{font-size:9px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;color:rgba(255,255,255,0.32);}
 .str-hist-list{display:flex;flex-direction:column;gap:4px;}
 .str-hist-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.06);}
 .str-hist-row:last-child{border-bottom:none;}
