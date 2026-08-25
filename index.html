@@ -838,7 +838,7 @@ async function saveClientInfo() {
 }
 
 // ── ADD CLIENT (coach only) ────────────────────────────
-async function addClient() {
+async function addClient(opts) {
   const name           = document.getElementById('new-client-name').value.trim();
   const email          = document.getElementById('new-client-email').value.trim().toLowerCase();
   const level          = document.getElementById('new-client-level').value;
@@ -849,6 +849,7 @@ async function addClient() {
   const gender         = document.getElementById('new-client-gender').value           || null;
   const weight         = parseFloat(document.getElementById('new-client-weight').value) || null;
   const height         = parseFloat(document.getElementById('new-client-height').value) || null;
+  const dob            = document.getElementById('new-client-dob').value || null;
   if (!name || !email) return;
 
   const clientId = name.toLowerCase().replace(/\s+/g, '_') + '_' + Date.now();
@@ -866,6 +867,16 @@ async function addClient() {
     program: {},
     createdAt: serverTimestamp()
   });
+  // The form has always collected these and thrown them away. Date of birth and
+  // sex are what the maturity estimate runs on, so persist them where the
+  // profile screen and the youth battery both read from.
+  if (dob || gender || age || weight || height) {
+    try {
+      await setDoc(doc(db, 'clients', clientId, 'profile', 'data'),
+        { fullName: name, dob: dob || '', gender: gender || '' }, { merge: true });
+    } catch (e) { console.warn('[addClient] profile seed failed', e); }
+  }
+
   // Link user record if already exists
   const usersSnap = await getDocs(query(collection(db, 'users')));
   usersSnap.forEach(async d => {
@@ -878,6 +889,17 @@ async function addClient() {
   await loadAllClients();
   document.getElementById('client-select').value = clientId;
   await switchClient();
+
+  if (opts && opts.startTest) {
+    // Straight into the battery: a first-session client is measured before a
+    // program is written, not after. Height and weight carry over so the two
+    // measurements already taken are not asked for twice.
+    _youthSeed = {};
+    if (height > 0) _youthSeed.height = { v: height };
+    if (weight > 0) _youthSeed.weight = { v: weight };
+    showPage('youth');
+    return;
+  }
 
   // Trigger AI program generation — pass all available context
   openAIReviewModal(clientId, { name, level, goal, sessionsPerWeek, notes, age, gender, weight, height });
@@ -5880,6 +5902,7 @@ let _youthSessions = [];      // newest first
 let _youthDraft    = {};      // testId -> {v|l|r}
 let _youthDate     = '';
 let _youthProfile  = null;    // {dob, gender} off the client doc
+let _youthSeed     = null;    // measurements carried in from the add-client form
 
 /** Decimal age in years at a given date. */
 function youthAge(dob, onDate) {
@@ -5975,6 +5998,7 @@ async function loadYouthData() {
     _youthSessions = snap.docs.map(d => d.data());
   } catch (_e) {}
   if (!_youthDate) _youthDate = new Date().toISOString().slice(0, 10);
+  if (_youthSeed) { Object.assign(_youthDraft, _youthSeed); _youthSeed = null; }
   renderYouthPage();
 }
 
@@ -9187,7 +9211,8 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
         </select>
       </div>
       <div class="form-group"><label class="form-label">Notes / Injuries</label><input class="form-input" id="new-client-notes" placeholder="Lower back pain, no heavy squats..."></div>
-      <div class="form-group"><label class="form-label">Age <span style="font-weight:400;opacity:.5;font-size:10px">(optional)</span></label><input class="form-input" id="new-client-age" type="number" min="14" max="80" placeholder="e.g. 28"></div>
+      <div class="form-group"><label class="form-label">Age <span style="font-weight:400;opacity:.5;font-size:10px">(optional)</span></label><input class="form-input" id="new-client-age" type="number" min="5" max="80" placeholder="e.g. 28"></div>
+      <div class="form-group"><label class="form-label">Date of Birth <span style="font-weight:400;opacity:.5;font-size:10px">(needed for youth testing)</span></label><input class="form-input" id="new-client-dob" type="date"></div>
       <div class="form-group"><label class="form-label">Gender <span style="font-weight:400;opacity:.5;font-size:10px">(optional)</span></label>
         <select class="form-select" id="new-client-gender">
           <option value="">— Optional —</option>
@@ -9200,6 +9225,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     </div>
     <div class="form-actions">
       <button class="btn-save" onclick="addClient()">🤖 Add & Generate Program</button>
+      <button class="btn-save btn-test" onclick="addClient({ startTest: true })">📋 Add &amp; Start Testing</button>
       <button class="btn-discard" onclick="closeModal('add-client-modal')">Cancel</button>
     </div>
   </div>
@@ -10377,6 +10403,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .yt-sub{font-size:12px;color:rgba(255,255,255,.55);margin-top:2px;}
 .yt-date{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.16);border-radius:9px;color:#fff;padding:6px 8px;font-size:12px;}
 .yt-warn{margin-top:10px;font-size:12px;line-height:1.45;color:#ffd479;background:rgba(255,196,0,.09);border:1px solid rgba(255,196,0,.25);border-radius:10px;padding:8px 10px;}
+.btn-test{background:rgba(118,101,255,.16) !important;border:1px solid rgba(118,101,255,.5) !important;color:#b9aaff !important;}
 .yt-warn b{color:#ffe4a8;}
 .yt-warn-go{display:block;margin-top:8px;background:rgba(255,196,0,.14);border:1px solid rgba(255,196,0,.4);
   border-radius:8px;color:#ffd479;font-size:11px;font-weight:700;padding:6px 12px;cursor:pointer;}
