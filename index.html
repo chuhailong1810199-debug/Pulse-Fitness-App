@@ -105,7 +105,10 @@ let exerciseLoads = {};
 let setLoads = {}; // exerciseKey → [kg_set1, kg_set2, ...]
 let _saveLoadsFBTimer = null;
 let _loadsHydrated = false; // guard: prevent saving empty data before hydration completes
-let strengthHistory = {}; // exerciseKey → [{date, kg}] sorted newest first
+let strengthHistory  = {};        // positional exerciseKey → [{date, kg}] — legacy fallback only
+let strengthByName   = {};        // normalised exercise name → [{date, kg}] — the real index
+let strengthPosOk    = new Set(); // positions no name can claim (unnamed / ambiguous docs)
+let strengthDupNames = new Set(); // names the current day uses twice — name alone can't identify them
 
 function parseSetsCount(setsReps) {
   if (!setsReps) return 3;
@@ -2264,7 +2267,12 @@ async function saveLoadsFB() {
 // ── STRENGTH PROGRESSION ───────────────────────────────
 async function loadStrengthHistory() {
   if (!activeClient) return;
-  strengthHistory = {};
+  // Every index resets together. This runs on each setDay() and client switch,
+  // so a missed one accumulates duplicate entries and — because the name index
+  // is not scoped by client or day — leaks one client's loads onto another's
+  // identically named exercise.
+  strengthHistory = {}; strengthByName = {};
+  strengthPosOk = new Set(); strengthDupNames = new Set();
   try {
     const histSnap = await getDocs(query(
       collection(db, 'clients', activeClient.id, 'workoutHistory'),
@@ -2290,31 +2298,60 @@ async function loadStrengthHistory() {
     );
 
     results.forEach(({ date, exSnap }) => {
+      // Collect the session first: a name used twice inside one session cannot
+      // identify a row, so that has to be known before anything is indexed.
+      const rows = [], hits = {};
       exSnap.forEach(d => {
         const data = d.data();
-        const { exerciseKey, loadKg, sets, reps, tonnage, setLoads } = data;
+        const { exerciseKey, loadKg, sets, reps, tonnage, setLoads, exerciseName } = data;
         const kg = parseFloat(loadKg);
         if (!exerciseKey || !Number.isFinite(kg) || kg <= 0) return;
-        if (!strengthHistory[exerciseKey]) strengthHistory[exerciseKey] = [];
-        strengthHistory[exerciseKey].push({
+        const n = _exNameKey(exerciseName);   // '' on docs written before names were stored
+        if (n) hits[n] = (hits[n] || 0) + 1;
+        rows.push({ exerciseKey, n, entry: {
           date, kg,
           sets: sets || 0,
           reps: reps || 0,
           tonnage: tonnage || 0,
           setLoads: Array.isArray(setLoads) ? setLoads : []
-        });
+        }});
+      });
+      rows.forEach(({ exerciseKey, n, entry }) => {
+        (strengthHistory[exerciseKey] = strengthHistory[exerciseKey] || []).push(entry);
+        if (n && hits[n] === 1) (strengthByName[n] = strengthByName[n] || []).push(entry);
+        else strengthPosOk.add(exerciseKey);  // unnamed or ambiguous — position is all it has
       });
     });
 
+    // A name the current day reuses can't be told apart by name either.
+    const seen = {};
+    ((getProgram()[activeDay] || {}).phases || []).forEach(p =>
+      (p.exercises || []).forEach(e => {
+        const n = _exNameKey(e.name);
+        if (n) seen[n] = (seen[n] || 0) + 1;
+      }));
+    Object.keys(seen).forEach(n => { if (seen[n] > 1) strengthDupNames.add(n); });
+
     // Sort each array newest → oldest
-    Object.keys(strengthHistory).forEach(k => {
-      strengthHistory[k].sort((a, b) => b.date - a.date);
-    });
+    [strengthHistory, strengthByName].forEach(idx =>
+      Object.keys(idx).forEach(k => idx[k].sort((a, b) => b.date - a.date)));
   } catch (e) { console.warn('loadStrengthHistory:', e); }
 }
 
-function getStrengthBadge(exerciseKey) {
-  const hist = strengthHistory[exerciseKey];
+/**
+ * Loads belong to an exercise, not to a slot. Match on the stored exercise name
+ * so reordering or inserting a movement carries its history with it; fall back
+ * to the positional key only for rows a name can never claim, otherwise a new
+ * exercise inherits whatever used to sit in its slot.
+ */
+function getStrengthHistory(exerciseKey, exName) {
+  const n = _exNameKey(exName);
+  if (n && !strengthDupNames.has(n) && strengthByName[n]) return strengthByName[n];
+  return strengthPosOk.has(exerciseKey) ? (strengthHistory[exerciseKey] || []) : [];
+}
+
+function getStrengthBadge(exerciseKey, exName) {
+  const hist = getStrengthHistory(exerciseKey, exName);
   if (!hist || hist.length === 0) return '';
   const latest = hist[0].kg;
   const prev   = hist.length > 1 ? hist[1].kg : null;
@@ -2327,8 +2364,8 @@ function getStrengthBadge(exerciseKey) {
   return `<div class="str-badge str-same">→ ${latest}kg</div>`;
 }
 
-function getStrengthSparkline(exerciseKey) {
-  const hist = strengthHistory[exerciseKey];
+function getStrengthSparkline(exerciseKey, exName) {
+  const hist = getStrengthHistory(exerciseKey, exName);
   if (!hist || hist.length < 2) return '';
   const vals = [...hist].reverse().map(h => h.kg); // oldest → newest
   const min = Math.min(...vals), max = Math.max(...vals);
@@ -2367,7 +2404,7 @@ function toggleKgHistory(key) {
 }
 
 function getKgHistoryTable(key, ex) {
-  const hist = strengthHistory[key] || [];
+  const hist = getStrengthHistory(key, ex?.name);
   const MAX_SETS = 4;
 
   // Parse reps from setsReps string e.g. "4 × 8" → 8
@@ -2584,7 +2621,7 @@ function renderExercises() {
             <span class="node-num">${String(ei+1).padStart(2,'0')}</span>
             <div class="node-title" onclick="openModal(${pi},${ei})">
               <div class="node-name${done?' done':''}">${ex.name}</div>
-              <div class="node-sets">${ex.setsReps}${ex.tempo?' · '+ex.tempo:''}${getStrengthBadge(key)}</div>
+              <div class="node-sets">${ex.setsReps}${ex.tempo?' · '+ex.tempo:''}${getStrengthBadge(key, ex.name)}</div>
             </div>
             <div class="node-check${done?' done':''}" onclick="event.stopPropagation();toggleExercise('${key}')">${done?'✓':''}</div>
           </div>
@@ -3167,8 +3204,8 @@ function openModal(pi, ei) {
   if (sparkWrap) {
     const day   = getProgram()[activeDay];
     const ex    = day?.phases[pi]?.exercises[ei];
-    const hist  = strengthHistory[key];
-    const spark = hist && hist.length >= 2 ? getStrengthSparkline(key) : '';
+    const hist  = getStrengthHistory(key, ex?.name);
+    const spark = hist.length >= 2 ? getStrengthSparkline(key, ex?.name) : '';
     sparkWrap.innerHTML = `<div class="str-modal-section">
       <div class="str-modal-title">STRENGTH HISTORY</div>
       ${spark}
