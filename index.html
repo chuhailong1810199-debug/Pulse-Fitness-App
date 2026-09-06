@@ -5349,7 +5349,7 @@ async function schedSetKind(id, kind) {
   evt.kind = kind;
   schedCloseModal();
   _schedRenderCalendar(true);
-  _schedLoadSummary().then(r => _schedRenderSummary(r)).catch(()=>{});
+  _schedRefreshSummary(true);
   try { await updateDoc(doc(db,'bookings',id), { kind, updatedAt:serverTimestamp() }); }
   catch(err) {
     console.error('[schedule] kind update failed', err);
@@ -5363,7 +5363,7 @@ async function schedToggleDone(id) {
   if (!evt) return;
   const ns = evt.status === 'done' ? 'booked' : 'done';
   evt.status = ns; schedCloseModal(); _schedRenderCalendar(true);
-  _schedLoadSummary().then(r => _schedRenderSummary(r)).catch(()=>{});
+  _schedRefreshSummary(true);
   try { await updateDoc(doc(db,'bookings',id), {status:ns, updatedAt:serverTimestamp()}); }
   catch(err) { evt.status = ns === 'done' ? 'booked' : 'done'; _schedRenderCalendar(true); }
 }
@@ -5371,12 +5371,22 @@ async function schedToggleDone(id) {
 async function schedDeleteEvt(id) {
   _schedEvents = _schedEvents.filter(e => e.id !== id);
   schedCloseModal(); _schedRenderCalendar(true);
-  _schedLoadSummary().then(r => _schedRenderSummary(r)).catch(()=>{});
+  _schedRefreshSummary(true);
   try { await deleteDoc(doc(db,'bookings',id)); } catch(err) { console.error('[schedule] delete failed', err); }
 }
 
+/**
+ * Which month the summary describes: the one containing the displayed week's
+ * Thursday. A week straddling two months then resolves the same way ISO week
+ * numbering does, instead of jumping on the Monday.
+ */
+function _schedSummaryMonth() {
+  const base = _schedWeekStart ? _schedAddDays(_schedWeekStart, 3) : new Date();
+  return { y: base.getFullYear(), mo: base.getMonth() };
+}
+
 async function _schedLoadSummary() {
-  const now=new Date(), y=now.getFullYear(), mo=now.getMonth();
+  const { y, mo } = _schedSummaryMonth();
   const ms=String(mo+1).padStart(2,'0');
   // Load all bookings for month, filter done in JS (avoids composite index requirement)
   const snap=await getDocs(query(
@@ -5402,7 +5412,22 @@ async function _schedLoadSummary() {
       bookings++;
     }
   });
-  return {byTitle, total, company, freelance, bookings};
+  return {byTitle, total, company, freelance, bookings, y, mo};
+}
+
+/** Reload the month totals for whatever week is on screen. */
+let _schedSumKey = '';
+async function _schedRefreshSummary(force) {
+  const { y, mo } = _schedSummaryMonth();
+  const key = y + '-' + mo;
+  if (!force && key === _schedSumKey) return;   // same month — nothing changed
+  _schedSumKey = key;
+  const t = document.getElementById('sch-sum-title');
+  if (t) t.textContent = _SCH_MONTHS[mo] + ' ' + y;
+  const w = document.getElementById('sch-summary-body');
+  if (w) w.innerHTML = '<div class="loading">...</div>';
+  try { _schedRenderSummary(await _schedLoadSummary()); }
+  catch (_e) { if (w) w.innerHTML = '<p class="sch-empty">Failed to load data</p>'; }
 }
 
 /** Group key for a client name — case and spacing shouldn't split one person in two. */
@@ -5494,15 +5519,14 @@ async function renderSchedulePage() {
     </div>
     <div id="sch-cal-wrap"><div class="loading">Loading schedule...</div></div>
     <div class="sch-sum-wrap">
-      <div class="sch-sum-title">${_SCH_MONTHS[now.getMonth()]} ${now.getFullYear()}</div>
+      <div class="sch-sum-title" id="sch-sum-title">${_SCH_MONTHS[_schedSummaryMonth().mo]} ${_schedSummaryMonth().y}</div>
       <div id="sch-summary-body"><div class="loading">...</div></div>
     </div>`;
   _schedUpdateLabel();
   try { _schedEvents = await _schedLoadWeek(_schedWeekStart); } catch(e) { _schedEvents = []; }
   _schedRenderCalendar();
-  _schedLoadSummary()
-    .then(r => _schedRenderSummary(r))
-    .catch(() => { const w=document.getElementById('sch-summary-body'); if(w) w.innerHTML='<p class="sch-empty">Failed to load data</p>'; });
+  _schedSumKey = '';                 // force a load on first paint
+  _schedRefreshSummary();
 }
 
 function _schedUpdateLabel() {
@@ -5515,6 +5539,7 @@ async function schedNavWeek(dir) {
   const w = document.getElementById('sch-cal-wrap'); if(w) w.innerHTML='<div class="loading">Đang tải...</div>';
   try { _schedEvents = await _schedLoadWeek(_schedWeekStart); } catch(e) { _schedEvents = []; }
   _schedRenderCalendar();
+  _schedRefreshSummary();
 }
 
 async function schedGoToday() {
@@ -5522,6 +5547,7 @@ async function schedGoToday() {
   const w = document.getElementById('sch-cal-wrap'); if(w) w.innerHTML='<div class="loading">Đang tải...</div>';
   try { _schedEvents = await _schedLoadWeek(_schedWeekStart); } catch(e) { _schedEvents = []; }
   _schedRenderCalendar();
+  _schedRefreshSummary();
 }
 
 window._showPage = showPage;
