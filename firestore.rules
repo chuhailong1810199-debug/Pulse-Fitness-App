@@ -84,6 +84,13 @@ service cloud.firestore {
     }
 
     // ── BOOKINGS collection (coach schedule only) ─────────
+    // Chi tiết tài khoản nhận tiền của coach. Khách PHẢI đọc được để chuyển
+    // khoản — số tài khoản sinh ra để chia sẻ — nhưng chỉ coach được sửa.
+    match /settings/{docId} {
+      allow read:  if request.auth != null;
+      allow write: if isCoach();
+    }
+
     match /bookings/{bookingId} {
       allow read, write: if isCoach();
     }
