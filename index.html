@@ -5376,12 +5376,13 @@ async function schedDeleteEvt(id) {
 }
 
 /**
- * Which month the summary describes: the one containing the displayed week's
- * Thursday. A week straddling two months then resolves the same way ISO week
- * numbering does, instead of jumping on the Monday.
+ * Which month the summary describes: the one the displayed week STARTS in.
+ * A week running 31 Aug - 6 Sep therefore reports August, which is how the
+ * month reads to the person paging back through it — the totals for a month
+ * stay on screen until the first week that begins in the next one.
  */
 function _schedSummaryMonth() {
-  const base = _schedWeekStart ? _schedAddDays(_schedWeekStart, 3) : new Date();
+  const base = _schedWeekStart ? new Date(_schedWeekStart) : new Date();
   return { y: base.getFullYear(), mo: base.getMonth() };
 }
 
