@@ -144,7 +144,17 @@ service cloud.firestore {
                  get(/databases/$(database)/documents/settings/plans).data[request.resource.data.planId].price
               && request.resource.data.months ==
                  get(/databases/$(database)/documents/settings/plans).data[request.resource.data.planId].months);
-        allow update, delete: if isCoach();
+        // A client may take back an invoice they raised by mistake, and nothing
+        // else: only unpaid -> cancelled, only those two fields. Marking rather
+        // than deleting keeps the record, so a cancellation cannot be used to
+        // erase something already paid for.
+        allow update: if isCoach()
+          || (isClientOwner(clientId)
+              && resource.data.status == 'unpaid'
+              && request.resource.data.status == 'cancelled'
+              && request.resource.data.diff(resource.data).affectedKeys()
+                   .hasOnly(['status', 'cancelledAt']));
+        allow delete: if isCoach();
       }
 
       // Everything the client legitimately owns, at any depth.

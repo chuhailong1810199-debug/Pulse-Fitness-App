@@ -6041,8 +6041,14 @@ async function billIssue(planId) {
   const plan = accessPlan(planId || (activeClient.access || {}).planId);
   if (!plan) { alert('Chọn gói trước đã.'); return; }
   const today = _ymd();
-  const id = today + '-' + plan.id;
-  if (_billInvoices.some(i => i.id === id)) { alert('Hôm nay đã tạo hoá đơn gói này rồi.'); return; }
+  if (_billInvoices.some(i => i.status !== 'cancelled' && i.planId === plan.id && i.issuedOn === today)) {
+    alert('Hôm nay đã tạo hoá đơn gói này rồi.'); return;
+  }
+  // A cancelled invoice keeps its id, so picking the same plan again after a
+  // mis-click needs a fresh one — writing over the old doc would read as an
+  // update, which the rules refuse for a client.
+  let id = today + '-' + plan.id, n = 1;
+  while (_billInvoices.some(i => i.id === id)) id = today + '-' + plan.id + '-' + (++n);
   try {
     await setDoc(doc(db, 'clients', activeClient.id, 'invoices', id), {
       kind: 'access', planId: plan.id, planName: plan.name, months: plan.months,
@@ -6074,6 +6080,24 @@ async function billConfirm(invoiceId) {
     activeClient.access = { ...(activeClient.access || {}), planId: inv.planId, paidUntil: until };
     await loadBilling();
   } catch (e) { alert('Không xác nhận được: ' + (e.message || '')); }
+}
+
+/**
+ * Take back an unpaid invoice. The document stays, marked cancelled: a client
+ * who has already transferred must not be able to make the record of it vanish,
+ * and the coach should still see that the wrong plan was picked.
+ */
+async function billCancel(invoiceId) {
+  if (!activeClient) return;
+  const inv = _billInvoices.find(i => i.id === invoiceId);
+  if (!inv || inv.status !== 'unpaid') return;
+  if (!confirm('Huỷ hoá đơn ' + (inv.planName || inv.planId) + ' · ' + fmtVnd(inv.amount) + '?\n\n'
+             + 'Chỉ huỷ khi bạn CHƯA chuyển khoản. Nếu đã chuyển rồi thì nhắn coach, đừng huỷ.')) return;
+  try {
+    await updateDoc(doc(db, 'clients', activeClient.id, 'invoices', invoiceId),
+      { status: 'cancelled', cancelledAt: new Date().toISOString() });
+    await loadBilling();
+  } catch (e) { alert('Không huỷ được: ' + (e.message || '')); }
 }
 
 async function billSetPlan(planId) {
@@ -6198,7 +6222,7 @@ function renderBillingPage() {
   const st = accessStatus(acc);
   const plan = accessPlan(acc.planId);
   const s = _billSettings || {};
-  const due = _billInvoices.find(i => i.status !== 'paid') || null;
+  const due = _billInvoices.find(i => i.status !== 'paid' && i.status !== 'cancelled') || null;
 
   let html = `
     <div class="bl-head bl-st-${st.state}">
@@ -6242,18 +6266,22 @@ function renderBillingPage() {
         ${isCoach
           ? `<button class="bl-toggle" onclick="billConfirm('${due.id}')">Xác nhận đã nhận tiền · gia hạn đến ${
               extendAccess(acc.paidUntil, due.months)}</button>`
-          : `<div class="bl-wait">Chuyển khoản xong, coach xác nhận là gia hạn ngay. Cần đổi gói thì nhắn coach huỷ hoá đơn này.</div>`}
+          : `<div class="bl-wait">Chuyển khoản xong, coach xác nhận là gia hạn ngay.</div>`}
+        <button class="bl-cancel" onclick="billCancel('${due.id}')">Huỷ hoá đơn — chọn gói khác</button>
       </div>`;
   }
 
   html += `<div class="bl-cat"><div class="bl-cat-name">Lịch sử thanh toán<span>${_billInvoices.length}</span></div>${
-    _billInvoices.length ? _billInvoices.map(i => `<div class="bl-hist">
+    _billInvoices.length ? _billInvoices.map(i => `<div class="bl-hist${i.status === 'cancelled' ? ' bl-void' : ''}">
       <div><div class="bl-hist-m">${escHtml(i.planName || i.planId)} · ${i.issuedOn}</div>
         <div class="bl-hist-s">${i.status === 'paid'
           ? 'Đã trả' + (i.paidAt ? ' ' + new Date(i.paidAt).toLocaleDateString('vi-VN') : '')
             + (i.extendedTo ? ' · gia hạn đến ' + i.extendedTo : '')
+          : i.status === 'cancelled'
+          ? 'Đã huỷ' + (i.cancelledAt ? ' ' + new Date(i.cancelledAt).toLocaleDateString('vi-VN') : '')
           : 'Chưa thanh toán'}</div></div>
-      <span class="bl-hist-a ${i.status === 'paid' ? 'bl-st-paid' : 'bl-st-due'}">${fmtVnd(i.amount)}</span>
+      <span class="bl-hist-a ${i.status === 'paid' ? 'bl-st-paid'
+                             : i.status === 'cancelled' ? 'bl-st-void' : 'bl-st-due'}">${fmtVnd(i.amount)}</span>
     </div>`).join('') : '<div class="bl-empty">Chưa có hoá đơn nào.</div>'}</div>`;
 
   wrap.innerHTML = html;
@@ -11141,6 +11169,13 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .bl-bank span{color:rgba(255,255,255,.45);}
 .bl-bank b{color:#fff;text-align:right;word-break:break-all;}
 .bl-toggle{margin-top:13px;width:100%;background:transparent;border:1px solid rgba(255,255,255,.2);border-radius:9px;color:rgba(255,255,255,.78);font-size:12px;font-weight:700;padding:9px;cursor:pointer;}
+.bl-cancel{margin-top:8px;width:100%;background:transparent;border:1px solid rgba(255,138,138,.32);
+  border-radius:9px;color:#ff9f9f;font-family:inherit;font-size:12px;font-weight:700;padding:9px;cursor:pointer;}
+.bl-cancel:hover{background:rgba(255,138,138,.09);}
+.bl-void{opacity:.5;}
+.bl-void .bl-hist-m{text-decoration:line-through;}
+.bl-st-void{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.16);color:rgba(255,255,255,.55);
+  text-decoration:line-through;}
 .bl-cat{margin-bottom:18px;}
 .bl-cat-name{font-size:11px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:#9b8dff;margin-bottom:8px;display:flex;gap:8px;align-items:center;}
 .bl-cat-name span{font-size:9px;color:rgba(255,255,255,.3);border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:1px 5px;}
