@@ -5376,14 +5376,27 @@ async function schedDeleteEvt(id) {
 }
 
 /**
- * Which month the summary describes: the one the displayed week STARTS in.
- * A week running 31 Aug - 6 Sep therefore reports August, which is how the
- * month reads to the person paging back through it — the totals for a month
- * stay on screen until the first week that begins in the next one.
+ * The summary covers a whole calendar month, 1st to last, and owns that month
+ * itself. Tying it to the displayed week meant a Mon-Sun straddling two months
+ * had to be forced into one of them; whichever way that was decided, half the
+ * week disagreed with the heading. The calendar keeps its own week paging.
  */
+let _schedSumY = null, _schedSumMo = null;
 function _schedSummaryMonth() {
-  const base = _schedWeekStart ? new Date(_schedWeekStart) : new Date();
-  return { y: base.getFullYear(), mo: base.getMonth() };
+  if (_schedSumY == null) { const n = new Date(); _schedSumY = n.getFullYear(); _schedSumMo = n.getMonth(); }
+  return { y: _schedSumY, mo: _schedSumMo };
+}
+async function schedNavSumMonth(dir) {
+  const { y, mo } = _schedSummaryMonth();
+  const d = new Date(y, mo + dir, 1);
+  _schedSumY = d.getFullYear(); _schedSumMo = d.getMonth();
+  await _schedRefreshSummary(true);
+}
+function schedSumThisMonth() {
+  const n = new Date();
+  if (_schedSumY === n.getFullYear() && _schedSumMo === n.getMonth()) return;
+  _schedSumY = n.getFullYear(); _schedSumMo = n.getMonth();
+  _schedRefreshSummary(true);
 }
 
 async function _schedLoadSummary() {
@@ -5520,7 +5533,12 @@ async function renderSchedulePage() {
     </div>
     <div id="sch-cal-wrap"><div class="loading">Loading schedule...</div></div>
     <div class="sch-sum-wrap">
-      <div class="sch-sum-title" id="sch-sum-title">${_SCH_MONTHS[_schedSummaryMonth().mo]} ${_schedSummaryMonth().y}</div>
+      <div class="sch-sum-head">
+        <button class="sch-sum-nav" onclick="schedNavSumMonth(-1)">&#8249;</button>
+        <div class="sch-sum-title" id="sch-sum-title">${_SCH_MONTHS[_schedSummaryMonth().mo]} ${_schedSummaryMonth().y}</div>
+        <button class="sch-sum-nav" onclick="schedNavSumMonth(1)">&#8250;</button>
+        <button class="sch-sum-now" onclick="schedSumThisMonth()">Tháng này</button>
+      </div>
       <div id="sch-summary-body"><div class="loading">...</div></div>
     </div>`;
   _schedUpdateLabel();
@@ -5540,7 +5558,6 @@ async function schedNavWeek(dir) {
   const w = document.getElementById('sch-cal-wrap'); if(w) w.innerHTML='<div class="loading">Đang tải...</div>';
   try { _schedEvents = await _schedLoadWeek(_schedWeekStart); } catch(e) { _schedEvents = []; }
   _schedRenderCalendar();
-  _schedRefreshSummary();
 }
 
 async function schedGoToday() {
@@ -5548,7 +5565,6 @@ async function schedGoToday() {
   const w = document.getElementById('sch-cal-wrap'); if(w) w.innerHTML='<div class="loading">Đang tải...</div>';
   try { _schedEvents = await _schedLoadWeek(_schedWeekStart); } catch(e) { _schedEvents = []; }
   _schedRenderCalendar();
-  _schedRefreshSummary();
 }
 
 window._showPage = showPage;
@@ -10439,6 +10455,13 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .yt-sub{font-size:12px;color:rgba(255,255,255,.55);margin-top:2px;}
 .yt-date{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.16);border-radius:9px;color:#fff;padding:6px 8px;font-size:12px;}
 .yt-warn{margin-top:10px;font-size:12px;line-height:1.45;color:#ffd479;background:rgba(255,196,0,.09);border:1px solid rgba(255,196,0,.25);border-radius:10px;padding:8px 10px;}
+.sch-sum-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
+.sch-sum-head .sch-sum-title{margin:0;flex:0 0 auto;min-width:112px;text-align:center;}
+.sch-sum-nav{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.16);border-radius:8px;
+  color:#fff;font-size:15px;line-height:1;padding:4px 11px;cursor:pointer;}
+.sch-sum-nav:hover{border-color:#7665ff;}
+.sch-sum-now{margin-left:auto;background:transparent;border:1px solid rgba(255,255,255,.18);border-radius:8px;
+  color:rgba(255,255,255,.7);font-size:11px;font-weight:700;padding:5px 11px;cursor:pointer;}
 .btn-test{background:rgba(118,101,255,.16) !important;border:1px solid rgba(118,101,255,.5) !important;color:#b9aaff !important;}
 .yt-warn b{color:#ffe4a8;}
 .yt-warn-go{display:block;margin-top:8px;background:rgba(255,196,0,.14);border:1px solid rgba(255,196,0,.4);
