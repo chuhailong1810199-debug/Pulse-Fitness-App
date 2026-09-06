@@ -64,6 +64,8 @@ const ref        = (storage, path) => storage.ref(path);
 const uploadBytesResumable = (ref, file) => ref.put(file);
 const getDownloadURL = (ref) => ref.getDownloadURL();
 const deleteObject = (ref) => ref.delete();
+const listAll      = (ref) => ref.listAll();
+const getMetadata  = (ref) => ref.getMetadata();
 </script>
 <script>
 
@@ -730,6 +732,7 @@ async function switchClient(id) {
   await hydrateExerciseLoadsForActiveDay(); // hydrate first, then subscribe to avoid snapshot race
   await loadStrengthHistory();
   await loadClientBodyweight();             // before render: the +kg inputs need it
+  loadStorageUsage(activeClient);
   renderExercises();
   subscribeProgram(); // subscribe AFTER hydration so initial snapshot doesn't clear exerciseLoads
   await renderStats();
@@ -1743,7 +1746,9 @@ async function uploadVideo(vKey, slot, input) {
       const existing = await getDoc(vidDocRef);
       const vidData = existing.exists ? existing.data() : {};
       vidData[slot + 'Url'] = url;
+      vidData[slot + 'Bytes'] = file.size || 0;
       await setDoc(vidDocRef, vidData);
+      bumpStorageUsage(file.size || 0, 'video', 1);
       renderExercises();
     }
   );
@@ -4798,6 +4803,7 @@ function renderClientBar(isCoach) {
   // rule beats a plain inline style. That is why clients saw the coach bar
   // stuck on "Loading...".
   bar.classList.toggle('hidden', !isCoach);
+  loadStorageUsage(activeClient);
   if (isCoach) {
     bar.style.display = 'flex';
     const sel = document.getElementById('client-select');
@@ -5897,6 +5903,100 @@ function escHtml(str) {
 // ── CLIENT PROFILE & ASSESSMENT (FTN-13) ───────────────
 let _cpMeasurements = []; // in-memory list for current session
 let _cpWeightChart = null;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STORAGE USAGE
+// Nothing has ever recorded a file size, so the only truthful source is Cloud
+// Storage itself: walk the client's folders and sum the object metadata. That
+// costs a request per file, so the total is cached on the client document and
+// recomputed only on demand. New uploads adjust the cached figure as they land,
+// which keeps it close between recalculations without another full walk.
+// ═══════════════════════════════════════════════════════════════════════════
+const STORAGE_QUOTA_MB = 500;          // per client, until a paid tier says otherwise
+let _storageUsage = null;              // { bytes, videoBytes, photoBytes, files, at, stale }
+
+function fmtBytes(b) {
+  if (!(b > 0)) return '0 MB';
+  const mb = b / (1024 * 1024);
+  return mb >= 1024 ? (mb / 1024).toFixed(2) + ' GB' : mb.toFixed(mb < 10 ? 1 : 0) + ' MB';
+}
+
+/** Sum every object under a prefix, walking sub-folders. */
+async function _storageWalk(path) {
+  let bytes = 0, files = 0;
+  const res = await listAll(ref(storage, path));
+  const metas = await Promise.all(res.items.map(i => getMetadata(i).catch(() => null)));
+  metas.forEach(m => { if (m && m.size) { bytes += Number(m.size) || 0; files++; } });
+  const subs = await Promise.all(res.prefixes.map(pfx => _storageWalk(pfx.fullPath)));
+  subs.forEach(r => { bytes += r.bytes; files += r.files; });
+  return { bytes, files };
+}
+
+/** Recompute from Cloud Storage and cache it on the client document. */
+async function recalcStorageUsage(silent) {
+  if (!activeClient) return null;
+  const btn = document.getElementById('stg-recalc');
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    const [vid, pho] = await Promise.all([
+      _storageWalk('videos/' + activeClient.id).catch(() => ({ bytes: 0, files: 0 })),
+      _storageWalk('progressPhotos/' + activeClient.id).catch(() => ({ bytes: 0, files: 0 })),
+    ]);
+    const usage = { bytes: vid.bytes + pho.bytes, videoBytes: vid.bytes, photoBytes: pho.bytes,
+                    files: vid.files + pho.files, at: new Date().toISOString() };
+    _storageUsage = usage;
+    try { await updateDoc(doc(db, 'clients', activeClient.id), { storage: usage }); } catch (_e) {}
+    renderStorageBar();
+    return usage;
+  } catch (e) {
+    console.error('[storage] recalc failed', e);
+    if (!silent) alert('Could not read storage usage: ' + (e.message || 'unknown error'));
+    return null;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Recalculate'; }
+  }
+}
+
+/** Keep the cached figure moving as files come and go, without a full walk. */
+async function bumpStorageUsage(deltaBytes, kind, deltaFiles) {
+  if (!activeClient || !deltaBytes) return;
+  const u = _storageUsage || { bytes: 0, videoBytes: 0, photoBytes: 0, files: 0, at: null };
+  u.bytes = Math.max(0, (u.bytes || 0) + deltaBytes);
+  if (kind === 'video') u.videoBytes = Math.max(0, (u.videoBytes || 0) + deltaBytes);
+  else                  u.photoBytes = Math.max(0, (u.photoBytes || 0) + deltaBytes);
+  u.files = Math.max(0, (u.files || 0) + (deltaFiles || 0));
+  u.stale = true;                     // adjusted, not measured — the UI says so
+  _storageUsage = u;
+  renderStorageBar();
+  try { await updateDoc(doc(db, 'clients', activeClient.id), { storage: u }); } catch (_e) {}
+}
+
+function renderStorageBar() {
+  const hosts = [document.getElementById('stg-bar-coach'), document.getElementById('stg-bar-client')];
+  const u = _storageUsage;
+  hosts.forEach(host => {
+    if (!host) return;
+    if (!u) { host.innerHTML = ''; return; }
+    const quota = STORAGE_QUOTA_MB * 1024 * 1024;
+    const pct = Math.min(100, (u.bytes / quota) * 100);
+    const level = pct >= 90 ? 'over' : pct >= 75 ? 'warn' : 'ok';
+    host.innerHTML = '<div class="stg" title="' + (u.files || 0) + ' files' +
+      (u.stale ? ' · estimate since the last recalculation' : '') + '">' +
+      '<div class="stg-top"><span class="stg-lbl">Storage</span>' +
+      '<span class="stg-num stg-' + level + '">' + fmtBytes(u.bytes) + ' / ' + STORAGE_QUOTA_MB + ' MB' +
+      (u.stale ? ' *' : '') + '</span></div>' +
+      '<div class="stg-track"><div class="stg-fill stg-fill-' + level + '" style="width:' + pct.toFixed(1) + '%"></div></div>' +
+      '<div class="stg-sub">' + fmtBytes(u.videoBytes) + ' video · ' + fmtBytes(u.photoBytes) + ' photos' +
+      (userRole === 'coach' ? ' <button class="stg-recalc" id="stg-recalc" onclick="recalcStorageUsage()">Recalculate</button>' : '') +
+      '</div></div>';
+  });
+}
+
+/** Read the cached figure written by the last recalculation. */
+function loadStorageUsage(clientDoc) {
+  _storageUsage = (clientDoc && clientDoc.storage) || null;
+  renderStorageBar();
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // YOUTH DEVELOPMENT TEST BATTERY
@@ -8785,6 +8885,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <button class="add-client-btn" onclick="openEditClientModal()" style="background:#1a0c06;border-color:rgba(255,255,255,0.60);color:rgba(255,255,255,0.88);">Edit</button>
     <button class="add-client-btn" onclick="openClientProfile()" style="background:#0a1a2e;border-color:#2a3a4e;color:#4488ff;">Profile</button>
     <button class="add-client-btn" id="export-xlsx-btn" onclick="exportClientExcel()" style="background:#0a2e18;border-color:#2a4e3a;color:#4fd18b;" title="Xuất báo cáo Excel">Excel</button>
+    <div id="stg-bar-coach" class="stg-host"></div>
   </div>
 
   <div class="nav">
@@ -8815,6 +8916,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
       <div id="sync-indicator" class="sync-indicator sync-hidden"></div>
     </div>
     <!-- Compact edit controls -->
+    <div id="stg-bar-client" class="stg-host stg-host-client"></div>
     <div class="ctrl-bar">
       <span class="ctrl-label">Edit program</span>
       <div class="ctrl-right">
@@ -10568,6 +10670,21 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
  .yr-chip-good{background:#dff5e8;color:#1c7a4a;border-color:#9fd9bb;}
  .yr-chip-low{background:#f0f0f0;color:#555;border-color:#ccc;}
  .yr-prio,.yr-next{color:#111;}.yr-next{background:#f4f2ff;}.yr-emph-l,.yr-why{color:#666;}}
+
+.stg-host{flex:0 0 auto;min-width:186px;}
+.stg-host-client{margin:0 0 10px;max-width:340px;}
+.stg{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:7px 10px;}
+.stg-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px;}
+.stg-lbl{font-size:8.5px;font-weight:800;letter-spacing:.9px;text-transform:uppercase;color:rgba(255,255,255,.4);}
+.stg-num{font-size:11px;font-weight:800;color:#fff;white-space:nowrap;}
+.stg-num.stg-warn{color:#ffd479;} .stg-num.stg-over{color:#ff8f8f;}
+.stg-track{height:5px;border-radius:3px;background:rgba(255,255,255,.1);overflow:hidden;margin:5px 0 4px;}
+.stg-fill{height:100%;border-radius:3px;transition:width .3s;}
+.stg-fill-ok{background:#7665ff;} .stg-fill-warn{background:#ffc400;} .stg-fill-over{background:#ff6b6b;}
+.stg-sub{font-size:9px;color:rgba(255,255,255,.38);display:flex;align-items:center;gap:7px;}
+.stg-recalc{margin-left:auto;background:transparent;border:1px solid rgba(255,255,255,.18);border-radius:6px;
+  color:rgba(255,255,255,.6);font-size:9px;font-weight:700;padding:2px 7px;cursor:pointer;}
+.stg-recalc:disabled{opacity:.5;}
 </style>
 </body>
 </html>
