@@ -3,8 +3,16 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // ── Helper: là coach nếu email khớp HOẶC role == 'coach' trong Firestore
+    // `email_verified != false` rather than `== true`: a Google sign-in always
+    // carries the claim, so this blocks an unverified email/password account if
+    // that provider is ever switched on, without locking anyone out should the
+    // claim be absent.
+    function verifiedEmail() {
+      return request.auth != null && request.auth.token.email_verified != false;
+    }
+
     function isCoach() {
-      return request.auth != null && (
+      return verifiedEmail() && (
         request.auth.token.email == 'chuhailong1810199@gmail.com' ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'coach')
@@ -16,7 +24,7 @@ service cloud.firestore {
     // Tính duy nhất được cưỡng chế bởi collection /clientEmails bên dưới —
     // không được bỏ nó đi, nếu không hai client trùng email sẽ đọc/ghi được data của nhau.
     function isClientOwner(clientId) {
-      return request.auth != null &&
+      return verifiedEmail() &&
         exists(/databases/$(database)/documents/clients/$(clientId)) &&
         get(/databases/$(database)/documents/clients/$(clientId)).data.email == request.auth.token.email;
     }
@@ -106,9 +114,16 @@ service cloud.firestore {
       // writes their storage figure as files land. `access` is money — it is
       // what says the subscription is paid until — so only the coach sets it.
       // Hiding the buttons is not a control; this is.
+      // `email` decides who owns this document, and uniqueness across clients is
+      // what stops two people reading each other's data. The app routes every
+      // change through claimClientEmail() and the /clientEmails index, but a
+      // client writing the field directly would bypass that entirely — so the
+      // rules refuse it here too. `access` is money and is coach-only for the
+      // same reason.
       allow update: if isCoach()
         || (isClientOwner(clientId)
-            && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['access']));
+            && !request.resource.data.diff(resource.data).affectedKeys()
+                 .hasAny(['access', 'email', 'coachUid']));
 
       // Invoices are readable by the client so they can pay, and writable only
       // by the coach. This must NOT be covered by a broader wildcard below:
