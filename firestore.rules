@@ -99,14 +99,36 @@ service cloud.firestore {
     // Coach: full access tất cả clients
     // Client: chỉ đọc/ghi data của chính mình (khớp email)
     match /clients/{clientId} {
-      allow read, write: if isCoach() || isClientOwner(clientId);
+      allow read: if isCoach() || isClientOwner(clientId);
+      allow create, delete: if isCoach();
 
-      // Tất cả subcollections ở MỌI độ sâu:
-      // assessment, checkpoints, workoutHistory, workoutHistory/{id}/exercises,
-      // videos, progressPhotos, sessionLoads
-      match /{document=**} {
-        allow read, write: if isCoach() || isClientOwner(clientId);
+      // A client may edit their own name and their own program, and the app
+      // writes their storage figure as files land. `access` is money — it is
+      // what says the subscription is paid until — so only the coach sets it.
+      // Hiding the buttons is not a control; this is.
+      allow update: if isCoach()
+        || (isClientOwner(clientId)
+            && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['access']));
+
+      // Invoices are readable by the client so they can pay, and writable only
+      // by the coach. This must NOT be covered by a broader wildcard below:
+      // allow rules are OR-ed, so one permissive match would undo this one.
+      match /invoices/{invoiceId} {
+        allow read:  if isCoach() || isClientOwner(clientId);
+        allow write: if isCoach();
       }
+
+      // Everything the client legitimately owns, at any depth.
+      match /assessment/{d=**}     { allow read, write: if isCoach() || isClientOwner(clientId); }
+      match /profile/{d=**}        { allow read, write: if isCoach() || isClientOwner(clientId); }
+      match /checkpoints/{d=**}    { allow read, write: if isCoach() || isClientOwner(clientId); }
+      match /measurements/{d=**}   { allow read, write: if isCoach() || isClientOwner(clientId); }
+      match /workoutHistory/{d=**} { allow read, write: if isCoach() || isClientOwner(clientId); }
+      match /sessionLoads/{d=**}   { allow read, write: if isCoach() || isClientOwner(clientId); }
+      match /videos/{d=**}         { allow read, write: if isCoach() || isClientOwner(clientId); }
+      match /progressPhotos/{d=**} { allow read, write: if isCoach() || isClientOwner(clientId); }
+      match /nutrition/{d=**}      { allow read, write: if isCoach() || isClientOwner(clientId); }
+      match /youthTests/{d=**}     { allow read, write: if isCoach() || isClientOwner(clientId); }
     }
   }
 }
