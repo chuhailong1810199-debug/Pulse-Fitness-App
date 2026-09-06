@@ -5916,9 +5916,71 @@ let _cpWeightChart = null;
 // The VietQR payload is built here rather than fetched from an image service,
 // so the amount and account never leave the device.
 // ═══════════════════════════════════════════════════════════════════════════
-let _billSettings = null;      // coach bank details + default rate
-let _billInvoices = [];        // newest first, for the active client
-let _billMonth    = '';        // YYYY-MM being worked on
+// APP ACCESS SUBSCRIPTION
+// Charging for use of the app, not for training sessions. A client holds a
+// paidUntil date; a paid invoice pushes it out. The storage allowance rides on
+// the plan, which is what the storage meter measures against.
+//
+// Nothing here locks anyone out. Expiry raises a notice for the coach and the
+// client; the training history stays readable, because it is the client's own
+// record and withholding it is a decision for the coach to take deliberately.
+//
+// No card or bank detail belonging to a client is ever entered or stored. The
+// only account held is the coach's own, which exists to be shared.
+// ═══════════════════════════════════════════════════════════════════════════
+const ACCESS_PLANS = [
+  { id: 'basic', name: 'Basic', price:  99000, months: 1, storageMb:  200 },
+  { id: 'plus',  name: 'Plus',  price: 179000, months: 1, storageMb:  500 },
+  { id: 'pro',   name: 'Pro',   price: 449000, months: 3, storageMb: 1000 },
+];
+const accessPlan = id => ACCESS_PLANS.find(p => p.id === id) || null;
+
+let _billSettings = null;
+let _billInvoices = [];
+
+// All date maths runs on YYYY-MM-DD parts, never through Date + toISOString:
+// building a local midnight and serialising it as UTC moves the day backwards
+// everywhere east of Greenwich, which in UTC+7 expired everyone a day early.
+function _ymd(d) {
+  if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}/.test(d)) return d.slice(0, 10);
+  const x = d ? new Date(d) : new Date();
+  return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0');
+}
+const _parts = s => { const [y, m, d] = _ymd(s).split('-').map(Number); return { y, m, d }; };
+const _dim = (y, m) => new Date(y, m, 0).getDate();
+function _addMonths(s, n) {
+  const { y, m, d } = _parts(s);
+  let tm = m + (n || 0), ty = y + Math.floor((tm - 1) / 12);
+  tm = ((tm - 1) % 12 + 12) % 12 + 1;
+  return ty + '-' + String(tm).padStart(2, '0') + '-' + String(Math.min(d, _dim(ty, tm))).padStart(2, '0');
+}
+function _diffDays(a, b) {
+  const A = _parts(a), B = _parts(b);
+  return Math.round((Date.UTC(B.y, B.m - 1, B.d) - Date.UTC(A.y, A.m - 1, A.d)) / 86400000);
+}
+
+function accessStatus(access, now, graceDays) {
+  const grace = graceDays == null ? 3 : graceDays;
+  const today = _ymd(now);
+  if (!access || !access.paidUntil) return { state: 'none', daysLeft: null, until: null, plan: access && access.planId };
+  const until = _ymd(access.paidUntil);
+  const daysLeft = _diffDays(today, until);
+  return { state: daysLeft >= 0 ? (daysLeft <= 7 ? 'ending' : 'active') : (daysLeft >= -grace ? 'grace' : 'expired'),
+           daysLeft, until, plan: access.planId };
+}
+/** Renewing early adds to what is left rather than throwing the remainder away. */
+function extendAccess(paidUntil, months, from) {
+  const today = _ymd(from);
+  const base = paidUntil && _diffDays(today, _ymd(paidUntil)) > 0 ? _ymd(paidUntil) : today;
+  return _addMonths(base, months || 1);
+}
+function accessTransferInfo(name, periodKey) {
+  return ('APP ' + String(periodKey).replace(/-/g, '') + ' ' + (name || ''))
+    .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9 ]/g, '').replace(/\s+/g, ' ').trim().slice(0, 25);
+}
+
+const ACCESS_LABEL = { none: 'Chưa kích hoạt', active: 'Đang hoạt động', ending: 'Sắp hết hạn',
+                       grace: 'Quá hạn — đang trong thời gian ân hạn', expired: 'Đã hết hạn' };
 
 function _crc16(str) {
   let crc = 0xFFFF;
@@ -5943,105 +6005,74 @@ function vietQrPayload(o) {
 }
 
 function fmtVnd(n) { return Number.isFinite(n) ? Math.round(n).toLocaleString('vi-VN') + ' ₫' : '0 ₫'; }
-function billNameKey(s) { return (s || '').trim().toLowerCase().replace(/\s+/g, ' '); }
-function billUnits(a, b) {
-  const t = s => { const m = /^(\d{1,2}):(\d{2})/.exec(s || ''); return m ? +m[1] * 60 + +m[2] : NaN; };
-  const mins = t(b) - t(a);
-  return Number.isFinite(mins) && mins > 0 ? Math.max(1, Math.ceil(mins / 60)) : 1;
-}
-
-function buildInvoice(o) {
-  const { clientName, aliases, bookings, rate, month } = o;
-  const keys = new Set([clientName, ...(aliases || [])].filter(Boolean).map(billNameKey));
-  const lines = [], unmatched = {};
-  let units = 0;
-  (bookings || []).forEach(b => {
-    if (b.status !== 'done') return;
-    const k = billNameKey(b.title);
-    if (!keys.has(k)) { const n = b.title || '(no name)'; unmatched[n] = (unmatched[n] || 0) + 1; return; }
-    const u = billUnits(b.startTime, b.endTime);
-    units += u;
-    lines.push({ date: b.date, from: b.startTime || '', to: b.endTime || '', units: u, kind: b.kind || 'company' });
-  });
-  lines.sort((a, b) => (a.date + a.from).localeCompare(b.date + b.from));
-  return { month, units, rate: rate || 0, amount: units * (rate || 0), lines,
-           unmatched: Object.entries(unmatched).map(([n, c]) => ({ name: n, count: c })) };
-}
 
 // ── data ───────────────────────────────────────────────────────────────────
 async function loadBilling() {
   if (!activeClient) return;
-  if (!_billMonth) _billMonth = new Date().toISOString().slice(0, 7);
+  try { const s = await getDoc(doc(db, 'settings', 'billing')); _billSettings = s.exists ? s.data() : null; }
+  catch (_e) { _billSettings = null; }
   try {
-    const s = await getDoc(doc(db, 'settings', 'billing'));
-    _billSettings = s.exists ? s.data() : null;
-  } catch (_e) { _billSettings = null; }
-  try {
-    const snap = await getDocs(query(
-      collection(db, 'clients', activeClient.id, 'invoices'), orderBy('month', 'desc'), limit(24)));
-    _billInvoices = snap.docs.map(d => d.data());
+    const snap = await getDocs(query(collection(db, 'clients', activeClient.id, 'invoices'),
+      orderBy('issuedOn', 'desc'), limit(24)));
+    _billInvoices = snap.docs.map(d => ({ id: d.id, ...d.data() }));
   } catch (_e) { _billInvoices = []; }
   renderBillingPage();
 }
 
-function billRate() {
-  const own = activeClient && activeClient.billing && activeClient.billing.rate;
-  return Number.isFinite(own) && own > 0 ? own : ((_billSettings && _billSettings.defaultRate) || 0);
-}
-
-/** Pull the month's bookings and build a draft invoice — nothing is written yet. */
-async function billPreview() {
-  if (!activeClient) return null;
-  const [y, m] = _billMonth.split('-');
-  const snap = await getDocs(query(collection(db, 'bookings'),
-    where('date', '>=', `${y}-${m}-01`), where('date', '<=', `${y}-${m}-31`)));
-  const bookings = snap.docs.map(d => d.data());
-  return buildInvoice({ clientName: activeClient.name, aliases: (activeClient.billing || {}).aliases,
-                        bookings, rate: billRate(), month: _billMonth });
-}
-
-async function billGenerate() {
-  const btn = document.getElementById('bill-gen');
-  if (btn) { btn.disabled = true; btn.textContent = 'Đang tính…'; }
-  try {
-    const inv = await billPreview();
-    if (!inv) return;
-    if (!inv.units) { alert('Tháng này chưa có buổi nào được đánh dấu done.'); return; }
-    const existing = _billInvoices.find(i => i.month === _billMonth);
-    if (existing && existing.status === 'paid'
-        && !confirm('Hoá đơn tháng này đã đánh dấu ĐÃ THANH TOÁN. Tính lại sẽ ghi đè — tiếp tục?')) return;
-    const rec = { ...inv, status: (existing && existing.status === 'paid') ? 'paid' : 'unpaid',
-                  paidAt: (existing && existing.paidAt) || null, method: (existing && existing.method) || null,
-                  note: (existing && existing.note) || '', createdAt: new Date().toISOString() };
-    await setDoc(doc(db, 'clients', activeClient.id, 'invoices', _billMonth), rec, { merge: true });
-    await loadBilling();
-  } catch (e) {
-    console.error('[billing] generate failed', e);
-    alert('Không tạo được hoá đơn: ' + (e.message || 'lỗi không rõ'));
-  } finally { if (btn) { btn.disabled = false; btn.textContent = 'Tạo hoá đơn tháng này'; } }
-}
-
-async function billMarkPaid(month, paid) {
+/** Raise an invoice for one more term of the client's plan. */
+async function billIssue(planId) {
   if (userRole !== 'coach' || !activeClient) return;
-  const method = paid ? (prompt('Nhận qua đâu? (chuyển khoản / tiền mặt / khác)', 'chuyển khoản') || '') : null;
-  if (paid && method === '') return;
+  const plan = accessPlan(planId || (activeClient.access || {}).planId);
+  if (!plan) { alert('Chọn gói trước đã.'); return; }
+  const today = _ymd();
+  const id = today + '-' + plan.id;
+  if (_billInvoices.some(i => i.id === id)) { alert('Hôm nay đã tạo hoá đơn gói này rồi.'); return; }
   try {
-    await setDoc(doc(db, 'clients', activeClient.id, 'invoices', month),
-      { status: paid ? 'paid' : 'unpaid', paidAt: paid ? new Date().toISOString() : null, method }, { merge: true });
+    await setDoc(doc(db, 'clients', activeClient.id, 'invoices', id), {
+      kind: 'access', planId: plan.id, planName: plan.name, months: plan.months,
+      amount: plan.price, issuedOn: today, status: 'unpaid', paidAt: null, method: null,
+    });
+    if (!(activeClient.access || {}).planId) {
+      activeClient.access = { ...(activeClient.access || {}), planId: plan.id };
+      await updateDoc(doc(db, 'clients', activeClient.id), { 'access.planId': plan.id });
+    }
     await loadBilling();
-  } catch (e) { alert('Không cập nhật được: ' + (e.message || '')); }
+  } catch (e) { alert('Không tạo được hoá đơn: ' + (e.message || '')); }
 }
 
-function billSetMonth(v) { _billMonth = v; renderBillingPage(); }
+/** Confirming payment is what extends access — the two must not drift apart. */
+async function billConfirm(invoiceId) {
+  if (userRole !== 'coach' || !activeClient) return;
+  const inv = _billInvoices.find(i => i.id === invoiceId);
+  if (!inv || inv.status === 'paid') return;
+  const method = prompt('Nhận qua đâu?', 'chuyển khoản');
+  if (method === null) return;
+  const until = extendAccess((activeClient.access || {}).paidUntil, inv.months);
+  try {
+    await setDoc(doc(db, 'clients', activeClient.id, 'invoices', invoiceId),
+      { status: 'paid', paidAt: new Date().toISOString(), method, extendedTo: until }, { merge: true });
+    await updateDoc(doc(db, 'clients', activeClient.id),
+      { 'access.planId': inv.planId, 'access.paidUntil': until });
+    activeClient.access = { ...(activeClient.access || {}), planId: inv.planId, paidUntil: until };
+    await loadBilling();
+  } catch (e) { alert('Không xác nhận được: ' + (e.message || '')); }
+}
+
+async function billSetPlan(planId) {
+  if (userRole !== 'coach' || !activeClient) return;
+  try {
+    await updateDoc(doc(db, 'clients', activeClient.id), { 'access.planId': planId });
+    activeClient.access = { ...(activeClient.access || {}), planId };
+    renderBillingPage();
+  } catch (e) { alert('Không đổi được gói: ' + (e.message || '')); }
+}
 
 // ── render ─────────────────────────────────────────────────────────────────
 function _billQr(el, text) {
   if (!text) { el.innerHTML = '<div class="bl-qr-none">Chưa có tài khoản nhận tiền</div>'; return; }
-  const draw = () => {
-    el.innerHTML = '';
+  const draw = () => { el.innerHTML = '';
     try { new QRCode(el, { text, width: 190, height: 190, correctLevel: QRCode.CorrectLevel.M }); }
-    catch (_e) { el.innerHTML = '<div class="bl-qr-none">Không vẽ được mã QR — dùng thông tin bên dưới</div>'; }
-  };
+    catch (_e) { el.innerHTML = '<div class="bl-qr-none">Không vẽ được mã — dùng thông tin bên dưới</div>'; } };
   if (window.QRCode) return draw();
   const s = document.createElement('script');
   s.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
@@ -6054,97 +6085,94 @@ function renderBillingPage() {
   const wrap = document.getElementById('billing-body');
   if (!wrap || !activeClient) return;
   const isCoach = userRole === 'coach';
-  const rate = billRate();
-  const inv = _billInvoices.find(i => i.month === _billMonth) || null;
+  const acc = activeClient.access || {};
+  const st = accessStatus(acc);
+  const plan = accessPlan(acc.planId);
   const s = _billSettings || {};
+  const due = _billInvoices.find(i => i.status !== 'paid') || null;
 
   let html = `
-    <div class="bl-head">
+    <div class="bl-head bl-st-${st.state}">
       <div class="bl-head-row">
         <div><div class="bl-client">${escHtml(activeClient.name || activeClient.id)}</div>
-          <div class="bl-sub">${rate > 0 ? fmtVnd(rate) + ' / buổi' : 'Chưa đặt đơn giá'}</div></div>
-        <input class="bl-month" type="month" value="${_billMonth}" onchange="billSetMonth(this.value)">
+          <div class="bl-sub">${plan ? plan.name + ' · ' + fmtVnd(plan.price) + ' / ' + plan.months + ' tháng'
+                                     : 'Chưa chọn gói'}</div></div>
+        <span class="bl-status bl-badge-${st.state}">${ACCESS_LABEL[st.state]}</span>
       </div>
-      ${isCoach ? `<div class="bl-actions">
-        <button class="bl-gen" id="bill-gen" onclick="billGenerate()">Tạo hoá đơn tháng này</button>
-        <button class="bl-set" onclick="openBillSettings()">Cài đặt thu tiền</button>
-      </div>` : ''}
-      ${isCoach && !(s.bankBin && s.account) ? `<div class="bl-warn">Chưa có tài khoản nhận tiền —
-        mã QR sẽ không hiện. Vào <b>Cài đặt thu tiền</b> để nhập.</div>` : ''}
-      ${isCoach && !(rate > 0) ? `<div class="bl-warn">Chưa có đơn giá cho khách này, hoá đơn sẽ ra 0 ₫.</div>` : ''}
+      <div class="bl-until">${
+        st.state === 'none' ? 'Chưa có ngày hết hạn — hoá đơn đầu tiên được xác nhận sẽ bắt đầu tính.'
+        : st.daysLeft >= 0 ? `Dùng đến <b>${st.until}</b> — còn <b>${st.daysLeft} ngày</b>`
+        : `Hết hạn từ <b>${st.until}</b> — quá <b>${-st.daysLeft} ngày</b>`}</div>
+      ${isCoach ? `<div class="bl-plans">${ACCESS_PLANS.map(p => `
+        <button class="bl-plan${acc.planId === p.id ? ' on' : ''}" onclick="billSetPlan('${p.id}')">
+          <span class="bl-plan-n">${p.name}</span>
+          <span class="bl-plan-p">${fmtVnd(p.price)}</span>
+          <span class="bl-plan-m">${p.months} tháng · ${p.storageMb} MB</span>
+        </button>`).join('')}</div>
+        <div class="bl-actions">
+          <button class="bl-gen" onclick="billIssue()">Tạo hoá đơn gia hạn</button>
+          <button class="bl-set" onclick="openBillSettings()">Cài đặt thu tiền</button>
+        </div>
+        ${!(s.bankBin && s.account) ? `<div class="bl-warn">Chưa có tài khoản nhận tiền — mã QR sẽ không hiện.
+          Vào <b>Cài đặt thu tiền</b> để nhập.</div>` : ''}` : ''}
     </div>`;
 
-  if (!inv) {
-    html += `<div class="bl-empty">Chưa có hoá đơn cho tháng ${_billMonth}.${
-      isCoach ? ' Bấm <b>Tạo hoá đơn tháng này</b> — số buổi lấy từ lịch, chỉ tính buổi đã đánh dấu done.' : ''}</div>`;
-  } else {
-    const paid = inv.status === 'paid';
-    const info = ('PT ' + _billMonth.replace('-', '') + ' ' + (activeClient.name || ''))
-      .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9 ]/g, '').slice(0, 25);
-    const qr = paid ? '' : vietQrPayload({ bin: s.bankBin, account: s.account, amount: inv.amount, info });
+  if (due) {
+    const info = accessTransferInfo(activeClient.name, due.issuedOn);
     html += `
-      <div class="bl-card ${paid ? 'bl-paid' : ''}">
+      <div class="bl-card">
         <div class="bl-amt-row">
-          <div><div class="bl-amt">${fmtVnd(inv.amount)}</div>
-            <div class="bl-amt-sub">${inv.units} buổi × ${fmtVnd(inv.rate)}</div></div>
-          <span class="bl-status ${paid ? 'bl-st-paid' : 'bl-st-due'}">${paid ? 'Đã thanh toán' : 'Chưa thanh toán'}</span>
+          <div><div class="bl-amt">${fmtVnd(due.amount)}</div>
+            <div class="bl-amt-sub">${escHtml(due.planName)} · thêm ${due.months} tháng · lập ${due.issuedOn}</div></div>
+          <span class="bl-status bl-badge-expired">Chưa thanh toán</span>
         </div>
-        ${paid && inv.paidAt ? `<div class="bl-paidat">Nhận ${new Date(inv.paidAt).toLocaleDateString('vi-VN')}${
-          inv.method ? ' · ' + escHtml(inv.method) : ''}</div>` : ''}
-        ${!paid && qr ? `<div class="bl-pay">
-            <div class="bl-qr" id="bl-qr"></div>
-            <div class="bl-bank">
-              <div><span>Ngân hàng</span><b>${escHtml(s.bankName || s.bankBin)}</b></div>
-              <div><span>Số tài khoản</span><b>${escHtml(s.account)}</b></div>
-              <div><span>Chủ tài khoản</span><b>${escHtml(s.holder || '—')}</b></div>
-              <div><span>Nội dung</span><b>${escHtml(info)}</b></div>
-            </div>
-          </div>` : ''}
-        ${isCoach ? `<button class="bl-toggle" onclick="billMarkPaid('${inv.month}', ${!paid})">${
-          paid ? 'Bỏ đánh dấu đã thanh toán' : 'Đánh dấu đã nhận tiền'}</button>` : ''}
-      </div>
-      <div class="bl-cat"><div class="bl-cat-name">Buổi đã tính<span>${inv.lines.length}</span></div>
-        ${inv.lines.map(l => `<div class="bl-line"><span>${l.date}${l.from ? ' · ' + l.from + '–' + l.to : ''}</span>
-          <span class="bl-line-u">${l.units} buổi</span></div>`).join('')}</div>
-      ${isCoach && inv.unmatched && inv.unmatched.length ? `<div class="bl-unmatched">
-        <b>Tên chưa khớp khách này</b> — kiểm tra xem có gõ lệch không:
-        ${inv.unmatched.map(u => `<span class="bl-um">${escHtml(u.name)} ×${u.count}</span>`).join('')}
-      </div>` : ''}`;
+        <div class="bl-pay">
+          <div class="bl-qr" id="bl-qr"></div>
+          <div class="bl-bank">
+            <div><span>Ngân hàng</span><b>${escHtml(s.bankName || s.bankBin || '—')}</b></div>
+            <div><span>Số tài khoản</span><b>${escHtml(s.account || '—')}</b></div>
+            <div><span>Chủ tài khoản</span><b>${escHtml(s.holder || '—')}</b></div>
+            <div><span>Nội dung</span><b>${escHtml(info)}</b></div>
+          </div>
+        </div>
+        ${isCoach ? `<button class="bl-toggle" onclick="billConfirm('${due.id}')">Xác nhận đã nhận tiền · gia hạn đến ${
+          extendAccess(acc.paidUntil, due.months)}</button>` : ''}
+      </div>`;
+  } else if (isCoach) {
+    html += `<div class="bl-empty">Không có hoá đơn nào đang chờ. Bấm <b>Tạo hoá đơn gia hạn</b> khi tới kỳ.</div>`;
   }
 
-  html += `<div class="bl-cat"><div class="bl-cat-name">Lịch sử<span>${_billInvoices.length}</span></div>${
-    _billInvoices.length ? _billInvoices.map(i => `<div class="bl-hist" onclick="billSetMonth('${i.month}')">
-      <div><div class="bl-hist-m">${i.month}</div><div class="bl-hist-s">${i.units} buổi</div></div>
+  html += `<div class="bl-cat"><div class="bl-cat-name">Lịch sử thanh toán<span>${_billInvoices.length}</span></div>${
+    _billInvoices.length ? _billInvoices.map(i => `<div class="bl-hist">
+      <div><div class="bl-hist-m">${escHtml(i.planName || i.planId)} · ${i.issuedOn}</div>
+        <div class="bl-hist-s">${i.status === 'paid'
+          ? 'Đã trả' + (i.paidAt ? ' ' + new Date(i.paidAt).toLocaleDateString('vi-VN') : '')
+            + (i.extendedTo ? ' · gia hạn đến ' + i.extendedTo : '')
+          : 'Chưa thanh toán'}</div></div>
       <span class="bl-hist-a ${i.status === 'paid' ? 'bl-st-paid' : 'bl-st-due'}">${fmtVnd(i.amount)}</span>
     </div>`).join('') : '<div class="bl-empty">Chưa có hoá đơn nào.</div>'}</div>`;
 
   wrap.innerHTML = html;
   const qrEl = document.getElementById('bl-qr');
-  if (qrEl && inv && inv.status !== 'paid') {
-    const info = ('PT ' + _billMonth.replace('-', '') + ' ' + (activeClient.name || ''))
-      .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9 ]/g, '').slice(0, 25);
-    _billQr(qrEl, vietQrPayload({ bin: s.bankBin, account: s.account, amount: inv.amount, info }));
-  }
+  if (qrEl && due) _billQr(qrEl, vietQrPayload({ bin: s.bankBin, account: s.account, amount: due.amount,
+                                                 info: accessTransferInfo(activeClient.name, due.issuedOn) }));
 }
 
 function openBillSettings() {
   const s = _billSettings || {};
-  const bin = prompt('Mã ngân hàng Napas (VD 970436 = Vietcombank, 970422 = MB, 970407 = Techcombank)', s.bankBin || '');
+  const bin = prompt('Mã ngân hàng Napas (970436 Vietcombank · 970422 MB · 970407 Techcombank · 970416 ACB)', s.bankBin || '');
   if (bin === null) return;
   const bankName = prompt('Tên ngân hàng hiển thị', s.bankName || '') || '';
-  const account = prompt('Số tài khoản nhận tiền', s.account || '') || '';
-  const holder = prompt('Tên chủ tài khoản (không dấu)', s.holder || '') || '';
-  const rate = parseFloat(prompt('Đơn giá mặc định mỗi buổi (VND)', String(s.defaultRate || '')) || '0');
-  saveBillSettings({ bankBin: bin.trim(), bankName: bankName.trim(), account: account.trim(),
-                     holder: holder.trim(), defaultRate: Number.isFinite(rate) && rate > 0 ? rate : 0 });
+  const account  = prompt('Số tài khoản nhận tiền', s.account || '') || '';
+  const holder   = prompt('Tên chủ tài khoản (không dấu)', s.holder || '') || '';
+  saveBillSettings({ bankBin: bin.trim(), bankName: bankName.trim(), account: account.trim(), holder: holder.trim() });
 }
-
 async function saveBillSettings(v) {
   try {
     await setDoc(doc(db, 'settings', 'billing'), v, { merge: true });
     _billSettings = { ...(_billSettings || {}), ...v };
     renderBillingPage();
-  } catch (e) { alert('Không lưu được cài đặt: ' + (e.message || '')); }
+  } catch (e) { alert('Không lưu được: ' + (e.message || '')); }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -6155,7 +6183,11 @@ async function saveBillSettings(v) {
 // recomputed only on demand. New uploads adjust the cached figure as they land,
 // which keeps it close between recalculations without another full walk.
 // ═══════════════════════════════════════════════════════════════════════════
-const STORAGE_QUOTA_MB = 500;          // per client, until a paid tier says otherwise
+/** Allowance comes from the client's access plan; 200 MB is the unsubscribed floor. */
+function storageQuotaMb() {
+  const p = typeof accessPlan === 'function' && accessPlan((activeClient && activeClient.access || {}).planId);
+  return (p && p.storageMb) || 200;
+}
 let _storageUsage = null;              // { bytes, videoBytes, photoBytes, files, at, stale }
 
 function fmtBytes(b) {
@@ -6220,13 +6252,13 @@ function renderStorageBar() {
   hosts.forEach(host => {
     if (!host) return;
     if (!u) { host.innerHTML = ''; return; }
-    const quota = STORAGE_QUOTA_MB * 1024 * 1024;
+    const quota = storageQuotaMb() * 1024 * 1024;
     const pct = Math.min(100, (u.bytes / quota) * 100);
     const level = pct >= 90 ? 'over' : pct >= 75 ? 'warn' : 'ok';
     host.innerHTML = '<div class="stg" title="' + (u.files || 0) + ' files' +
       (u.stale ? ' · estimate since the last recalculation' : '') + '">' +
       '<div class="stg-top"><span class="stg-lbl">Storage</span>' +
-      '<span class="stg-num stg-' + level + '">' + fmtBytes(u.bytes) + ' / ' + STORAGE_QUOTA_MB + ' MB' +
+      '<span class="stg-num stg-' + level + '">' + fmtBytes(u.bytes) + ' / ' + storageQuotaMb() + ' MB' +
       (u.stale ? ' *' : '') + '</span></div>' +
       '<div class="stg-track"><div class="stg-fill stg-fill-' + level + '" style="width:' + pct.toFixed(1) + '%"></div></div>' +
       '<div class="stg-sub">' + fmtBytes(u.videoBytes) + ' video · ' + fmtBytes(u.photoBytes) + ' photos' +
@@ -10975,6 +11007,22 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .bl-hist-m{font-size:13px;font-weight:700;color:#fff;}
 .bl-hist-s{font-size:10.5px;color:rgba(255,255,255,.42);margin-top:2px;}
 .bl-hist-a{font-size:11px;font-weight:800;border-radius:7px;padding:3px 9px;white-space:nowrap;}
+
+.bl-head.bl-st-expired{border-color:rgba(255,138,138,.35);background:rgba(255,138,138,.07);}
+.bl-head.bl-st-grace,.bl-head.bl-st-ending{border-color:rgba(255,196,0,.35);background:rgba(255,196,0,.07);}
+.bl-badge-active,.bl-badge-none{background:rgba(79,209,139,.16);border:1px solid rgba(79,209,139,.4);color:#7ee0a8;}
+.bl-badge-none{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.2);color:rgba(255,255,255,.6);}
+.bl-badge-ending,.bl-badge-grace{background:rgba(255,196,0,.16);border:1px solid rgba(255,196,0,.4);color:#ffd479;}
+.bl-badge-expired{background:rgba(255,138,138,.16);border:1px solid rgba(255,138,138,.42);color:#ff9f9f;}
+.bl-until{margin-top:10px;font-size:12.5px;color:rgba(255,255,255,.72);}
+.bl-until b{color:#fff;}
+.bl-plans{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px;}
+.bl-plan{display:flex;flex-direction:column;gap:2px;background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.14);
+  border-radius:11px;padding:9px 6px;cursor:pointer;text-align:center;}
+.bl-plan.on{border-color:#7665ff;background:rgba(118,101,255,.18);}
+.bl-plan-n{font-size:12px;font-weight:800;color:#fff;}
+.bl-plan-p{font-size:11px;font-weight:700;color:#b9aaff;}
+.bl-plan-m{font-size:9px;color:rgba(255,255,255,.4);}
 </style>
 </body>
 </html>
