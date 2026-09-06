@@ -5928,11 +5928,14 @@ let _cpWeightChart = null;
 // No card or bank detail belonging to a client is ever entered or stored. The
 // only account held is the coach's own, which exists to be shared.
 // ═══════════════════════════════════════════════════════════════════════════
-const ACCESS_PLANS = [
+// Prices live in settings/plans so the coach can change them without a deploy,
+// and so the rules can verify a client-raised invoice against the same figures.
+const ACCESS_PLANS_DEFAULT = [
   { id: 'basic', name: 'Basic', price:  99000, months: 1, storageMb:  200 },
   { id: 'plus',  name: 'Plus',  price: 179000, months: 1, storageMb:  500 },
   { id: 'pro',   name: 'Pro',   price: 449000, months: 3, storageMb: 1000 },
 ];
+let ACCESS_PLANS = ACCESS_PLANS_DEFAULT.slice();
 const accessPlan = id => ACCESS_PLANS.find(p => p.id === id) || null;
 
 let _billSettings = null;
@@ -6012,6 +6015,19 @@ async function loadBilling() {
   try { const s = await getDoc(doc(db, 'settings', 'billing')); _billSettings = s.exists ? s.data() : null; }
   catch (_e) { _billSettings = null; }
   try {
+    const pd = await getDoc(doc(db, 'settings', 'plans'));
+    if (pd.exists) {
+      const d = pd.data();
+      ACCESS_PLANS = ACCESS_PLANS_DEFAULT.map(p => ({ ...p, ...(d[p.id] || {}) }));
+    } else if (userRole === 'coach') {
+      // Seed once, so the rules have prices to check client-raised invoices against.
+      const seed = {};
+      ACCESS_PLANS_DEFAULT.forEach(p => { seed[p.id] = { name: p.name, price: p.price, months: p.months, storageMb: p.storageMb }; });
+      await setDoc(doc(db, 'settings', 'plans'), seed);
+      ACCESS_PLANS = ACCESS_PLANS_DEFAULT.slice();
+    }
+  } catch (_e) {}
+  try {
     const snap = await getDocs(query(collection(db, 'clients', activeClient.id, 'invoices'),
       orderBy('issuedOn', 'desc'), limit(24)));
     _billInvoices = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -6021,7 +6037,7 @@ async function loadBilling() {
 
 /** Raise an invoice for one more term of the client's plan. */
 async function billIssue(planId) {
-  if (userRole !== 'coach' || !activeClient) return;
+  if (!activeClient) return;
   const plan = accessPlan(planId || (activeClient.access || {}).planId);
   if (!plan) { alert('Chọn gói trước đã.'); return; }
   const today = _ymd();
@@ -6032,7 +6048,9 @@ async function billIssue(planId) {
       kind: 'access', planId: plan.id, planName: plan.name, months: plan.months,
       amount: plan.price, issuedOn: today, status: 'unpaid', paidAt: null, method: null,
     });
-    if (!(activeClient.access || {}).planId) {
+    // Only the coach may touch access; a client's choice rides on the invoice
+    // and is applied when the payment is confirmed.
+    if (userRole === 'coach' && !(activeClient.access || {}).planId) {
       activeClient.access = { ...(activeClient.access || {}), planId: plan.id };
       await updateDoc(doc(db, 'clients', activeClient.id), { 'access.planId': plan.id });
     }
@@ -6103,14 +6121,16 @@ function renderBillingPage() {
         st.state === 'none' ? 'Chưa có ngày hết hạn — hoá đơn đầu tiên được xác nhận sẽ bắt đầu tính.'
         : st.daysLeft >= 0 ? `Dùng đến <b>${st.until}</b> — còn <b>${st.daysLeft} ngày</b>`
         : `Hết hạn từ <b>${st.until}</b> — quá <b>${-st.daysLeft} ngày</b>`}</div>
-      ${isCoach ? `<div class="bl-plans">${ACCESS_PLANS.map(p => `
-        <button class="bl-plan${acc.planId === p.id ? ' on' : ''}" onclick="billSetPlan('${p.id}')">
+      ${due ? '' : `<div class="bl-plans">${ACCESS_PLANS.map(p => `
+        <button class="bl-plan${acc.planId === p.id ? ' on' : ''}" onclick="billIssue('${p.id}')">
           <span class="bl-plan-n">${p.name}</span>
           <span class="bl-plan-p">${fmtVnd(p.price)}</span>
           <span class="bl-plan-m">${p.months} tháng · ${p.storageMb} MB</span>
         </button>`).join('')}</div>
-        <div class="bl-actions">
-          <button class="bl-gen" onclick="billIssue()">Tạo hoá đơn gia hạn</button>
+        <div class="bl-pick-hint">${isCoach
+          ? 'Chọn gói để lập hoá đơn. Khách cũng tự chọn và tự tạo được.'
+          : 'Chọn gói để lấy mã QR thanh toán. Bạn chuyển khoản xong, coach xác nhận là gia hạn.'}</div>`}
+      ${isCoach ? `<div class="bl-actions">
           <button class="bl-set" onclick="openBillSettings()">Cài đặt thu tiền</button>
         </div>
         ${!(s.bankBin && s.account) ? `<div class="bl-warn">Chưa có tài khoản nhận tiền — mã QR sẽ không hiện.
@@ -6135,11 +6155,11 @@ function renderBillingPage() {
             <div><span>Nội dung</span><b>${escHtml(info)}</b></div>
           </div>
         </div>
-        ${isCoach ? `<button class="bl-toggle" onclick="billConfirm('${due.id}')">Xác nhận đã nhận tiền · gia hạn đến ${
-          extendAccess(acc.paidUntil, due.months)}</button>` : ''}
+        ${isCoach
+          ? `<button class="bl-toggle" onclick="billConfirm('${due.id}')">Xác nhận đã nhận tiền · gia hạn đến ${
+              extendAccess(acc.paidUntil, due.months)}</button>`
+          : `<div class="bl-wait">Chuyển khoản xong, coach xác nhận là gia hạn ngay. Cần đổi gói thì nhắn coach huỷ hoá đơn này.</div>`}
       </div>`;
-  } else if (isCoach) {
-    html += `<div class="bl-empty">Không có hoá đơn nào đang chờ. Bấm <b>Tạo hoá đơn gia hạn</b> khi tới kỳ.</div>`;
   }
 
   html += `<div class="bl-cat"><div class="bl-cat-name">Lịch sử thanh toán<span>${_billInvoices.length}</span></div>${
@@ -11066,6 +11086,8 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .bl-plan-p{font-size:11px;font-weight:700;color:#b9aaff;}
 .bl-plan-m{font-size:9px;color:rgba(255,255,255,.4);}
 
+.bl-pick-hint{margin-top:9px;font-size:11.5px;line-height:1.5;color:rgba(255,255,255,.45);}
+.bl-wait{margin-top:13px;font-size:11.5px;line-height:1.5;color:rgba(255,255,255,.5);background:rgba(255,255,255,.04);border-radius:9px;padding:9px 11px;}
 .bs-l{display:block;font-size:10px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:rgba(255,255,255,.45);margin:12px 0 5px;}
 .bs-l span{text-transform:none;letter-spacing:0;font-weight:600;color:rgba(255,255,255,.3);}
 .bs-i{width:100%;background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.16);border-radius:9px;color:#fff;font-size:14px;padding:9px 11px;}

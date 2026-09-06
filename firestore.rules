@@ -113,9 +113,23 @@ service cloud.firestore {
       // Invoices are readable by the client so they can pay, and writable only
       // by the coach. This must NOT be covered by a broader wildcard below:
       // allow rules are OR-ed, so one permissive match would undo this one.
+      // A client may raise their own invoice — that is a request to pay, not a
+      // grant of access. Two things keep it honest: it must be created unpaid,
+      // and the amount must equal the published price for the plan it names,
+      // so a client cannot invoice themselves 1.000 d for the top tier.
+      // Only the coach may ever mark one paid; that is what extends access.
       match /invoices/{invoiceId} {
-        allow read:  if isCoach() || isClientOwner(clientId);
-        allow write: if isCoach();
+        allow read:   if isCoach() || isClientOwner(clientId);
+        allow create: if isCoach()
+          || (isClientOwner(clientId)
+              && request.resource.data.status == 'unpaid'
+              && request.resource.data.paidAt == null
+              && request.resource.data.kind == 'access'
+              && request.resource.data.amount ==
+                 get(/databases/$(database)/documents/settings/plans).data[request.resource.data.planId].price
+              && request.resource.data.months ==
+                 get(/databases/$(database)/documents/settings/plans).data[request.resource.data.planId].months);
+        allow update, delete: if isCoach();
       }
 
       // Everything the client legitimately owns, at any depth.
