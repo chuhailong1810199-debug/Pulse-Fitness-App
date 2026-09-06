@@ -6099,6 +6099,97 @@ function _billQr(el, text) {
   document.head.appendChild(s);
 }
 
+// ── the pricing table ──────────────────────────────────────────────────────
+// What each plan actually unlocks, in the coach's own words. Keyed by plan id
+// so a plan the coach renames still shows the right list; an id with no entry
+// falls back to the two things every plan includes.
+const PLAN_PERKS = {
+  basic: [
+    'Giáo án riêng, chia sẵn theo từng buổi',
+    'Ghi tạ từng set — lịch sử sức mạnh theo tên bài',
+    'Lịch tập và theo dõi buổi đã tập',
+  ],
+  plus: [
+    'Mọi thứ ở gói Basic',
+    'Chụp ảnh bữa ăn — tự nhận diện món và macro',
+    'Mục tiêu calo / đạm tính riêng theo chỉ số InBody',
+    'Ảnh và video tiến trình',
+  ],
+  pro: [
+    'Mọi thứ ở gói Plus',
+    'Checkpoint InBody định kỳ, biểu đồ thay đổi',
+    'Bộ test thể chất cho trẻ + báo cáo phụ huynh',
+    'Xuất giáo án ra file Excel',
+    'Coach phản hồi ưu tiên',
+  ],
+};
+function _planFeatures(p) {
+  const list = (PLAN_PERKS[p.id] || ['Giáo án riêng theo mục tiêu', 'Ghi tạ và theo dõi tiến trình']).slice();
+  const mb = Number(p.storageMb) || 0;
+  list.push((mb >= 1000 ? (mb / 1000).toFixed(mb % 1000 ? 1 : 0) + ' GB' : mb + ' MB') + ' lưu ảnh và video');
+  return list;
+}
+function _billCycle(m) {
+  return m === 1 ? 'thu hàng tháng' : m === 3 ? 'thu mỗi quý'
+       : m === 6 ? 'thu mỗi nửa năm' : m === 12 ? 'thu hàng năm' : 'thu mỗi ' + m + ' tháng';
+}
+/**
+ * A "save %" badge is only honest between the same product on two billing
+ * cycles, so it is shown only when a monthly plan of equal-or-better storage
+ * exists to compare against. Tiers that differ in what they include get no
+ * badge — a cheaper tier is not a discount, it is less app.
+ */
+function _planSaving(p, all) {
+  if (!(p.months > 1)) return null;
+  const peer = all.find(q => q.id !== p.id && q.months === 1 && (q.storageMb || 0) >= (p.storageMb || 0));
+  if (!peer) return null;
+  const perMonth = p.price / p.months;
+  if (!(perMonth < peer.price)) return null;
+  return { pct: Math.round((1 - perMonth / peer.price) * 100), was: peer.price * p.months };
+}
+
+function _billPlansHtml(acc, isCoach) {
+  const plans = ACCESS_PLANS;
+  if (!plans.length) return '';
+  const save = {};
+  plans.forEach(p => { save[p.id] = _planSaving(p, plans); });
+  // The card that gets the gradient: the biggest genuine discount if there is
+  // one, otherwise the plan already being paid for, otherwise the middle tier.
+  let hot = plans.reduce((a, b) => ((save[b.id] || {}).pct || 0) > ((save[a.id] || {}).pct || 0) ? b : a, plans[0]);
+  if (!save[hot.id]) hot = plans.find(p => p.id === acc.planId) || plans[Math.floor((plans.length - 1) / 2)];
+
+  const cards = plans.map(p => {
+    const sv = save[p.id], cur = acc.planId === p.id, perMonth = p.price / Math.max(1, p.months);
+    return `
+      <div class="pl-card${p.id === hot.id ? ' hot' : ''}">
+        <div class="pl-top">
+          <span class="pl-name">${escHtml(p.name)}</span>
+          ${sv ? `<span class="pl-save">TIẾT KIỆM ${sv.pct}%</span>`
+               : cur ? '<span class="pl-cur">ĐANG DÙNG</span>' : ''}
+        </div>
+        <div class="pl-price">${fmtVnd(perMonth)}</div>
+        <div class="pl-per">mỗi tháng</div>
+        <div class="pl-billed">${sv ? `<s>${fmtVnd(sv.was)}</s> ` : ''}<b>${fmtVnd(p.price)}</b> · ${_billCycle(p.months)}</div>
+        <button class="pl-cta" onclick="billIssue('${p.id}')">
+          <span>${cur ? 'Gia hạn' : 'Bắt đầu'}</span><i class="pl-arrow">↗</i>
+        </button>
+        ${sv && cur ? '<div class="pl-curline">Gói đang dùng</div>' : ''}
+        <ul class="pl-feats">${_planFeatures(p).map(f => `<li>${escHtml(f)}</li>`).join('')}</ul>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="pl-wrap">
+      <div class="pl-hero">
+        <h2 class="pl-title">${isCoach ? 'Chọn gói cho khách' : 'Mở khoá toàn bộ Pulse'}</h2>
+        <p class="pl-lead">${isCoach
+          ? 'Chọn gói rồi lập hoá đơn — mã QR sinh ra kèm sẵn số tiền và nội dung chuyển khoản. Khách cũng tự chọn và tự tạo được.'
+          : 'Chọn gói phù hợp rồi quét mã QR để chuyển khoản. Coach xác nhận là mở khoá ngay, không mất ngày còn dư.'}</p>
+      </div>
+      <div class="pl-grid">${cards}</div>
+    </div>`;
+}
+
 function renderBillingPage() {
   const wrap = document.getElementById('billing-body');
   if (!wrap || !activeClient) return;
@@ -6121,21 +6212,14 @@ function renderBillingPage() {
         st.state === 'none' ? 'Chưa có ngày hết hạn — hoá đơn đầu tiên được xác nhận sẽ bắt đầu tính.'
         : st.daysLeft >= 0 ? `Dùng đến <b>${st.until}</b> — còn <b>${st.daysLeft} ngày</b>`
         : `Hết hạn từ <b>${st.until}</b> — quá <b>${-st.daysLeft} ngày</b>`}</div>
-      ${due ? '' : `<div class="bl-plans">${ACCESS_PLANS.map(p => `
-        <button class="bl-plan${acc.planId === p.id ? ' on' : ''}" onclick="billIssue('${p.id}')">
-          <span class="bl-plan-n">${p.name}</span>
-          <span class="bl-plan-p">${fmtVnd(p.price)}</span>
-          <span class="bl-plan-m">${p.months} tháng · ${p.storageMb} MB</span>
-        </button>`).join('')}</div>
-        <div class="bl-pick-hint">${isCoach
-          ? 'Chọn gói để lập hoá đơn. Khách cũng tự chọn và tự tạo được.'
-          : 'Chọn gói để lấy mã QR thanh toán. Bạn chuyển khoản xong, coach xác nhận là gia hạn.'}</div>`}
       ${isCoach ? `<div class="bl-actions">
           <button class="bl-set" onclick="openBillSettings()">Cài đặt thu tiền</button>
         </div>
         ${!(s.bankBin && s.account) ? `<div class="bl-warn">Chưa có tài khoản nhận tiền — mã QR sẽ không hiện.
           Vào <b>Cài đặt thu tiền</b> để nhập.</div>` : ''}` : ''}
     </div>`;
+
+  if (!due) html += _billPlansHtml(acc, isCoach);
 
   if (due) {
     const info = accessTransferInfo(activeClient.name, due.issuedOn);
@@ -11078,15 +11162,42 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .bl-badge-expired{background:rgba(255,138,138,.16);border:1px solid rgba(255,138,138,.42);color:#ff9f9f;}
 .bl-until{margin-top:10px;font-size:12.5px;color:rgba(255,255,255,.72);}
 .bl-until b{color:#fff;}
-.bl-plans{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px;}
-.bl-plan{display:flex;flex-direction:column;gap:2px;background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.14);
-  border-radius:11px;padding:9px 6px;cursor:pointer;text-align:center;}
-.bl-plan.on{border-color:#7665ff;background:rgba(118,101,255,.18);}
-.bl-plan-n{font-size:12px;font-weight:800;color:#fff;}
-.bl-plan-p{font-size:11px;font-weight:700;color:#b9aaff;}
-.bl-plan-m{font-size:9px;color:rgba(255,255,255,.4);}
-
-.bl-pick-hint{margin-top:9px;font-size:11.5px;line-height:1.5;color:rgba(255,255,255,.45);}
+.pl-wrap{margin:2px 0 20px;}
+.pl-hero{margin-bottom:14px;}
+.pl-title{margin:0;font-size:clamp(26px,7.4vw,40px);line-height:1.02;font-weight:900;letter-spacing:-1.4px;color:#fff;}
+.pl-lead{margin:9px 0 0;font-size:12.5px;line-height:1.55;color:rgba(255,255,255,.5);max-width:46ch;}
+.pl-grid{display:grid;grid-template-columns:1fr;gap:10px;}
+@media(min-width:720px){.pl-grid{grid-template-columns:repeat(3,1fr);}}
+.pl-card{position:relative;display:flex;flex-direction:column;border-radius:16px;padding:16px 16px 18px;
+  background:#eae8e2;color:#14141a;box-shadow:0 1px 0 rgba(255,255,255,.05);}
+.pl-card.hot{color:#fff;background:linear-gradient(158deg,#4b34ff 0%,#6d5bff 42%,#a99bff 100%);
+  box-shadow:0 10px 30px -12px rgba(90,64,255,.65);}
+.pl-top{display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:22px;margin-bottom:14px;}
+.pl-name{font-size:11px;font-weight:900;letter-spacing:1.7px;text-transform:uppercase;}
+.pl-save{background:#ff4d24;color:#fff;font-size:9.5px;font-weight:900;letter-spacing:.6px;
+  padding:4px 8px;border-radius:6px;white-space:nowrap;}
+.pl-cur{background:rgba(0,0,0,.1);font-size:9.5px;font-weight:900;letter-spacing:.6px;
+  padding:4px 8px;border-radius:6px;white-space:nowrap;}
+.pl-card.hot .pl-cur{background:rgba(255,255,255,.24);}
+.pl-price{font-size:clamp(30px,9vw,42px);line-height:1;font-weight:900;letter-spacing:-1.6px;}
+.pl-per{margin-top:5px;font-size:12px;opacity:.6;}
+.pl-billed{margin-top:9px;font-size:12px;opacity:.82;}
+.pl-billed s{opacity:.5;margin-right:2px;}
+.pl-cta{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;margin-top:15px;
+  background:#14141a;color:#fff;border:none;border-radius:999px;padding:13px 16px 13px 20px;
+  font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;transition:transform .12s,filter .12s;}
+.pl-card.hot .pl-cta{background:#fff;color:#14141a;}
+.pl-cta:hover{filter:brightness(1.12);}
+.pl-card.hot .pl-cta:hover{filter:brightness(.94);}
+.pl-cta:active{transform:scale(.985);}
+.pl-arrow{font-style:normal;font-size:16px;font-weight:700;color:#ff4d24;line-height:1;}
+.pl-curline{margin-top:8px;text-align:center;font-size:11px;font-weight:700;opacity:.72;}
+.pl-feats{list-style:none;margin:15px 0 0;padding:14px 0 0;display:flex;flex-direction:column;gap:8px;
+  border-top:1px solid rgba(0,0,0,.1);}
+.pl-card.hot .pl-feats{border-top-color:rgba(255,255,255,.24);}
+.pl-feats li{position:relative;padding-left:20px;font-size:12px;line-height:1.45;opacity:.82;}
+.pl-feats li::before{content:'';position:absolute;left:1px;top:.34em;width:10px;height:5px;
+  border-left:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(-45deg);opacity:.65;}
 .bl-wait{margin-top:13px;font-size:11.5px;line-height:1.5;color:rgba(255,255,255,.5);background:rgba(255,255,255,.04);border-radius:9px;padding:9px 11px;}
 .bs-l{display:block;font-size:10px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:rgba(255,255,255,.45);margin:12px 0 5px;}
 .bs-l span{text-transform:none;letter-spacing:0;font-weight:600;color:rgba(255,255,255,.3);}
