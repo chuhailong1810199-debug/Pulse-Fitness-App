@@ -6158,14 +6158,45 @@ function renderBillingPage() {
                                                  info: accessTransferInfo(activeClient.name, due.issuedOn) }));
 }
 
+const VN_BANKS = [
+  ['970441','VIB'],['970436','Vietcombank'],['970415','VietinBank'],['970418','BIDV'],['970405','Agribank'],
+  ['970422','MBBank'],['970407','Techcombank'],['970416','ACB'],['970432','VPBank'],['970423','TPBank'],
+  ['970403','Sacombank'],['970437','HDBank'],['970443','SHB'],['970426','MSB'],['970448','OCB'],
+  ['970431','Eximbank'],['970440','SeABank'],['970449','LPBank'],['970425','ABBANK'],['970419','NCB'],
+  ['970412','PVcomBank'],['970428','NamABank'],['970427','VietABank'],['970433','VietBank'],['970438','BaoVietBank'],
+  ['970452','KienLongBank'],['970400','SaigonBank'],['970408','GPBank'],['970429','SCB'],
+  ['546034','CAKE'],['963388','Timo'],
+];  // Napas BIN codes — a wrong one sends money to a different bank, so they are
+    // picked from a list rather than typed.
+
 function openBillSettings() {
+  if (userRole !== 'coach') return;
   const s = _billSettings || {};
-  const bin = prompt('Mã ngân hàng Napas (970436 Vietcombank · 970422 MB · 970407 Techcombank · 970416 ACB)', s.bankBin || '');
-  if (bin === null) return;
-  const bankName = prompt('Tên ngân hàng hiển thị', s.bankName || '') || '';
-  const account  = prompt('Số tài khoản nhận tiền', s.account || '') || '';
-  const holder   = prompt('Tên chủ tài khoản (không dấu)', s.holder || '') || '';
-  saveBillSettings({ bankBin: bin.trim(), bankName: bankName.trim(), account: account.trim(), holder: holder.trim() });
+  document.getElementById('bill-set-body').innerHTML = `
+    <label class="bs-l">Ngân hàng</label>
+    <select class="bs-i" id="bs-bank">
+      <option value="">— Chọn ngân hàng —</option>
+      ${VN_BANKS.map(([bin, name]) =>
+        `<option value="${bin}"${s.bankBin === bin ? ' selected' : ''}>${name} · ${bin}</option>`).join('')}
+    </select>
+    <label class="bs-l">Số tài khoản nhận tiền</label>
+    <input class="bs-i" id="bs-acc" inputmode="numeric" value="${escHtml(s.account || '')}" placeholder="số tài khoản">
+    <label class="bs-l">Tên chủ tài khoản <span>viết HOA, không dấu — đúng như ngân hàng hiển thị</span></label>
+    <input class="bs-i" id="bs-holder" value="${escHtml(s.holder || '')}" placeholder="NGUYEN VAN A">
+    <div class="bs-note">Thông tin này lưu trong Firestore sau lớp đăng nhập, không nằm trong mã nguồn.
+      Khách đọc được để chuyển khoản; chỉ bạn sửa được.</div>`;
+  document.getElementById('bill-set-modal').classList.add('open');
+}
+
+async function saveBillSettingsFromForm() {
+  const bin = document.getElementById('bs-bank').value;
+  const account = (document.getElementById('bs-acc').value || '').replace(/\s+/g, '');
+  const holder = (document.getElementById('bs-holder').value || '').trim().toUpperCase();
+  if (!bin) { alert('Chọn ngân hàng đã.'); return; }
+  if (!/^\d{6,20}$/.test(account)) { alert('Số tài khoản chỉ gồm chữ số.'); return; }
+  const name = (VN_BANKS.find(b => b[0] === bin) || [, ''])[1];
+  await saveBillSettings({ bankBin: bin, bankName: name, account, holder });
+  document.getElementById('bill-set-modal').classList.remove('open');
 }
 async function saveBillSettings(v) {
   try {
@@ -9272,6 +9303,17 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   </div>
 
   <!-- PROGRESS PAGE -->
+  <div class="modal-overlay" id="bill-set-modal">
+    <div class="modal" style="max-width:400px">
+      <div class="modal-name">Tài khoản nhận tiền</div>
+      <div id="bill-set-body"></div>
+      <div class="form-actions" style="margin-top:14px">
+        <button class="btn-save" onclick="saveBillSettingsFromForm()">Lưu</button>
+        <button class="btn-discard" onclick="document.getElementById('bill-set-modal').classList.remove('open')">Huỷ</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── BILLING ──────────────────────────────────────────────────────── -->
   <div id="billing-page"><div id="billing-body"></div></div>
 
@@ -11023,6 +11065,12 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .bl-plan-n{font-size:12px;font-weight:800;color:#fff;}
 .bl-plan-p{font-size:11px;font-weight:700;color:#b9aaff;}
 .bl-plan-m{font-size:9px;color:rgba(255,255,255,.4);}
+
+.bs-l{display:block;font-size:10px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:rgba(255,255,255,.45);margin:12px 0 5px;}
+.bs-l span{text-transform:none;letter-spacing:0;font-weight:600;color:rgba(255,255,255,.3);}
+.bs-i{width:100%;background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.16);border-radius:9px;color:#fff;font-size:14px;padding:9px 11px;}
+.bs-i:focus{outline:none;border-color:#7665ff;}
+.bs-note{margin-top:13px;font-size:11px;line-height:1.5;color:rgba(255,255,255,.42);background:rgba(255,255,255,.04);border-radius:9px;padding:9px 11px;}
 </style>
 </body>
 </html>
