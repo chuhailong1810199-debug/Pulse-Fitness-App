@@ -6285,7 +6285,7 @@ function _planSaving(p, all) {
   return { pct: Math.round((1 - perMonth / peer.price) * 100), was: peer.price * p.months };
 }
 
-function _billPlansHtml(acc, isCoach) {
+function _billPlansHtml(acc, isCoach, bare) {
   const plans = ACCESS_PLANS;
   if (!plans.length) return '';
   const save = {};
@@ -6315,14 +6315,19 @@ function _billPlansHtml(acc, isCoach) {
       </div>`;
   }).join('');
 
+  // Under its own section rule the block needs no headline of its own; it only
+  // carries one when it is the whole page.
   return `
     <div class="pl-wrap">
-      <div class="pl-hero">
+      ${bare ? `<p class="pl-lead pl-lead-bare">${isCoach
+          ? 'Cho khách không tập cùng bạn — chỉ trả tiền dùng app.'
+          : 'Nếu bạn chỉ muốn dùng app mà không cần coaching.'}</p>`
+        : `<div class="pl-hero">
         <h2 class="pl-title">${isCoach ? 'Chọn gói cho khách' : 'Mở khoá toàn bộ Pulse'}</h2>
         <p class="pl-lead">${isCoach
           ? 'Chọn gói rồi lập hoá đơn — mã QR sinh ra kèm sẵn số tiền và nội dung chuyển khoản. Khách cũng tự chọn và tự tạo được.'
           : 'Chọn gói phù hợp rồi quét mã QR để chuyển khoản. Coach xác nhận là mở khoá ngay, không mất ngày còn dư.'}</p>
-      </div>
+      </div>`}
       <div class="pl-grid">${cards}</div>
     </div>`;
 }
@@ -6456,7 +6461,7 @@ function renderBillingPage() {
   } else {
     html += _blCoachingHtml(onCoaching ? coa.packageId : null);
     html += `<div class="bl-sec"><span>Chỉ dùng app, không kèm coaching</span><i></i></div>`;
-    html += _billPlansHtml(acc, isCoach);
+    html += _billPlansHtml(acc, isCoach, true);
   }
 
   html += `<div class="bl-cat"><div class="bl-cat-name">Lịch sử thanh toán<span>${_billInvoices.length}</span></div>${
@@ -11514,6 +11519,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .pl-wrap{margin:2px 0 20px;}
 .pl-hero{margin-bottom:14px;}
 .pl-title{margin:0;font-size:clamp(26px,7.4vw,40px);line-height:1.02;font-weight:900;letter-spacing:-1.4px;color:#fff;}
+.pl-lead-bare{margin:0 0 11px;}
 .pl-lead{margin:9px 0 0;font-size:12.5px;line-height:1.55;color:rgba(255,255,255,.5);max-width:46ch;}
 .pl-grid{display:grid;grid-template-columns:1fr;gap:10px;}
 @media(min-width:720px){.pl-grid{grid-template-columns:repeat(3,1fr);}}
