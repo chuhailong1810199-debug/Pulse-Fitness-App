@@ -5938,8 +5938,69 @@ const ACCESS_PLANS_DEFAULT = [
 let ACCESS_PLANS = ACCESS_PLANS_DEFAULT.slice();
 const accessPlan = id => ACCESS_PLANS.find(p => p.id === id) || null;
 
+// ── coaching, the tier above app access ────────────────────────────────────
+// Two things are sold. Coaching is the service — the coach's own time, InBody
+// reviews, form checks — and it carries app access with it for as long as it
+// runs. App access on its own is for people not being coached. A client is
+// therefore never billed twice: confirming a coaching term pushes out the same
+// paidUntil that the access plans write, so every existing check — the expiry
+// notice, the storage allowance — keeps working without knowing coaching exists.
+const COACHING_TERMS = [
+  { m: 1, label: '1 tháng', off:  0 },
+  { m: 3, label: '3 tháng', off: 10 },
+  { m: 6, label: '6 tháng', off: 20 },
+];
+const COACHING_DEFAULT = [
+  { id: 'acc', name: 'Lifestyle Accountability', monthly: 1500000, includesPlan: 'plus', popular: false,
+    tagline: 'Lớp coaching giữ bạn đi đúng lộ trình: thói quen, nếp sinh hoạt và tính kỷ luật.',
+    benefits: ['Tính điểm thói quen và nhắc hằng ngày',
+               'Điều chỉnh kế hoạch theo tuần công tác hoặc đi xa',
+               'Chat trực tiếp với coach qua Pulse'] },
+  { id: 'recomp', name: 'Body Recomposition', monthly: 2800000, includesPlan: 'pro', popular: true,
+    tagline: 'Dành cho người đi làm bận rộn muốn thay đổi ngoại hình rõ rệt mà vẫn giữ sức và năng lượng.',
+    benefits: ['Lịch tập chia theo số ngày bạn có',
+               'Mục tiêu dinh dưỡng đơn giản, điều chỉnh liên tục',
+               'Review tiến độ mỗi tuần kèm việc cần làm',
+               'Đo InBody và so sánh mỗi 4 tuần'] },
+  { id: 'hybrid', name: 'Hybrid Performance', monthly: 3500000, includesPlan: 'pro', popular: false,
+    tagline: 'Cho người tập cân bằng giữa sức mạnh và thể lực thi đấu, điều chỉnh theo khả năng hồi phục.',
+    benefits: ['Chu kỳ sức mạnh và thể lực được periodize',
+               'Giáo án chuẩn bị HYROX / chạy bộ',
+               'Feedback về pace, kỹ thuật và chiến thuật',
+               'Toàn bộ quyền lợi của gói Body Recomposition'] },
+];
+const COACHING_PERKS = [
+  ['📱', 'Theo dõi trong Pulse',  'Giáo án, log kg và tiến độ ở một chỗ'],
+  ['📊', 'InBody mỗi 4 tuần',     'So sánh cân nặng, mỡ và cơ nạc'],
+  ['🎥', 'Check form qua video',  'Gửi clip, coach sửa kỹ thuật'],
+  ['💬', 'Hỗ trợ trực tiếp',      'Nhắn coach bất cứ lúc nào bạn cần'],
+];
+let COACHING_PKGS = COACHING_DEFAULT.slice();
+const coachingPkg = id => COACHING_PKGS.find(p => p.id === id) || null;
+
+/** Rounded to the nearest 50k so the figure a client transfers is a clean one. */
+function coachingTermPrice(monthly, months, off) {
+  return Math.round(monthly * months * (1 - (off || 0) / 100) / 50000) * 50000;
+}
+/**
+ * Term prices are stored, not recomputed at read time. The rules have to verify
+ * the amount on a client-raised invoice, and a stored figure is something they
+ * can compare against exactly — re-deriving the rounding inside a rule would be
+ * a second implementation of it, free to drift from this one.
+ */
+function coachingTerms(monthly) {
+  const t = {};
+  COACHING_TERMS.forEach(d => { t[String(d.m)] = coachingTermPrice(monthly, d.m, d.off); });
+  return t;
+}
+const coachingPrice = (pkg, months) =>
+  (pkg && pkg.terms && pkg.terms[String(months)]) || coachingTermPrice((pkg || {}).monthly, months,
+    (COACHING_TERMS.find(d => d.m === months) || {}).off);
+
 let _billSettings = null;
 let _billInvoices = [];
+let _blTerm = 3;      // which duration the picker is showing
+let _blSheet = null;  // invoice id whose payment sheet is open
 
 // All date maths runs on YYYY-MM-DD parts, never through Date + toISOString:
 // building a local midnight and serialising it as UTC moves the day backwards
@@ -6028,6 +6089,21 @@ async function loadBilling() {
     }
   } catch (_e) {}
   try {
+    const cd = await getDoc(doc(db, 'settings', 'coaching'));
+    if (cd.exists) {
+      const d = cd.data();
+      COACHING_PKGS = COACHING_DEFAULT.map(p => ({ ...p, ...(d[p.id] || {}) }));
+    } else if (userRole === 'coach') {
+      const seed = {};
+      COACHING_DEFAULT.forEach(p => {
+        seed[p.id] = { name: p.name, monthly: p.monthly, includesPlan: p.includesPlan, popular: p.popular,
+                       tagline: p.tagline, benefits: p.benefits, terms: coachingTerms(p.monthly) };
+      });
+      await setDoc(doc(db, 'settings', 'coaching'), seed);
+      COACHING_PKGS = COACHING_DEFAULT.map(p => ({ ...p, terms: coachingTerms(p.monthly) }));
+    }
+  } catch (_e) {}
+  try {
     const snap = await getDocs(query(collection(db, 'clients', activeClient.id, 'invoices'),
       orderBy('issuedOn', 'desc'), limit(24)));
     _billInvoices = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -6064,6 +6140,29 @@ async function billIssue(planId) {
   } catch (e) { alert('Không tạo được hoá đơn: ' + (e.message || '')); }
 }
 
+/** Raise an invoice for a coaching term. */
+async function billIssueCoaching(pkgId, months) {
+  if (!activeClient) return;
+  const pkg = coachingPkg(pkgId);
+  const term = COACHING_TERMS.find(t => t.m === Number(months));
+  if (!pkg || !term) { alert('Chọn gói và kỳ hạn trước đã.'); return; }
+  const today = _ymd();
+  if (_billInvoices.some(i => i.status !== 'cancelled' && i.packageId === pkg.id
+                           && i.months === term.m && i.issuedOn === today)) {
+    alert('Hôm nay đã tạo hoá đơn gói này rồi.'); return;
+  }
+  let id = today + '-' + pkg.id + '-' + term.m + 'm', n = 1;
+  while (_billInvoices.some(i => i.id === id)) id = today + '-' + pkg.id + '-' + term.m + 'm-' + (++n);
+  try {
+    await setDoc(doc(db, 'clients', activeClient.id, 'invoices', id), {
+      kind: 'coaching', packageId: pkg.id, planName: pkg.name, months: term.m,
+      amount: coachingPrice(pkg, term.m), issuedOn: today, status: 'unpaid', paidAt: null, method: null,
+    });
+    await loadBilling();
+    _blSheet = id; renderBillingPage();
+  } catch (e) { alert('Không tạo được hoá đơn: ' + (e.message || '')); }
+}
+
 /** Confirming payment is what extends access — the two must not drift apart. */
 async function billConfirm(invoiceId) {
   if (userRole !== 'coach' || !activeClient) return;
@@ -6071,13 +6170,27 @@ async function billConfirm(invoiceId) {
   if (!inv || inv.status === 'paid') return;
   const method = prompt('Nhận qua đâu?', 'chuyển khoản');
   if (method === null) return;
+  const isCoaching = inv.kind === 'coaching';
+  const pkg = isCoaching ? coachingPkg(inv.packageId) : null;
+  // Coaching carries app access with it, so both dates move together and the
+  // access plan becomes whichever one the package includes. A client on
+  // coaching is never asked to pay for access as well.
+  const planId = isCoaching ? ((pkg && pkg.includesPlan) || (activeClient.access || {}).planId || 'pro')
+                            : inv.planId;
   const until = extendAccess((activeClient.access || {}).paidUntil, inv.months);
   try {
     await setDoc(doc(db, 'clients', activeClient.id, 'invoices', invoiceId),
       { status: 'paid', paidAt: new Date().toISOString(), method, extendedTo: until }, { merge: true });
-    await updateDoc(doc(db, 'clients', activeClient.id),
-      { 'access.planId': inv.planId, 'access.paidUntil': until });
-    activeClient.access = { ...(activeClient.access || {}), planId: inv.planId, paidUntil: until };
+    const patch = { 'access.planId': planId, 'access.paidUntil': until };
+    if (isCoaching) {
+      patch['coaching.packageId'] = inv.packageId;
+      patch['coaching.paidUntil'] = until;
+      patch['coaching.termMonths'] = inv.months;
+    }
+    await updateDoc(doc(db, 'clients', activeClient.id), patch);
+    activeClient.access = { ...(activeClient.access || {}), planId, paidUntil: until };
+    if (isCoaching) activeClient.coaching = { packageId: inv.packageId, paidUntil: until, termMonths: inv.months };
+    _blSheet = null;
     await loadBilling();
   } catch (e) { alert('Không xác nhận được: ' + (e.message || '')); }
 }
@@ -6214,28 +6327,103 @@ function _billPlansHtml(acc, isCoach) {
     </div>`;
 }
 
+/** Term picker for coaching. Purely a view choice — nothing is written. */
+function blSetTerm(m) { _blTerm = Number(m); renderBillingPage(); }
+function blOpenSheet(id) { _blSheet = id; renderBillingPage(); }
+function blCloseSheet() { _blSheet = null; renderBillingPage(); }
+function blCopy(btn, text) {
+  try { navigator.clipboard && navigator.clipboard.writeText(text); } catch (_e) {}
+  const was = btn.textContent;
+  btn.textContent = 'Đã chép'; btn.classList.add('on');
+  setTimeout(() => { btn.textContent = was; btn.classList.remove('on'); }, 1600);
+}
+
+/** How far through the paid term the client is, for the progress bar. */
+function _blProgress(acc, months) {
+  const st = accessStatus(acc);
+  if (st.daysLeft == null) return 0;
+  const span = Math.max(1, (months || 1) * 30);
+  return Math.max(3, Math.min(100, Math.round((1 - st.daysLeft / span) * 100)));
+}
+
+function _blCoachingHtml(activeId) {
+  const terms = COACHING_TERMS.map(d => `
+    <button class="bl-dur${d.m === _blTerm ? ' on' : ''}" onclick="blSetTerm(${d.m})">
+      <span class="bl-dur-l">${d.label}</span>
+      <span class="bl-dur-t${d.off ? ' save' : ''}">${d.off ? '−' + d.off + '%' : 'chuẩn'}</span>
+    </button>`).join('');
+
+  const term = COACHING_TERMS.find(d => d.m === _blTerm) || COACHING_TERMS[0];
+  const cards = COACHING_PKGS.map(p => {
+    const total = coachingPrice(p, term.m);
+    const full  = (p.monthly || 0) * term.m;
+    const save  = full - total;
+    return `
+      <div class="bl-pkg${p.popular ? ' pop' : ''}${p.id === activeId ? ' cur' : ''}">
+        ${p.popular ? '<span class="bl-pop-tag">★ Phổ biến nhất</span>' : ''}
+        <div class="bl-pkg-n">${escHtml(p.name)}</div>
+        <div class="bl-pkg-tl">${escHtml(p.tagline || '')}</div>
+        <div class="bl-price-row">
+          <span class="bl-price">${fmtVnd(total)}</span>
+          <span class="bl-price-s">${term.m === 1 ? '/ tháng'
+            : '/ ' + term.m + ' tháng · ' + fmtVnd(total / term.m) + '/tháng'}</span>
+        </div>
+        ${save > 0 ? `<div class="bl-save-line">Tiết kiệm ${fmtVnd(save)} so với trả từng tháng</div>` : ''}
+        <div class="bl-bens">${(p.benefits || []).map(b =>
+          `<div class="bl-ben"><span class="bl-tick">✓</span><span>${escHtml(b)}</span></div>`).join('')}
+          <div class="bl-ben bl-ben-inc"><span class="bl-tick">✓</span><span>Đã bao gồm quyền dùng app${
+            accessPlan(p.includesPlan) ? ' — gói ' + escHtml(accessPlan(p.includesPlan).name) : ''}</span></div>
+        </div>
+        <button class="bl-cta2" onclick="billIssueCoaching('${p.id}', ${term.m})">${
+          p.id === activeId ? 'Gia hạn gói này' : 'Chọn gói này'}</button>
+      </div>`;
+  }).join('');
+
+  return `<div class="bl-sec"><span>Gói coaching</span><i></i></div>
+    <div class="bl-durs">${terms}</div>
+    <div class="bl-pkgs">${cards}</div>
+    <div class="bl-sec"><span>Mọi gói coaching đều có</span><i></i></div>
+    <div class="bl-perks">${COACHING_PERKS.map(k =>
+      `<div class="bl-perk"><span class="bl-perk-i">${k[0]}</span>
+        <span class="bl-perk-t">${escHtml(k[1])}</span>
+        <span class="bl-perk-s">${escHtml(k[2])}</span></div>`).join('')}</div>`;
+}
+
 function renderBillingPage() {
   const wrap = document.getElementById('billing-body');
   if (!wrap || !activeClient) return;
   const isCoach = userRole === 'coach';
   const acc = activeClient.access || {};
+  const coa = activeClient.coaching || {};
   const st = accessStatus(acc);
   const plan = accessPlan(acc.planId);
   const s = _billSettings || {};
   const due = _billInvoices.find(i => i.status !== 'paid' && i.status !== 'cancelled') || null;
 
+  // What the client is actually on: the coaching package if one is running,
+  // otherwise the bare access plan.
+  const onCoaching = !!(coa.packageId && coa.paidUntil && _diffDays(_ymd(), _ymd(coa.paidUntil)) >= 0);
+  const pkg = onCoaching ? coachingPkg(coa.packageId) : null;
+  const curName = pkg ? pkg.name : plan ? plan.name : null;
+  const curTerm = pkg ? (coa.termMonths || 1) : plan ? plan.months : 1;
+
   let html = `
-    <div class="bl-head bl-st-${st.state}">
-      <div class="bl-head-row">
-        <div><div class="bl-client">${escHtml(activeClient.name || activeClient.id)}</div>
-          <div class="bl-sub">${plan ? plan.name + ' · ' + fmtVnd(plan.price) + ' / ' + plan.months + ' tháng'
-                                     : 'Chưa chọn gói'}</div></div>
-        <span class="bl-status bl-badge-${st.state}">${ACCESS_LABEL[st.state]}</span>
+    <div class="bl-hero bl-st-${st.state}">
+      <div class="bl-hero-row">
+        <div class="bl-hero-l">
+          <span class="bl-live bl-badge-${st.state}">● ${ACCESS_LABEL[st.state]}</span>
+          <div class="bl-cur-name">${curName ? escHtml(curName) : 'Chưa có gói'}</div>
+          <div class="bl-cur-term">${escHtml(activeClient.name || activeClient.id)}${
+            curName ? ' · ' + (pkg ? 'coaching ' : 'app ') + curTerm + ' tháng' : ''}</div>
+        </div>
+        ${st.daysLeft != null && st.daysLeft >= 0
+          ? `<div class="bl-days"><span class="bl-days-n">${st.daysLeft}</span>
+               <span class="bl-days-l">ngày còn lại</span></div>` : ''}
       </div>
-      <div class="bl-until">${
-        st.state === 'none' ? 'Chưa có ngày hết hạn — hoá đơn đầu tiên được xác nhận sẽ bắt đầu tính.'
-        : st.daysLeft >= 0 ? `Dùng đến <b>${st.until}</b> — còn <b>${st.daysLeft} ngày</b>`
-        : `Hết hạn từ <b>${st.until}</b> — quá <b>${-st.daysLeft} ngày</b>`}</div>
+      ${st.until ? `<div class="bl-bar"><div class="bl-bar-f" style="width:${_blProgress(acc, curTerm)}%"></div></div>
+        <div class="bl-dates"><span>${st.daysLeft >= 0 ? 'Đang dùng' : 'Đã hết hạn'}</span>
+          <span>Hết hạn ${st.until}</span></div>`
+        : `<div class="bl-until">Chưa có ngày hết hạn — hoá đơn đầu tiên được xác nhận sẽ bắt đầu tính.</div>`}
       ${isCoach ? `<div class="bl-actions">
           <button class="bl-set" onclick="openBillSettings()">Cài đặt thu tiền</button>
         </div>
@@ -6243,37 +6431,37 @@ function renderBillingPage() {
           Vào <b>Cài đặt thu tiền</b> để nhập.</div>` : ''}` : ''}
     </div>`;
 
-  if (!due) html += _billPlansHtml(acc, isCoach);
+  if (st.state === 'ending' || st.state === 'grace' || st.state === 'expired') {
+    html += `<div class="bl-renew"><span class="bl-renew-i">⏳</span><div>
+      <div class="bl-renew-t">${st.daysLeft >= 0 ? 'Gói sắp hết hạn' : 'Gói đã hết hạn'}</div>
+      <div class="bl-renew-s">Gia hạn để giữ nguyên chương trình, lịch sử tập và tiến độ InBody.</div>
+    </div></div>`;
+  }
 
   if (due) {
-    const info = accessTransferInfo(activeClient.name, due.issuedOn);
     html += `
       <div class="bl-card">
         <div class="bl-amt-row">
           <div><div class="bl-amt">${fmtVnd(due.amount)}</div>
-            <div class="bl-amt-sub">${escHtml(due.planName)} · thêm ${due.months} tháng · lập ${due.issuedOn}</div></div>
+            <div class="bl-amt-sub">${escHtml(due.planName || due.planId)} · ${due.months} tháng · lập ${due.issuedOn}</div></div>
           <span class="bl-status bl-badge-expired">Chưa thanh toán</span>
         </div>
-        <div class="bl-pay">
-          <div class="bl-qr" id="bl-qr"></div>
-          <div class="bl-bank">
-            <div><span>Ngân hàng</span><b>${escHtml(s.bankName || s.bankBin || '—')}</b></div>
-            <div><span>Số tài khoản</span><b>${escHtml(s.account || '—')}</b></div>
-            <div><span>Chủ tài khoản</span><b>${escHtml(s.holder || '—')}</b></div>
-            <div><span>Nội dung</span><b>${escHtml(info)}</b></div>
-          </div>
-        </div>
+        <button class="bl-pay-btn" onclick="blOpenSheet('${due.id}')">Xem mã QR để chuyển khoản</button>
         ${isCoach
           ? `<button class="bl-toggle" onclick="billConfirm('${due.id}')">Xác nhận đã nhận tiền · gia hạn đến ${
               extendAccess(acc.paidUntil, due.months)}</button>`
           : `<div class="bl-wait">Chuyển khoản xong, coach xác nhận là gia hạn ngay.</div>`}
         <button class="bl-cancel" onclick="billCancel('${due.id}')">Huỷ hoá đơn — chọn gói khác</button>
       </div>`;
+  } else {
+    html += _blCoachingHtml(onCoaching ? coa.packageId : null);
+    html += `<div class="bl-sec"><span>Chỉ dùng app, không kèm coaching</span><i></i></div>`;
+    html += _billPlansHtml(acc, isCoach);
   }
 
   html += `<div class="bl-cat"><div class="bl-cat-name">Lịch sử thanh toán<span>${_billInvoices.length}</span></div>${
     _billInvoices.length ? _billInvoices.map(i => `<div class="bl-hist${i.status === 'cancelled' ? ' bl-void' : ''}">
-      <div><div class="bl-hist-m">${escHtml(i.planName || i.planId)} · ${i.issuedOn}</div>
+      <div><div class="bl-hist-m">${escHtml(i.planName || i.planId || i.packageId)} · ${i.issuedOn}</div>
         <div class="bl-hist-s">${i.status === 'paid'
           ? 'Đã trả' + (i.paidAt ? ' ' + new Date(i.paidAt).toLocaleDateString('vi-VN') : '')
             + (i.extendedTo ? ' · gia hạn đến ' + i.extendedTo : '')
@@ -6285,9 +6473,47 @@ function renderBillingPage() {
     </div>`).join('') : '<div class="bl-empty">Chưa có hoá đơn nào.</div>'}</div>`;
 
   wrap.innerHTML = html;
+  _blRenderSheet();
+}
+
+/** The payment step, as a sheet: amount, QR, and the details to copy. */
+function _blRenderSheet() {
+  let host = document.getElementById('bl-sheet-host');
+  if (!host) { host = document.createElement('div'); host.id = 'bl-sheet-host'; document.body.appendChild(host); }
+  const inv = _blSheet && _billInvoices.find(i => i.id === _blSheet && i.status === 'unpaid');
+  if (!inv) { host.innerHTML = ''; _blSheet = null; return; }
+
+  const s = _billSettings || {};
+  const info = accessTransferInfo(activeClient.name, inv.issuedOn);
+  const row = (label, val, copy) => `<div class="bl-row"><span class="bl-row-l">${label}</span>
+    <span class="bl-row-v">${escHtml(val || '—')}</span>${
+      copy && val ? `<button class="bl-copy" onclick="blCopy(this, ${JSON.stringify(String(val))
+        .replace(/"/g, '&quot;')})">Sao chép</button>` : ''}</div>`;
+
+  host.innerHTML = `<div class="bl-ov" onclick="blCloseSheet()"></div>
+    <div class="bl-sheet">
+      <div class="bl-grab"><i></i></div>
+      <div class="bl-sh-head">
+        <div><div class="bl-sh-t">Chuyển khoản</div>
+          <div class="bl-sh-s">${escHtml(inv.planName || inv.planId)} · ${inv.months} tháng</div></div>
+        <button class="bl-x" onclick="blCloseSheet()">✕</button>
+      </div>
+      <div class="bl-amt2"><span class="bl-amt2-l">Số tiền cần chuyển</span>
+        <span class="bl-amt2-n">${fmtVnd(inv.amount)}</span></div>
+      <div class="bl-qr2"><div class="bl-qr" id="bl-qr"></div>
+        <span class="bl-qr-s">Quét bằng app ngân hàng — số tiền và nội dung đã điền sẵn</span></div>
+      <div class="bl-rows">
+        ${row('Ngân hàng', s.bankName || s.bankBin, false)}
+        ${row('Số tài khoản', s.account, true)}
+        ${row('Chủ tài khoản', s.holder, false)}
+        ${row('Nội dung', info, true)}
+      </div>
+      <div class="bl-note">Chuyển xong cứ đóng lại. Coach xác nhận là gói được gia hạn ngay.</div>
+    </div>`;
+
   const qrEl = document.getElementById('bl-qr');
-  if (qrEl && due) _billQr(qrEl, vietQrPayload({ bin: s.bankBin, account: s.account, amount: due.amount,
-                                                 info: accessTransferInfo(activeClient.name, due.issuedOn) }));
+  if (qrEl) _billQr(qrEl, vietQrPayload({ bin: s.bankBin, account: s.account,
+                                          amount: inv.amount, info }));
 }
 
 const VN_BANKS = [
@@ -11141,8 +11367,6 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 
 #billing-page{display:none;padding:0 16px 120px;}
 #billing-page.active{display:block;}
-.bl-head{background:rgba(118,101,255,.08);border:1px solid rgba(118,101,255,.22);border-radius:16px;padding:14px;margin:12px 0 16px;}
-.bl-head-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
 .bl-client{font-size:17px;font-weight:800;color:#fff;}
 .bl-sub{font-size:12px;color:rgba(255,255,255,.55);margin-top:2px;}
 .bl-month{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.16);border-radius:9px;color:#fff;padding:6px 8px;font-size:12px;}
@@ -11161,13 +11385,8 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .bl-st-due{background:rgba(255,196,0,.16);border:1px solid rgba(255,196,0,.4);color:#ffd479;}
 .bl-st-paid{background:rgba(79,209,139,.16);border:1px solid rgba(79,209,139,.4);color:#7ee0a8;}
 .bl-paidat{font-size:11.5px;color:rgba(255,255,255,.5);margin-top:7px;}
-.bl-pay{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.1);}
 .bl-qr{background:#fff;border-radius:10px;padding:9px;line-height:0;flex:0 0 auto;}
 .bl-qr-none{font-size:11px;color:#555;max-width:170px;line-height:1.4;}
-.bl-bank{flex:1;min-width:190px;display:flex;flex-direction:column;gap:7px;}
-.bl-bank div{display:flex;justify-content:space-between;gap:10px;font-size:12px;border-bottom:1px solid rgba(255,255,255,.07);padding-bottom:5px;}
-.bl-bank span{color:rgba(255,255,255,.45);}
-.bl-bank b{color:#fff;text-align:right;word-break:break-all;}
 .bl-toggle{margin-top:13px;width:100%;background:transparent;border:1px solid rgba(255,255,255,.2);border-radius:9px;color:rgba(255,255,255,.78);font-size:12px;font-weight:700;padding:9px;cursor:pointer;}
 .bl-cancel{margin-top:8px;width:100%;background:transparent;border:1px solid rgba(255,138,138,.32);
   border-radius:9px;color:#ff9f9f;font-family:inherit;font-size:12px;font-weight:700;padding:9px;cursor:pointer;}
@@ -11176,6 +11395,101 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .bl-void .bl-hist-m{text-decoration:line-through;}
 .bl-st-void{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.16);color:rgba(255,255,255,.55);
   text-decoration:line-through;}
+/* billing — current term */
+.bl-hero{position:relative;overflow:hidden;background:linear-gradient(155deg,rgba(118,101,255,.20),rgba(118,101,255,.05));
+  border:1px solid rgba(118,101,255,.28);border-radius:18px;padding:16px;margin:12px 0 14px;}
+.bl-hero-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
+.bl-hero-l{min-width:0;}
+.bl-live{display:inline-block;font-size:9.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;
+  border-radius:7px;padding:3px 9px;}
+.bl-cur-name{margin-top:9px;font-size:21px;font-weight:900;letter-spacing:-.5px;color:#fff;line-height:1.1;}
+.bl-cur-term{margin-top:4px;font-size:12px;color:rgba(255,255,255,.55);}
+.bl-days{flex:none;text-align:right;}
+.bl-days-n{display:block;font-size:30px;font-weight:900;letter-spacing:-1.2px;color:#fff;line-height:1;}
+.bl-days-l{display:block;margin-top:3px;font-size:10px;color:rgba(255,255,255,.5);}
+.bl-bar{height:6px;border-radius:99px;background:rgba(0,0,0,.3);overflow:hidden;margin-top:14px;}
+.bl-bar-f{height:100%;border-radius:99px;background:linear-gradient(90deg,#7665ff,#b9aaff);}
+.bl-dates{display:flex;justify-content:space-between;margin-top:7px;font-size:11px;color:rgba(255,255,255,.45);}
+.bl-renew{display:flex;gap:11px;align-items:flex-start;background:rgba(255,196,0,.08);
+  border:1px solid rgba(255,196,0,.28);border-radius:14px;padding:12px 13px;margin-bottom:14px;}
+.bl-renew-i{flex:none;font-size:18px;line-height:1.2;}
+.bl-renew-t{font-size:13px;font-weight:800;color:#ffd479;}
+.bl-renew-s{margin-top:3px;font-size:11.5px;line-height:1.5;color:rgba(255,255,255,.6);}
+/* section rule */
+.bl-sec{display:flex;align-items:center;gap:11px;margin:22px 0 11px;}
+.bl-sec span{flex:none;font-size:11px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:#9b8dff;}
+.bl-sec i{flex:1;height:1px;background:rgba(255,255,255,.1);}
+/* term picker */
+.bl-durs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+.bl-dur{display:flex;flex-direction:column;gap:3px;background:rgba(255,255,255,.04);
+  border:1px solid rgba(255,255,255,.13);border-radius:12px;padding:10px 6px;cursor:pointer;
+  font-family:inherit;text-align:center;transition:border-color .15s,background .15s;}
+.bl-dur.on{border-color:#7665ff;background:rgba(118,101,255,.18);}
+.bl-dur-l{font-size:12.5px;font-weight:800;color:#fff;}
+.bl-dur-t{font-size:10px;color:rgba(255,255,255,.4);}
+.bl-dur-t.save{color:#7ee0a8;font-weight:800;}
+/* coaching packages */
+.bl-pkgs{display:grid;grid-template-columns:1fr;gap:11px;margin-top:11px;}
+@media(min-width:820px){.bl-pkgs{grid-template-columns:repeat(3,1fr);}}
+.bl-pkg{position:relative;display:flex;flex-direction:column;background:rgba(255,255,255,.045);
+  border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:16px;}
+.bl-pkg.pop{border-color:rgba(118,101,255,.55);background:linear-gradient(160deg,rgba(118,101,255,.16),rgba(118,101,255,.04));
+  box-shadow:0 10px 30px -16px rgba(118,101,255,.7);}
+.bl-pkg.cur{border-color:rgba(126,224,168,.5);}
+.bl-pop-tag{position:absolute;top:-9px;left:16px;background:#7665ff;color:#fff;font-size:9.5px;font-weight:900;
+  letter-spacing:.5px;border-radius:7px;padding:3px 9px;}
+.bl-pkg-n{font-size:17px;font-weight:900;letter-spacing:-.3px;color:#fff;}
+.bl-pkg-tl{margin-top:6px;font-size:12px;line-height:1.5;color:rgba(255,255,255,.52);}
+.bl-price-row{display:flex;align-items:baseline;flex-wrap:wrap;gap:7px;margin-top:13px;}
+.bl-price{font-size:26px;font-weight:900;letter-spacing:-1px;color:#fff;}
+.bl-price-s{font-size:11.5px;color:rgba(255,255,255,.45);}
+.bl-save-line{margin-top:5px;font-size:11px;font-weight:700;color:#7ee0a8;}
+.bl-bens{display:flex;flex-direction:column;gap:8px;margin-top:14px;padding-top:14px;
+  border-top:1px solid rgba(255,255,255,.1);}
+.bl-ben{display:flex;gap:9px;font-size:12px;line-height:1.45;color:rgba(255,255,255,.75);}
+.bl-ben-inc{color:#b9aaff;font-weight:700;}
+.bl-tick{flex:none;color:#7ee0a8;font-weight:900;}
+.bl-cta2{margin-top:15px;width:100%;background:#7665ff;border:none;border-radius:999px;color:#fff;
+  font-family:inherit;font-size:14px;font-weight:800;padding:13px;cursor:pointer;transition:filter .12s,transform .12s;}
+.bl-cta2:hover{filter:brightness(1.1);}
+.bl-cta2:active{transform:scale(.985);}
+/* what every package includes */
+.bl-perks{display:grid;grid-template-columns:1fr 1fr;gap:9px;}
+.bl-perk{background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.1);border-radius:13px;padding:12px;}
+.bl-perk-i{display:block;font-size:18px;}
+.bl-perk-t{display:block;margin-top:7px;font-size:12.5px;font-weight:800;color:#fff;}
+.bl-perk-s{display:block;margin-top:3px;font-size:11px;line-height:1.45;color:rgba(255,255,255,.45);}
+/* pay */
+.bl-pay-btn{margin-top:14px;width:100%;background:#7665ff;border:none;border-radius:10px;color:#fff;
+  font-family:inherit;font-size:13.5px;font-weight:800;padding:12px;cursor:pointer;}
+.bl-ov{position:fixed;inset:0;background:rgba(0,0,0,.62);z-index:900;}
+.bl-sheet{position:fixed;left:0;right:0;bottom:0;z-index:901;max-height:92vh;overflow-y:auto;
+  background:#171226;border-radius:22px 22px 0 0;padding:6px 18px calc(24px + env(safe-area-inset-bottom));
+  border-top:1px solid rgba(255,255,255,.12);animation:blUp .22s ease;}
+@keyframes blUp{from{transform:translateY(30px);opacity:.4;}to{transform:none;opacity:1;}}
+@media(min-width:720px){.bl-sheet{left:50%;right:auto;bottom:auto;top:50%;transform:translate(-50%,-50%);
+  width:430px;border-radius:20px;}@keyframes blUp{from{opacity:0;}to{opacity:1;}}}
+.bl-grab{display:flex;justify-content:center;padding:6px 0 10px;}
+.bl-grab i{width:38px;height:4px;border-radius:99px;background:rgba(255,255,255,.2);}
+.bl-sh-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
+.bl-sh-t{font-size:17px;font-weight:900;color:#fff;}
+.bl-sh-s{margin-top:3px;font-size:12px;color:rgba(255,255,255,.5);}
+.bl-x{flex:none;background:rgba(255,255,255,.08);border:none;border-radius:50%;width:30px;height:30px;
+  color:rgba(255,255,255,.7);font-size:14px;cursor:pointer;}
+.bl-amt2{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-top:15px;
+  background:rgba(118,101,255,.13);border:1px solid rgba(118,101,255,.3);border-radius:13px;padding:13px 15px;}
+.bl-amt2-l{font-size:11.5px;color:rgba(255,255,255,.6);}
+.bl-amt2-n{font-size:23px;font-weight:900;letter-spacing:-.8px;color:#fff;}
+.bl-qr2{display:flex;flex-direction:column;align-items:center;gap:9px;margin-top:16px;}
+.bl-qr-s{font-size:11px;line-height:1.45;color:rgba(255,255,255,.45);text-align:center;max-width:30ch;}
+.bl-rows{display:flex;flex-direction:column;margin-top:16px;}
+.bl-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.07);}
+.bl-row-l{flex:none;width:96px;font-size:11.5px;color:rgba(255,255,255,.45);}
+.bl-row-v{flex:1;min-width:0;font-size:13px;font-weight:700;color:#fff;word-break:break-all;}
+.bl-copy{flex:none;background:rgba(118,101,255,.16);border:1px solid rgba(118,101,255,.4);border-radius:8px;
+  color:#b9aaff;font-family:inherit;font-size:10.5px;font-weight:800;padding:5px 9px;cursor:pointer;}
+.bl-copy.on{background:rgba(126,224,168,.16);border-color:rgba(126,224,168,.45);color:#7ee0a8;}
+.bl-note{margin-top:15px;font-size:11.5px;line-height:1.5;color:rgba(255,255,255,.45);text-align:center;}
 .bl-cat{margin-bottom:18px;}
 .bl-cat-name{font-size:11px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:#9b8dff;margin-bottom:8px;display:flex;gap:8px;align-items:center;}
 .bl-cat-name span{font-size:9px;color:rgba(255,255,255,.3);border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:1px 5px;}
@@ -11189,8 +11503,8 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .bl-hist-s{font-size:10.5px;color:rgba(255,255,255,.42);margin-top:2px;}
 .bl-hist-a{font-size:11px;font-weight:800;border-radius:7px;padding:3px 9px;white-space:nowrap;}
 
-.bl-head.bl-st-expired{border-color:rgba(255,138,138,.35);background:rgba(255,138,138,.07);}
-.bl-head.bl-st-grace,.bl-head.bl-st-ending{border-color:rgba(255,196,0,.35);background:rgba(255,196,0,.07);}
+.bl-hero.bl-st-expired{border-color:rgba(255,138,138,.35);background:rgba(255,138,138,.07);}
+.bl-hero.bl-st-grace,.bl-hero.bl-st-ending{border-color:rgba(255,196,0,.35);background:rgba(255,196,0,.07);}
 .bl-badge-active,.bl-badge-none{background:rgba(79,209,139,.16);border:1px solid rgba(79,209,139,.4);color:#7ee0a8;}
 .bl-badge-none{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.2);color:rgba(255,255,255,.6);}
 .bl-badge-ending,.bl-badge-grace{background:rgba(255,196,0,.16);border:1px solid rgba(255,196,0,.4);color:#ffd479;}

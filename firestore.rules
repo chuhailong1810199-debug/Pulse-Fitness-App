@@ -123,7 +123,7 @@ service cloud.firestore {
       allow update: if isCoach()
         || (isClientOwner(clientId)
             && !request.resource.data.diff(resource.data).affectedKeys()
-                 .hasAny(['access', 'email', 'coachUid']));
+                 .hasAny(['access', 'coaching', 'email', 'coachUid']));
 
       // Invoices are readable by the client so they can pay, and writable only
       // by the coach. This must NOT be covered by a broader wildcard below:
@@ -135,15 +135,27 @@ service cloud.firestore {
       // Only the coach may ever mark one paid; that is what extends access.
       match /invoices/{invoiceId} {
         allow read:   if isCoach() || isClientOwner(clientId);
+        // A client may raise their own invoice, but only for a figure the coach
+        // published. Both kinds are checked against settings, so the amount is
+        // never something the client chose: access against settings/plans, and
+        // coaching against the term price stored in settings/coaching — stored
+        // rather than recomputed here, so this check and the app cannot drift.
         allow create: if isCoach()
           || (isClientOwner(clientId)
               && request.resource.data.status == 'unpaid'
               && request.resource.data.paidAt == null
-              && request.resource.data.kind == 'access'
-              && request.resource.data.amount ==
-                 get(/databases/$(database)/documents/settings/plans).data[request.resource.data.planId].price
-              && request.resource.data.months ==
-                 get(/databases/$(database)/documents/settings/plans).data[request.resource.data.planId].months);
+              && (
+                (request.resource.data.kind == 'access'
+                 && request.resource.data.amount ==
+                    get(/databases/$(database)/documents/settings/plans).data[request.resource.data.planId].price
+                 && request.resource.data.months ==
+                    get(/databases/$(database)/documents/settings/plans).data[request.resource.data.planId].months)
+                ||
+                (request.resource.data.kind == 'coaching'
+                 && request.resource.data.amount ==
+                    get(/databases/$(database)/documents/settings/coaching)
+                      .data[request.resource.data.packageId].terms[string(request.resource.data.months)])
+              ));
         // A client may take back an invoice they raised by mistake, and nothing
         // else: only unpaid -> cancelled, only those two fields. Marking rather
         // than deleting keeps the record, so a cancellation cannot be used to
