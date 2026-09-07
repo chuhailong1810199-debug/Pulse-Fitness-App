@@ -650,6 +650,7 @@ async function loadApp() {
   initNavAutoHide();
   renderStats(); // non-blocking — stats update in background
   subscribeProgram();
+  renderAccessAlert();
   if (userRole === 'coach') {
     showScreen('app');
   }
@@ -4543,6 +4544,7 @@ function showPage(page) {
   if (page === 'billing') {
     loadBilling();
   }
+  renderAccessAlert();
   if (page === 'log') {
     renderWorkoutLog();
   }
@@ -6043,6 +6045,53 @@ function accessTransferInfo(name, periodKey) {
     .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9 ]/g, '').replace(/\s+/g, ' ').trim().slice(0, 25);
 }
 
+// ── telling someone their term is running out ──────────────────────────────
+// Nothing here blocks anything; the app works exactly the same whether this
+// shows or not. It exists because the notice inside the Billing tab is only
+// seen by someone who already went looking, which is not the person who needs
+// it. A client who has never been billed is never nagged — otherwise switching
+// this on would nag everyone at once, about a term they were never sold.
+function accessAlert() {
+  const acc = (activeClient || {}).access || {};
+  if (!acc.paidUntil) return null;
+  const st = accessStatus(acc);
+  return st.state === 'active' ? null : st;
+}
+const _accAckKey = () => 'pulse_bill_ack_' + ((activeClient || {}).id || '');
+function accessAlertDismiss() {
+  try { localStorage.setItem(_accAckKey(), _ymd()); } catch (_e) {}
+  renderAccessAlert();
+}
+/** Dismissal lasts the day, not forever — the thing being flagged gets worse. */
+function _accAcked() {
+  try { return localStorage.getItem(_accAckKey()) === _ymd(); } catch (_e) { return false; }
+}
+
+function renderAccessAlert() {
+  const st = accessAlert();
+  const tab = document.querySelector('.nav-tab[data-page="billing"]');
+  if (tab) tab.classList.toggle('alert', !!st);
+
+  const host = document.getElementById('access-strip');
+  if (!host) return;
+  const onBilling = document.getElementById('billing-page');
+  if (!st || _accAcked() || (onBilling && onBilling.classList.contains('active'))) {
+    host.innerHTML = ''; return;
+  }
+  const isCoach = userRole === 'coach';
+  const who = isCoach ? (activeClient.name || activeClient.id) + ' — ' : '';
+  const msg =
+    st.state === 'ending' ? `${who}gói còn <b>${st.daysLeft} ngày</b>, đến ${st.until}.`
+    : st.state === 'grace' ? `${who}gói hết hạn ${st.until}, quá <b>${-st.daysLeft} ngày</b>.`
+    : `${who}gói đã hết hạn <b>${-st.daysLeft} ngày</b>, từ ${st.until}.`;
+  host.innerHTML = `<div class="acc-strip acc-${st.state}">
+    <span class="acc-dot"></span>
+    <span class="acc-msg">${msg} ${isCoach ? 'Nhắc khách gia hạn.' : 'Vẫn tập bình thường, chưa ảnh hưởng gì.'}</span>
+    <button class="acc-go" onclick="showPage('billing')">${isCoach ? 'Mở Billing' : 'Gia hạn'}</button>
+    <button class="acc-x" onclick="accessAlertDismiss()" aria-label="Ẩn hôm nay">✕</button>
+  </div>`;
+}
+
 const ACCESS_LABEL = { none: 'Chưa kích hoạt', active: 'Đang hoạt động', ending: 'Sắp hết hạn',
                        grace: 'Quá hạn — đang trong thời gian ân hạn', expired: 'Đã hết hạn' };
 
@@ -6479,6 +6528,7 @@ function renderBillingPage() {
 
   wrap.innerHTML = html;
   _blRenderSheet();
+  renderAccessAlert();
 }
 
 /** The payment step, as a sheet: amount, QR, and the details to copy. */
@@ -9557,6 +9607,8 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <div id="stg-bar-coach" class="stg-host"></div>
   </div>
 
+  <div id="access-strip"></div>
+
   <div class="nav">
     <div class="nav-tab active" data-page="workout" onclick="showPage('workout')">Workout</div>
     <div class="nav-tab" data-page="progress" onclick="showPage('progress')">Progress</div>
@@ -11495,6 +11547,22 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   color:#b9aaff;font-family:inherit;font-size:10.5px;font-weight:800;padding:5px 9px;cursor:pointer;}
 .bl-copy.on{background:rgba(126,224,168,.16);border-color:rgba(126,224,168,.45);color:#7ee0a8;}
 .bl-note{margin-top:15px;font-size:11.5px;line-height:1.5;color:rgba(255,255,255,.45);text-align:center;}
+.nav-tab.alert{position:relative;}
+.nav-tab.alert::after{content:'';position:absolute;top:6px;right:7px;width:7px;height:7px;border-radius:50%;
+  background:#ffc400;box-shadow:0 0 0 2px rgba(0,0,0,.35);}
+#access-strip:empty{display:none;}
+.acc-strip{display:flex;align-items:center;gap:9px;margin:0 16px 10px;padding:9px 11px;border-radius:12px;
+  background:rgba(255,196,0,.09);border:1px solid rgba(255,196,0,.28);}
+.acc-strip.acc-expired{background:rgba(255,138,138,.09);border-color:rgba(255,138,138,.3);}
+.acc-dot{flex:none;width:7px;height:7px;border-radius:50%;background:#ffc400;}
+.acc-expired .acc-dot{background:#ff8a8a;}
+.acc-msg{flex:1;min-width:0;font-size:11.5px;line-height:1.45;color:rgba(255,255,255,.75);}
+.acc-msg b{color:#fff;}
+.acc-go{flex:none;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.22);border-radius:8px;
+  color:#fff;font-family:inherit;font-size:11px;font-weight:800;padding:6px 11px;cursor:pointer;}
+.acc-x{flex:none;background:transparent;border:none;color:rgba(255,255,255,.35);font-size:13px;
+  padding:2px 4px;cursor:pointer;line-height:1;}
+@media(max-width:420px){.acc-msg{font-size:11px;}.acc-go{padding:6px 9px;}}
 .bl-cat{margin-bottom:18px;}
 .bl-cat-name{font-size:11px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;color:#9b8dff;margin-bottom:8px;display:flex;gap:8px;align-items:center;}
 .bl-cat-name span{font-size:9px;color:rgba(255,255,255,.3);border:1px solid rgba(255,255,255,.14);border-radius:6px;padding:1px 5px;}
