@@ -384,7 +384,15 @@ exports.generateProgram = onCall(
     memory: "256MiB",
   },
   async (request) => {
-    const { name, level, goal, sessionsPerWeek, notes, age, gender, weight, height } = request.data;
+    const { name, level, goal, sessionsPerWeek, notes, age, gender, weight, height } = request.data || {};
+
+    // Say which field is missing. Without this the function ran on undefined and
+    // failed somewhere further down, and the client got a bare "internal" that
+    // named nothing.
+    const missing = ["name", "level", "goal", "sessionsPerWeek"].filter((k) => !request.data || !request.data[k]);
+    if (missing.length) {
+      throw new HttpsError("invalid-argument", "Thiếu thông tin: " + missing.join(", ") + ".");
+    }
 
     // ── Day mapping ──────────────────────────────────────────────────────────
     const dayMaps = {
@@ -604,7 +612,9 @@ exports.pulseGenerate = onCall(
   },
   async (request) => {
     const { clientId } = request.data;
-    if (!clientId) throw new Error("clientId is required");
+    // A plain Error from a callable reaches the client as a bare "internal" with
+    // the reason stripped — the same dead end the nutrition tab kept hitting.
+    if (!clientId) throw new HttpsError("invalid-argument", "clientId is required");
 
     const db = getFirestore();
     const steps = [];
@@ -612,7 +622,7 @@ exports.pulseGenerate = onCall(
     // ── Step 1: Read target client profile ───────────────────────────────────
     steps.push({ icon: "📖", text: "Đọc hồ sơ khách hàng..." });
     const clientDoc = await db.collection("clients").doc(clientId).get();
-    if (!clientDoc.exists) throw new Error("Client not found: " + clientId);
+    if (!clientDoc.exists) throw new HttpsError("not-found", "Client not found: " + clientId);
     const client = clientDoc.data();
     const { name, level, goal, sessionsPerWeek } = client;
 
