@@ -4346,14 +4346,25 @@ function _mealRetryable(err) {
       || c === 'aborted' || c === 'unknown';
 }
 
-/** One retry, because the photo is already in memory — it costs the client nothing. */
+/**
+ * One retry, because the photo is already in memory — it costs the client nothing.
+ *
+ * The wait before it is the point. The function scales to zero, so the first
+ * request after an idle spell can reach Google's front end before an instance is
+ * up and comes straight back as HTTP 503 "not available yet" — which the SDK
+ * reports as `unavailable`. Retrying that instantly just races the same cold
+ * start again. Container startup measures around 1.7s in the logs, so the pause
+ * is set above it.
+ */
+const MEAL_RETRY_WAIT_MS = 2500;
 async function callMealAnalysis(payload, onRetry) {
   try {
     return await _mealFn()(payload);
   } catch (err) {
     if (!_mealRetryable(err)) throw err;
-    console.warn('[meal] lần 1 hỏng (' + (err.code || '?') + '), thử lại', err);
-    if (onRetry) onRetry();
+    console.warn('[meal] lần 1 hỏng (' + (err.code || '?') + '), chờ rồi thử lại', err);
+    if (onRetry) onRetry(err);
+    await new Promise(r => setTimeout(r, MEAL_RETRY_WAIT_MS));
     return await _mealFn()(payload);
   }
 }
@@ -4361,7 +4372,10 @@ async function callMealAnalysis(payload, onRetry) {
 /** "internal" is what the SDK says when the connection dropped. Say that instead. */
 function mealErrorText(err) {
   const c = String((err && err.code) || '').replace(/^functions\//, '');
-  if (c === 'internal' || c === 'unavailable' || c === 'unknown')
+  // Two different failures, and the client can act on the difference.
+  if (c === 'unavailable')
+    return 'Server vừa khởi động lại. Đợi khoảng 30 giây rồi chụp lại giúp mình nhé.';
+  if (c === 'internal' || c === 'unknown')
     return 'Mất kết nối giữa chừng. Kiểm tra mạng rồi bấm chụp lại — ảnh vẫn còn.';
   if (c === 'deadline-exceeded')
     return 'Phân tích lâu quá. Thử lại, hoặc nhập tay bằng nút Manual.';
@@ -4405,7 +4419,8 @@ async function handleMealPhoto(input) {
     const sub = document.getElementById('nlog-analyzing-sub');
     const result = await callMealAnalysis(
       { imageBase64: base64, mimeType: 'image/jpeg' },
-      () => { if (sub) sub.textContent = 'Mạng chập chờn — đang thử lại…'; });
+      e => { if (sub) sub.textContent = String(e && e.code || '').includes('unavailable')
+        ? 'Server đang khởi động — đang thử lại…' : 'Mạng chập chờn — đang thử lại…'; });
     _aiMealResult = result.data;
     renderAiResults(_aiMealResult);
     showNlogStep('results');
