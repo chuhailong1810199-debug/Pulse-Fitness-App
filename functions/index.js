@@ -190,6 +190,11 @@ const WARMUP_RULES = `WARM-UP RULES (mandatory — read before generating any wa
    knee_pain       → no jump squats, deep-impact landing, high box step`;
 
 // ── Groq error → friendly user message ───────────────────────────────────────
+// Groq retires models without notice: llama-3.3-70b-versatile vanished and every
+// call started failing. One constant, the way GEMINI_MODEL already works, so the
+// next retirement is one line and not four.
+const GROQ_MODEL = "qwen/qwen3.8-27b";
+
 function groqErrorMessage(err) {
   const msg = (err.message || "").toLowerCase();
   const status = err.status || err.statusCode || (err.error && err.error.status);
@@ -206,6 +211,12 @@ function groqErrorMessage(err) {
     return "Pulse took too long to respond — please try again.";
   if (isOverload)
     return "Pulse servers are overloaded — please try again in a few minutes.";
+  // A retired model is a deploy problem, not something the coach can wait out.
+  // Saying so names the fix instead of sending them to try again forever.
+  if (msg.includes("does not exist") || msg.includes("model_not_found") || msg.includes("decommissioned"))
+    return `Pulse model "${GROQ_MODEL}" is no longer available on Groq — the model was retired and needs swapping in functions/index.js.`;
+  if (msg.includes("request too large") || msg.includes("tokens per minute") || msg.includes("tpm"))
+    return "Pulse is over its per-minute limit — wait about a minute and try again.";
   return "Something went wrong — please try again.";
 }
 
@@ -396,6 +407,10 @@ exports.generateProgram = onCall(
 
     // ── Day mapping ──────────────────────────────────────────────────────────
     const dayMaps = {
+      // 1 and 2 were missing, so every 2-session client silently fell through to
+      // the 3-day map and got a day they never agreed to train.
+      1: ["Wed"],
+      2: ["Tue", "Fri"],
       3: ["Mon", "Wed", "Fri"],
       4: ["Mon", "Tue", "Thu", "Fri"],
       5: ["Mon", "Tue", "Wed", "Thu", "Fri"],
@@ -581,18 +596,36 @@ ${WARMUP_RULES}
     // ── Call Groq ────────────────────────────────────────────────────────────
     const groq = new Groq({ apiKey: GROQ_API_KEY.value() });
 
-    const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      max_tokens: 6000,
-      temperature: 0.4,
-      messages: [{ role: "user", content: prompt }],
-    });
+    // Groq failures were thrown raw here, so Firebase stripped them and the coach
+    // got a bare "internal" naming nothing — which is how a retired model went
+    // unnoticed. pulseGenerateFree already routed through groqErrorMessage.
+    let completion;
+    try {
+      completion = await groq.chat.completions.create({
+        model: GROQ_MODEL,
+        max_tokens: 6000,
+        temperature: 0.4,
+        messages: [{ role: "user", content: prompt }],
+      });
+    } catch (groqErr) {
+      console.error("[generateProgram] Groq failed —", groqErr.status || "", groqErr.message);
+      throw new HttpsError("internal", groqErrorMessage(groqErr));
+    }
 
     let raw = completion.choices[0].message.content.trim();
     // Strip markdown fences if model wraps output
     raw = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
 
-    const program = JSON.parse(raw);
+    // Groq has no structured-output mode here, so the model can return prose or a
+    // truncated object. Unwrapped, that SyntaxError also reached the app as a
+    // bare "internal".
+    let program;
+    try {
+      program = JSON.parse(raw);
+    } catch (parseErr) {
+      console.error("[program] JSON parse failed — first 200 chars:", raw.slice(0, 200));
+      throw new HttpsError("internal", "Pulse returned a malformed program — please try again.");
+    }
     console.log(`[generateProgram] Groq program generated for ${name} (${level}, ${goal})`);
     return { program };
   }
@@ -672,6 +705,10 @@ exports.pulseGenerate = onCall(
     steps.push({ icon: "⚡", text: "Pulse đang tạo chương trình..." });
 
     const dayMaps = {
+      // 1 and 2 were missing, so every 2-session client silently fell through to
+      // the 3-day map and got a day they never agreed to train.
+      1: ["Wed"],
+      2: ["Tue", "Fri"],
       3: ["Mon", "Wed", "Fri"],
       4: ["Mon", "Tue", "Thu", "Fri"],
       5: ["Mon", "Tue", "Wed", "Thu", "Fri"],
@@ -991,17 +1028,35 @@ ${WARMUP_RULES}
 
     // ── Call Groq ─────────────────────────────────────────────────────────────
     const groq = new Groq({ apiKey: GROQ_API_KEY.value() });
-    const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      max_tokens: 6000,
-      temperature: 0.35,
-      messages: [{ role: "user", content: prompt }],
-    });
+    // Groq failures were thrown raw here, so Firebase stripped them and the coach
+    // got a bare "internal" naming nothing — which is how a retired model went
+    // unnoticed. pulseGenerateFree already routed through groqErrorMessage.
+    let completion;
+    try {
+      completion = await groq.chat.completions.create({
+        model: GROQ_MODEL,
+        max_tokens: 6000,
+        temperature: 0.35,
+        messages: [{ role: "user", content: prompt }],
+      });
+    } catch (groqErr) {
+      console.error("[pulseGenerate] Groq failed —", groqErr.status || "", groqErr.message);
+      throw new HttpsError("internal", groqErrorMessage(groqErr));
+    }
 
     let raw = completion.choices[0].message.content.trim();
     raw = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
 
-    const program = JSON.parse(raw);
+    // Groq has no structured-output mode here, so the model can return prose or a
+    // truncated object. Unwrapped, that SyntaxError also reached the app as a
+    // bare "internal".
+    let program;
+    try {
+      program = JSON.parse(raw);
+    } catch (parseErr) {
+      console.error("[program] JSON parse failed — first 200 chars:", raw.slice(0, 200));
+      throw new HttpsError("internal", "Pulse returned a malformed program — please try again.");
+    }
     steps.push({ icon: "✅", text: "Hoàn thành!" });
 
     console.log(`[pulseGenerate] ⚡ Pulse generated program for ${name} (${level}, ${goal}), ${styleExamples.length} style refs`);
@@ -1066,6 +1121,10 @@ exports.pulseGenerateFree = onCall(
 
     const sessions = sessionsParsed;
     const dayMaps = {
+      // 1 and 2 were missing, so every 2-session client silently fell through to
+      // the 3-day map and got a day they never agreed to train.
+      1: ["Wed"],
+      2: ["Tue", "Fri"],
       3: ["Mon", "Wed", "Fri"],
       4: ["Mon", "Tue", "Thu", "Fri"],
       5: ["Mon", "Tue", "Wed", "Thu", "Fri"],
@@ -1406,7 +1465,7 @@ Cues: max 6 words each. Use the periodisation rules to make phases genuinely dif
       let hyroxCompletion;
       try {
         hyroxCompletion = await groq.chat.completions.create({
-          model: "llama-3.3-70b-versatile",
+          model: GROQ_MODEL,
           max_tokens: 6000,
           temperature: 0.3,
           messages: [{ role: "user", content: hyroxPrompt }],
@@ -1578,7 +1637,7 @@ ${cueRule}
     let completion;
     try {
       completion = await groq.chat.completions.create({
-        model: "llama-3.3-70b-versatile",
+        model: GROQ_MODEL,
         max_tokens: 6000,
         temperature: 0.35,
         messages: [{ role: "user", content: prompt }],

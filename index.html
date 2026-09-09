@@ -1092,6 +1092,24 @@ function renderAIProgramPreview(program, clientName) {
   preview.style.display = 'block';
 }
 
+/**
+ * The generator names its days Mon/Wed/Fri, and this used to be written to
+ * Firestore untouched — the exact format CLAUDE.md says hangs the app on the
+ * loading screen, because nothing downstream can find a day by that name.
+ * Anything already keyed SessionA-G is left alone, and order is preserved.
+ */
+function toSessionKeys(program) {
+  if (!program || typeof program !== 'object') return program;
+  const keys = Object.keys(program).filter(k => k !== '_type' && k !== 'label');
+  const out = {};
+  let i = 0;
+  for (const k of keys) {
+    out[/^Session[A-G]$/.test(k) ? k : `Session${String.fromCharCode(65 + i)}`] = program[k];
+    i++;
+  }
+  return out;
+}
+
 async function approveGeneratedProgram() {
   if (!_pendingAIClientId || !_pendingAIProgram) {
     closeModal('ai-review-modal');
@@ -1100,7 +1118,7 @@ async function approveGeneratedProgram() {
   const btn = document.getElementById('ai-approve-btn');
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
   try {
-    await updateDoc(doc(db, 'clients', _pendingAIClientId), { program: _pendingAIProgram });
+    await updateDoc(doc(db, 'clients', _pendingAIClientId), { program: toSessionKeys(_pendingAIProgram) });
     if (activeClient && activeClient.id === _pendingAIClientId) {
       activeClient.program = _pendingAIProgram;
       if (typeof renderExercises === 'function') renderExercises();
