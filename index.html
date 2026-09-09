@@ -1955,13 +1955,24 @@ function renderCompliment(bl, cps) {
                  dFat != null ? 'Fat ' + num(dFat, 'kg') : null].filter(Boolean).join(' · ');
   // Say what changed rather than guessing at a cause. The old copy blamed the
   // client's compliance for numbers that were often exactly what was asked for.
+  // Both readings are built from what the numbers did, not from the goal alone:
+  // a goal-only message congratulated a client on muscle "going the right way"
+  // directly beneath a card reading 0.0 kg.
+  const up = dSmm != null && dSmm > 0, fatDown = dFat != null && dFat < 0;
   const read = isGood
-    ? (dir === 'gain' ? 'Muscle is going the right way — that is the target.'
-     : dir === 'lose' ? 'Fat is coming down. Keep the muscle where it is.'
-     : 'Composition is moving the right way.')
-    : (dir === 'gain' ? 'Muscle has not moved. Check protein and whether loads are actually increasing.'
-     : dir === 'lose' ? 'Fat has not come down. Worth reviewing intake before changing the training.'
-     : 'Neither number moved much. Worth a look at intake and recovery.');
+    ? (up && fatDown ? 'Muscle up and fat down — the best case.'
+     : up ? (dir === 'gain' ? 'Muscle is going the right way — that is the target.'
+                            : 'Muscle is up. Keep an eye on fat from here.')
+     : fatDown ? (dir === 'lose' ? 'Fat is coming down. Keep the muscle where it is.'
+                                 : 'Fat is down and muscle is holding. Push loads to get muscle moving.')
+     : 'Composition is holding steady.')
+    // Name whichever number is actually off, rather than the goal alone — a
+    // recomp client who lost muscle AND gained fat was being told nothing moved.
+    : (dSmm != null && dSmm < 0 && dFat != null && dFat > 0
+        ? 'Muscle is down and fat is up. Review intake and recovery before changing the training.'
+     : dSmm != null && dSmm <= 0
+        ? 'Muscle has not moved. Check protein and whether loads are actually increasing.'
+        : 'Fat has not come down. Worth reviewing intake before changing the training.');
 
   wrap.innerHTML = `<div class="compliment-banner ${isGood?'good':'bad'}">
     <div class="compliment-icon">${isGood ? '🏆' : '💡'}</div>
@@ -2053,12 +2064,12 @@ function renderCharts(bl, cps) {
   </div>`;
   if (smmArr) {
     html += `<div class="chart-card">
-      <div class="chart-title">Lean Mass (SMM)</div>
+      <div class="chart-title">Muscle — SMM</div>
       ${!hasCP ? waiting : ''}
       <div class="chart-legend">
         <div class="chart-legend-item"><div class="chart-legend-line" style="background:${smmColor}"></div>SMM (kg)</div>
       </div>
-      <div class="chart-wrap"><canvas id="sc" role="img" aria-label="Lean mass chart"></canvas></div>
+      <div class="chart-wrap"><canvas id="sc" role="img" aria-label="Skeletal muscle mass chart"></canvas></div>
     </div>`;
   }
   wrap.innerHTML = html;
@@ -10030,7 +10041,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <div class="baseline-section">InBody / Body fat <span class="baseline-opt">— optional</span></div>
     <div class="baseline-row">
       <div class="baseline-group"><label class="baseline-label">Body fat % (PBF)</label><input class="baseline-input" id="bl-pbf" type="number" placeholder="22.0" step="0.1"></div>
-      <div class="baseline-group"><label class="baseline-label">Lean mass SMM (kg)</label><input class="baseline-input" id="bl-smm" type="number" placeholder="28.5" step="0.1"></div>
+      <div class="baseline-group"><label class="baseline-label">Muscle SMM (kg)</label><input class="baseline-input" id="bl-smm" type="number" placeholder="28.5" step="0.1"></div>
     </div>
   </div>
   <button class="baseline-save-btn" onclick="saveBaseline()">Save Baseline →</button>
@@ -10081,7 +10092,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
       <div class="baseline-group"><label class="baseline-label">Body fat % (PBF)</label><input class="baseline-input" id="up-pbf" type="number" placeholder="21.0" step="0.1"></div>
     </div>
     <div class="baseline-row">
-      <div class="baseline-group"><label class="baseline-label">Lean mass SMM (kg)</label><input class="baseline-input" id="up-smm" type="number" placeholder="29.0" step="0.1"></div>
+      <div class="baseline-group"><label class="baseline-label">Muscle SMM (kg)</label><input class="baseline-input" id="up-smm" type="number" placeholder="29.0" step="0.1"></div>
       <div class="baseline-group"><label class="baseline-label">Visceral fat</label><input class="baseline-input" id="up-vfl" type="number" placeholder="7"></div>
     </div>
     <div class="baseline-section" style="margin-top:8px">Body measurements <span class="baseline-opt">— optional</span></div>
