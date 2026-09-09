@@ -4310,9 +4310,63 @@ function showNlogStep(step) {
     const el = document.getElementById('nlog-step-' + s);
     if (el) el.classList.toggle('active', s === step);
   });
+  if (step === 'analyzing') {
+    const sub = document.getElementById('nlog-analyzing-sub');
+    if (sub) sub.textContent = 'Analyzing your meal…';   // clear any retry notice
+  }
   const titles = { '0': 'Log a Meal', 'analyzing': 'Analyzing…', 'results': 'Review & Save', 'manual': 'Manual Entry' };
   const t = document.getElementById('nlog-title');
   if (t) t.textContent = titles[step] || 'Log a Meal';
+}
+
+/**
+ * Calling analyzeMealPhoto is the one request in the app that routinely runs for
+ * tens of seconds, which makes it the one request a phone can lose. Measured on
+ * 2026-09-05: 9s, 9s, then 71s. Two things followed from that.
+ *
+ * The SDK defaults to a 70s timeout (`timeout||7e4`) while the function is given
+ * 120s, so a slow call was abandoned by the client while the server was still
+ * working — and did go on to answer. The timeout is now stated, and matches.
+ *
+ * And across a window that long, anything that interrupts the connection — a 5G
+ * handover, the screen locking, the client switching apps while "Analyzing your
+ * meal…" sits there — makes fetch report HTTP status 0. The SDK maps status 0 to
+ * FunctionsError('internal','internal'), which is the bare lowercase "internal"
+ * clients kept seeing, and why nothing ever appeared in the function logs: the
+ * server was never the thing that failed.
+ */
+const MEAL_FN_TIMEOUT_MS = 120000;   // same budget the function itself is given
+const _mealFn = () => firebase.app().functions('asia-southeast1')
+  .httpsCallable('analyzeMealPhoto', { timeout: MEAL_FN_TIMEOUT_MS });
+
+/** Transient in the sense that the same request can simply be sent again. */
+function _mealRetryable(err) {
+  const c = String((err && err.code) || '').replace(/^functions\//, '');
+  return c === 'internal' || c === 'unavailable' || c === 'deadline-exceeded'
+      || c === 'aborted' || c === 'unknown';
+}
+
+/** One retry, because the photo is already in memory — it costs the client nothing. */
+async function callMealAnalysis(payload, onRetry) {
+  try {
+    return await _mealFn()(payload);
+  } catch (err) {
+    if (!_mealRetryable(err)) throw err;
+    console.warn('[meal] lần 1 hỏng (' + (err.code || '?') + '), thử lại', err);
+    if (onRetry) onRetry();
+    return await _mealFn()(payload);
+  }
+}
+
+/** "internal" is what the SDK says when the connection dropped. Say that instead. */
+function mealErrorText(err) {
+  const c = String((err && err.code) || '').replace(/^functions\//, '');
+  if (c === 'internal' || c === 'unavailable' || c === 'unknown')
+    return 'Mất kết nối giữa chừng. Kiểm tra mạng rồi bấm chụp lại — ảnh vẫn còn.';
+  if (c === 'deadline-exceeded')
+    return 'Phân tích lâu quá. Thử lại, hoặc nhập tay bằng nút Manual.';
+  if (c === 'unauthenticated') return 'Phiên đăng nhập hết hạn — đăng nhập lại giúp mình nhé.';
+  return (err && err.message) || 'Không phân tích được ảnh.';
 }
 
 async function handleMealPhoto(input) {
@@ -4348,16 +4402,20 @@ async function handleMealPhoto(input) {
     // dropped when the modal closes.
     _lastMealPhoto = base64;
 
-    const fn = firebase.app().functions('asia-southeast1').httpsCallable('analyzeMealPhoto');
-    const result = await fn({ imageBase64: base64, mimeType: 'image/jpeg' });
+    const sub = document.getElementById('nlog-analyzing-sub');
+    const result = await callMealAnalysis(
+      { imageBase64: base64, mimeType: 'image/jpeg' },
+      () => { if (sub) sub.textContent = 'Mạng chập chờn — đang thử lại…'; });
     _aiMealResult = result.data;
     renderAiResults(_aiMealResult);
     showNlogStep('results');
   } catch (err) {
-    console.error('[handleMealPhoto]', err);
+    console.error('[handleMealPhoto]', err.code, err);
     showNlogStep('0');
-    alert('Could not analyze photo: ' + (err.message || 'Unknown error'));
+    alert(mealErrorText(err));
   } finally {
+    // The file input is cleared so picking the same photo fires change again;
+    // the compressed copy stays in _lastMealPhoto so a retry needs no new photo.
     input.value = '';
   }
 }
@@ -4373,14 +4431,15 @@ async function reanalyseMeal() {
   const label = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = 'Đang tính lại…'; }
   try {
-    const fn = firebase.app().functions('asia-southeast1').httpsCallable('analyzeMealPhoto');
-    const res = await fn({ imageBase64: _lastMealPhoto, mimeType: 'image/jpeg', userHint: hint });
+    const res = await callMealAnalysis(
+      { imageBase64: _lastMealPhoto, mimeType: 'image/jpeg', userHint: hint },
+      () => { if (btn) btn.textContent = 'Thử lại…'; });
     _aiMealResult = res.data;
     _lastMealHint = hint;
     renderAiResults(_aiMealResult, hint);
   } catch (err) {
-    console.error('[reanalyseMeal]', err);
-    alert(err.message || 'Không tính lại được. Thử lại nhé.');
+    console.error('[reanalyseMeal]', err.code, err);
+    alert(mealErrorText(err));
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = label || 'Tính lại'; }
   }
@@ -9882,7 +9941,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
       <div class="nlog-step" id="nlog-step-analyzing">
         <div class="nlog-analyzing">
           <div class="nlog-analyzing-spinner">🔍</div>
-          <div class="nlog-analyzing-text">Analyzing your meal…</div>
+          <div class="nlog-analyzing-text" id="nlog-analyzing-sub">Analyzing your meal…</div>
         </div>
       </div>
 
