@@ -995,7 +995,11 @@ async function launchPulse() {
         <div style="font-size:22px;margin-bottom:8px;">❌</div>
         <div style="color:#F2706B;font-size:12px;margin-bottom:4px;">Pulse failed: ${err.message}</div>
       </div>`;
+    // Generation failed, so there is nothing to apply. Offering the button anyway
+    // meant a coach could press Apply on a program that was never produced and
+    // watch the dialog close as if it had worked.
     actions.style.display = 'flex';
+    _hideApplyButton();
   } finally {
     if (genBtn) genBtn.disabled = false;
   }
@@ -1046,11 +1050,26 @@ async function openAIReviewModal(clientId, clientData) {
         <div style="font-size:22px;margin-bottom:8px;">❌</div>
         <div style="color:#F2706B;font-size:12px;">Generation failed: ${err.message}</div>
       </div>`;
+    // Generation failed, so there is nothing to apply. Offering the button anyway
+    // meant a coach could press Apply on a program that was never produced and
+    // watch the dialog close as if it had worked.
     actions.style.display = 'flex';
+    _hideApplyButton();
   }
 }
 
+/** Apply is only meaningful when a program actually came back. */
+function _hideApplyButton() {
+  const btn = document.getElementById('ai-approve-btn');
+  if (btn) btn.style.display = 'none';
+}
+function _showApplyButton() {
+  const btn = document.getElementById('ai-approve-btn');
+  if (btn) { btn.style.display = ''; btn.disabled = false; btn.textContent = '⚡ Apply Program'; }
+}
+
 function renderAIProgramPreview(program, clientName) {
+  _showApplyButton();
   const loading = document.getElementById('ai-review-loading');
   const preview = document.getElementById('ai-review-preview');
   loading.style.display = 'none';

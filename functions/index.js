@@ -195,6 +195,22 @@ const WARMUP_RULES = `WARM-UP RULES (mandatory — read before generating any wa
 // next retirement is one line and not four.
 const GROQ_MODEL = "qwen/qwen3.8-27b";
 
+/**
+ * Groq admits a request against prompt + max_tokens, not against what the model
+ * actually returns, and this key's ceiling is 8000 tokens a minute. A flat
+ * max_tokens of 6000 meant a five-day program asked for 2210 + 6000 = 8210 and
+ * was refused before it ran, while a two-day one squeaked under — which is why
+ * this looked intermittent rather than broken.
+ *
+ * A measured five-day program completes in 3458 tokens, so the budget is scaled
+ * to the number of days with room to spare instead of reserving a flat ceiling
+ * nothing ever used.
+ */
+function groqMaxTokens(days) {
+  const n = Math.max(1, Number(days) || 3);
+  return Math.min(5000, 1500 + n * 650);
+}
+
 function groqErrorMessage(err) {
   const msg = (err.message || "").toLowerCase();
   const status = err.status || err.statusCode || (err.error && err.error.status);
@@ -603,7 +619,7 @@ ${WARMUP_RULES}
     try {
       completion = await groq.chat.completions.create({
         model: GROQ_MODEL,
-        max_tokens: 6000,
+        max_tokens: groqMaxTokens(days.length),
         temperature: 0.4,
         messages: [{ role: "user", content: prompt }],
       });
@@ -1035,7 +1051,7 @@ ${WARMUP_RULES}
     try {
       completion = await groq.chat.completions.create({
         model: GROQ_MODEL,
-        max_tokens: 6000,
+        max_tokens: groqMaxTokens(days.length),
         temperature: 0.35,
         messages: [{ role: "user", content: prompt }],
       });
@@ -1466,7 +1482,7 @@ Cues: max 6 words each. Use the periodisation rules to make phases genuinely dif
       try {
         hyroxCompletion = await groq.chat.completions.create({
           model: GROQ_MODEL,
-          max_tokens: 6000,
+          max_tokens: groqMaxTokens(days.length),
           temperature: 0.3,
           messages: [{ role: "user", content: hyroxPrompt }],
         });
@@ -1638,7 +1654,7 @@ ${cueRule}
     try {
       completion = await groq.chat.completions.create({
         model: GROQ_MODEL,
-        max_tokens: 6000,
+        max_tokens: groqMaxTokens(days.length),
         temperature: 0.35,
         messages: [{ role: "user", content: prompt }],
       });
