@@ -149,18 +149,16 @@ function phaseRank(phase) {
 function sortPhases(phases) {
   return [...phases].sort((a, b) => phaseRank(a) - phaseRank(b));
 }
-const COMPLIMENTS = [
-  'Outstanding! Your body is responding really well to the program.',
-  'Amazing! Clear results after weeks of consistency.',
-  'On track! Keep maintaining this momentum.',
-  'Impressive! Progress exceeding expectations.',
-  'Great work! Numbers show your body is changing positively.',
-];
-const ADVICE = [
-  'Below expectations. Review nutrition and sleep quality.',
-  'Results not where we want them. Check compliance with the training schedule.',
-  'Adjustments needed. Talk to your coach about diet and recovery.',
-];
+// Whether a checkpoint is good news depends on what the client is training for.
+// Read from the goal the coach wrote, because there is no structured field for
+// it; an unrecognised goal is treated as recomposition, which weighs muscle and
+// fat equally and is the safest thing to assume when we do not know.
+function goalDirection(goal) {
+  const g = String(goal || '').toLowerCase();
+  const gain = /tăng cơ|tang co|hypertroph|muscle|strength|sức mạnh|suc manh|bulk|tăng cân|tang can|mật độ xương|mat do xuong|chiều cao|chieu cao|height|bone density/.test(g);
+  const lose = /giảm mỡ|giam mo|fat ?loss|giảm cân|giam can|weight loss|cắt nét|cut/.test(g);
+  return gain && lose ? 'recomp' : gain ? 'gain' : lose ? 'lose' : 'recomp';
+}
 
 // ── IN-APP BROWSER DETECTION ───────────────────────────
 (function detectInAppBrowser() {
@@ -1934,18 +1932,41 @@ function renderCompliment(bl, cps) {
   }
   if (cps.length === 0) { wrap.innerHTML = ''; return; }
   const last = cps[cps.length-1];
-  let good = 0, bad = 0;
-  if (bl.weight != null && last.weight != null) { last.weight < bl.weight ? good++ : bad++; }
-  if (bl.pbf    != null && last.pbf    != null) { last.pbf    < bl.pbf    ? good++ : bad++; }
-  if (bl.smm    != null && last.smm    != null) { last.smm    > bl.smm    ? good++ : bad++; }
-  const isGood = good >= bad;
-  const msg = isGood
-    ? COMPLIMENTS[Math.floor(Math.random() * COMPLIMENTS.length)]
-    : ADVICE[Math.floor(Math.random() * ADVICE.length)];
+
+  // Scale weight is not judged. It is fat plus lean, both of which are already
+  // counted below, and reading it on its own is what marked a muscle-gain
+  // client's best checkpoint as a failure.
+  const fatKg = (w, p) => (w != null && p != null) ? w * p / 100 : null;
+  const f0 = fatKg(bl.weight, bl.pbf), f1 = fatKg(last.weight, last.pbf);
+  const dFat = (f0 != null && f1 != null) ? f1 - f0 : null;
+  const dSmm = (bl.smm != null && last.smm != null) ? last.smm - bl.smm : null;
+  if (dFat == null && dSmm == null) { wrap.innerHTML = ''; return; }
+
+  const dir = goalDirection((activeClient || {}).goal);
+  const wMuscle = dir === 'gain' ? 2 : dir === 'lose' ? 1 : 1.5;
+  const wFat    = dir === 'lose' ? 2 : dir === 'gain' ? 1 : 1.5;
+  let score = 0;
+  if (dSmm != null) score += Math.sign(dSmm) * wMuscle;
+  if (dFat != null) score += -Math.sign(dFat) * wFat;
+  const isGood = score >= 0;
+
+  const num = (v, unit) => (v > 0 ? '+' : '') + v.toFixed(1) + ' ' + unit;
+  const facts = [dSmm != null ? 'Muscle ' + num(dSmm, 'kg') : null,
+                 dFat != null ? 'Fat ' + num(dFat, 'kg') : null].filter(Boolean).join(' · ');
+  // Say what changed rather than guessing at a cause. The old copy blamed the
+  // client's compliance for numbers that were often exactly what was asked for.
+  const read = isGood
+    ? (dir === 'gain' ? 'Muscle is going the right way — that is the target.'
+     : dir === 'lose' ? 'Fat is coming down. Keep the muscle where it is.'
+     : 'Composition is moving the right way.')
+    : (dir === 'gain' ? 'Muscle has not moved. Check protein and whether loads are actually increasing.'
+     : dir === 'lose' ? 'Fat has not come down. Worth reviewing intake before changing the training.'
+     : 'Neither number moved much. Worth a look at intake and recovery.');
+
   wrap.innerHTML = `<div class="compliment-banner ${isGood?'good':'bad'}">
     <div class="compliment-icon">${isGood ? '🏆' : '💡'}</div>
     <div><div class="compliment-title">${isGood ? 'Good progress!' : 'Needs adjustment'}</div>
-    <div class="compliment-sub">${msg}</div></div></div>`;
+    <div class="compliment-sub">${facts}${facts ? ' vs baseline. ' : ''}${read}</div></div></div>`;
 }
 
 function renderDeltaCards(bl, cps) {
@@ -1965,14 +1986,30 @@ function renderDeltaCards(bl, cps) {
       <div class="delta-change ${cls}">${arrow} ${sign}${Math.abs(diff)} ${unit} vs baseline</div>
     </div>`;
   }
+  // "Lean mass" was wrong: the figure entered here is SMM off the InBody sheet,
+  // skeletal muscle only. Lean body mass is the whole fat-free total — roughly
+  // twice as large — so the old label contradicted the printout it came from.
+  const lbm = (bl.weight != null && bl.pbf != null && last.weight != null && last.pbf != null)
+    ? card('Lean body mass', +(bl.weight * (1 - bl.pbf/100)).toFixed(1),
+                             +(last.weight * (1 - last.pbf/100)).toFixed(1), 'kg', false) : '';
   wrap.innerHTML = `
-    <div class="delta-section-label">Checkpoint #${cps.length} — Week ${cps.length*4}</div>
+    <div class="delta-section-label">Checkpoint #${cps.length}${
+      _cpWeek(bl, last) != null ? ' — Week ' + _cpWeek(bl, last) : ''}</div>
     <div class="delta-grid">
-      ${card('Weight',     bl.weight, last.weight, 'kg',    true)}
-      ${card('Body fat %',   bl.pbf,    last.pbf,    '%',     true)}
-      ${card('Lean mass',bl.smm,    last.smm,    'kg',    false)}
+      ${card('Weight',       bl.weight, last.weight, 'kg', true)}
+      ${card('Body fat %',   bl.pbf,    last.pbf,    '%',  true)}
+      ${card('Muscle (SMM)', bl.smm,    last.smm,    'kg', false)}
+      ${lbm}
       ${bl.vfl != null && last.vfl != null ? card('Visceral fat', bl.vfl, last.vfl, 'level', true) : ''}
     </div>`;
+}
+
+/** Weeks actually elapsed. Checkpoints are meant to be every 4 weeks but rarely are. */
+function _cpWeek(bl, cp) {
+  const d = x => x && x.date ? (x.date.toDate ? x.date.toDate() : new Date(x.date)) : null;
+  const a = d(bl), b = d(cp);
+  if (!a || !b || isNaN(a) || isNaN(b)) return null;
+  return Math.max(1, Math.round((b - a) / (7*24*60*60*1000)));
 }
 
 function renderCharts(bl, cps) {
@@ -1985,7 +2022,7 @@ function renderCharts(bl, cps) {
   const hasCP = cps.length > 0;
   const grid = 'rgba(255,255,255,0.06)', tc = 'rgba(255,255,255,0.60)', bfColor = '#378ADD';
 
-  const labels = ['Baseline', ...cps.map((_,i) => 'T'+(i+1)*4)];
+  const labels = ['Baseline', ...cps.map(c => { const w = _cpWeek(bl, c); return w != null ? 'T'+w : 'CP'; })];
   if (!hasCP) labels.push('→ T4');
 
   const weights = [bl.weight, ...cps.map(c => c.weight)];
@@ -4850,8 +4887,10 @@ function markError(id) {
 async function openUpdateModal() {
   const cps = await getCPs();
   const n   = cps.length + 1;
+  const bl0 = await getBL();
+  const wk  = bl0 ? _cpWeek(bl0, { date: new Date() }) : null;
   document.getElementById('update-modal-sub').textContent =
-    'Checkpoint #'+n+' — Week '+(n*4)+'. Enter new measurements from InBody to compare with baseline.';
+    'Checkpoint #'+n+(wk != null ? ' — Week '+wk : '')+'. Enter new measurements from InBody to compare with baseline.';
   if (cps.length > 0) {
     const last = cps[cps.length-1];
     ['weight','pbf','smm','vfl','waist','hip'].forEach(k => {

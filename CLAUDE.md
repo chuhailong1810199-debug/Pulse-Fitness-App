@@ -1,26 +1,36 @@
 
-## Current clients (verified against Firestore 2026-07-31)
+## Current clients (verified against Firestore 2026-09-09 — 18 clients)
 
 ### Self-login clients — each has their own Gmail
 | Name | Client ID | Gmail | Level | Sessions/wk | Days | Goal |
 |------|-----------|-------|-------|-------------|------|------|
 | Chị Nguyệt | chị_nguyệt_1776562700235 | nguyet.cm83@gmail.com | Intermediate | 3 | 4 | Strength + Fatloss + Boxing |
 | Cindy | cindy | dollykim1401@gmail.com | Intermediate | 3 | 3 | Strength & Fat Loss — Glutes/Back/Core |
+| Giao | giao | hqunhgiao.18@gmail.com | Beginner | 2 | 2 | HYROX / Hybrid — nền aerobic + kỹ thuật trạm |
 | Joost | joost | joost123@gmail.com | Beginner | 3 | 3 | — |
 | Lee | lee | kuanyu41@gmail.com | Intermediate | 3 | 3 | Strength & Hypertrophy |
 | Long Chu | longchu | coach@fitwithlongchu.com | Advanced | 3 | 3 | Strength & Hypertrophy |
-| Nguyên | nguyen | tbn010112@gmail.com | Beginner | 3 | 3 | Giảm mỡ + hiệu suất thể thao |
+| Nam | nam | namdoxuan0104@gmail.com | Intermediate | 3 | 3 | Tăng cơ giảm mỡ |
+| Nguyên | nguyen | tbn010112@gmail.com | Beginner | 3 | 3 | Giảm mỡ + tăng hiệu suất thể thao |
 | Sang | sang | thinhcst@gmail.com | Beginner | 3 | 3 | Fat Loss + Posture + Height |
 | anh Soobin | soobin | sonnguyen109992@gmail.com | Intermediate | 3 | 3 | Tăng cơ giảm mỡ |
 
-### Coach-managed — no Gmail on purpose, cannot log in
+### Coach-managed — `email: ''` on purpose, cannot log in
 | Name | Client ID | Level | Sessions/wk | Days | Goal |
 |------|-----------|-------|-------------|------|------|
 | An | an | Intermediate | 3 | 3 | Strength & Hypertrophy |
 | Anh Đạo | dao | Beginner | 5 | 5 | Fat loss — giảm mỡ, cải thiện thể lực |
-| Rome | rome | Beginner | 2 | 2 | Tăng chiều cao, mật độ xương |
+| Antony | antony | Beginner | 2 | 2 | Fat loss (15 tuổi — KHÔNG ép thâm hụt calo) |
+| Chị Linh | linh | Beginner | 2 | 2 | Giảm mỡ + tăng size mông |
+| Chị Tâm | tam | Beginner | 2 | 2 | Tăng cơ + strength — dân chạy 35km/tuần, ưu tiên chân |
+| Rome | rome | Beginner | 2 | 2 | Tăng chiều cao, mật độ xương, hiệu suất thể thao |
 | Thai Son | thaison | Advanced | 4 | 3 | Shoulder Rehab → Strength + Boxing |
-| Trần Văn Tiến | tien | Beginner | 2 | 2 | Sức khỏe tổng quát, tuổi 48 |
+| Trần Văn Tiến | tien | Beginner | 2 | 2 | Sức khỏe tổng quát, tăng cơ giảm mỡ tuổi 48 |
+
+A coach-managed client carries `email: ''`, **never** a placeholder address. The
+fitness-app skill still suggests `placeholder@gmail.com` when the address is unknown —
+do not follow it. Two clients holding one address is the exact failure below, and a
+shared placeholder reproduces it the moment a second client gets one.
 
 Removed 2026-07-31: **Vy**, **Ngọc Anh**, **Chị Nhi**, **Ngân** (client docs + orphaned user accounts deleted).
 Thai Son's email was cleared — `sonnguyen109992@gmail.com` belongs to Soobin. Thai Son needs his own
