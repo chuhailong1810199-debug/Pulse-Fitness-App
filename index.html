@@ -1347,7 +1347,7 @@ function renderDashboard() {
       </div>
       <div class="dsh-reason"${r.hint ? ' title="' + escHtml(r.hint) + '"' : ''}>${escHtml(r.reason)}</div>
       <div class="dsh-mag">${r.mag ? r.mag : '—'}<span>${escHtml(r.unit)}</span></div>
-      <button class="dsh-open" onclick="switchClient('${r.c.id}').then(()=>showPage('cdash'))">Mở hồ sơ</button>
+      <button class="dsh-open" onclick="openClientDash('${r.c.id}')">Mở hồ sơ</button>
     </div>`).join('')
     : `<div class="dsh-empty">
          <div class="dsh-empty-tick">✓</div>
@@ -1524,6 +1524,23 @@ function cdMuscles() {
   return Object.entries(t).sort((a, b) => b[1] - a[1]).slice(0, 8);
 }
 
+
+/**
+ * Mở màn hình một khách từ dashboard.
+ *
+ * Không được viết switchClient(id).then(...) trong onclick. window.switchClient
+ * là lớp vỏ hàng đợi gọi _q(), mà _q vứt luôn giá trị trả về — nên .then() không
+ * bao giờ chạy, và chạy im lặng chứ không báo lỗi: khách được đổi, màn hình đứng
+ * yên. Hàm này gọi thẳng bản gốc _switchClient để await được.
+ */
+async function openClientDash(id) {
+  const sw = window._switchClient || switchClient;
+  const sp = window._showPage || showPage;
+  try {
+    if (id && (!activeClient || activeClient.id !== id)) await sw(id);
+  } catch (e) { console.warn('[openClientDash] đổi khách lỗi:', e.message); }
+  sp('cdash');
+}
 
 /** Đường xu hướng tí hon, vẽ bằng SVG — không kéo thêm thư viện nào. */
 function _cdSpark(series) {
@@ -6178,6 +6195,7 @@ async function schedGoToday() {
 }
 
 window._showPage = showPage;
+window._openClientDash = openClientDash;
 window._setDay = setDay;
 window._openModal = openModal;
 window._closeModal = closeModal;
@@ -9753,6 +9771,7 @@ window.pwaDismiss = pwaDismiss;
 window.logout            = function() { _q('_logout',[]); };
 window.showPage          = function(p){ _q('_showPage',[p]); };
 window.switchClient           = function(id){ _q('_switchClient',[id]); };
+window.openClientDash         = function(id){ _q('_openClientDash',[id]); };
 window.addClient              = function() { _q('_addClient',[]); };
 window.approveGeneratedProgram = function() { _q('_approveGeneratedProgram',[]); };
 window.launchPulse             = function() { _q('_launchPulse',[]); };
