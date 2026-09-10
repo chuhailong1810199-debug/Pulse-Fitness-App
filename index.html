@@ -1345,7 +1345,7 @@ function renderDashboard() {
         <div class="dsh-meta">${escHtml((r.c.goal || '').slice(0, 34))}${
           r.c.sessionsPerWeek ? ' · ' + r.c.sessionsPerWeek + ' buổi/tuần' : ''}</div>
       </div>
-      <div class="dsh-reason">${escHtml(r.reason)}</div>
+      <div class="dsh-reason"${r.hint ? ' title="' + escHtml(r.hint) + '"' : ''}>${escHtml(r.reason)}</div>
       <div class="dsh-mag">${r.mag ? r.mag : '—'}<span>${escHtml(r.unit)}</span></div>
       <button class="dsh-open" onclick="switchClient('${r.c.id}');showPage('workout')">Mở hồ sơ</button>
     </div>`).join('')
@@ -1505,8 +1505,8 @@ function clientAlert(c) {
   const gap = _daysSince(c.lastWorkoutAt);
   const lim = inactiveThreshold(c);
   if (gap != null && gap >= lim)
-    return { kind:'inactive', sev:'amber',
-      reason:'Chưa tập (ngưỡng ' + lim + ' ngày)', mag:gap, unit:'ngày' };
+    return { kind:'inactive', sev:'amber', reason:'Chưa tập', mag:gap, unit:'ngày',
+      hint:'Ngưỡng của khách này là ' + lim + ' ngày (' + (c.sessionsPerWeek || 3) + ' buổi/tuần)' };
 
   const cp = _daysSince(c.lastCheckpointAt);
   if (cp != null && cp >= 56)
@@ -11901,13 +11901,14 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .dsh-refill:disabled{opacity:.5;cursor:progress;}
 .dsh-grid{display:grid;grid-template-columns:1fr;gap:18px;}
 @media(min-width:1024px){.dsh-grid{grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);}}
-@media(min-width:1360px){.dsh-grid{grid-template-columns:minmax(0,1.7fr) minmax(0,1fr) 300px;}}
+@media(min-width:1360px){.dsh-grid{grid-template-columns:minmax(0,1.45fr) minmax(0,1.15fr) 286px;}}
+@media(min-width:1700px){.dsh-grid{grid-template-columns:minmax(0,1.5fr) minmax(0,1.2fr) 320px;}}
 .dsh-col{min-width:0;}
 .dsh-cap{display:flex;align-items:baseline;gap:9px;font-size:11px;font-weight:800;letter-spacing:1.5px;
   text-transform:uppercase;color:#D98E3C;margin-bottom:11px;}
 .dsh-cap span{font-size:10px;letter-spacing:.4px;text-transform:none;font-weight:600;color:#948D83;}
 /* dòng cần chú ý */
-.dsh-row{display:grid;grid-template-columns:26px minmax(0,1.4fr) minmax(0,1fr) 62px auto;
+.dsh-row{display:grid;grid-template-columns:22px minmax(0,1.25fr) minmax(0,0.95fr) 58px auto;
   align-items:center;gap:12px;background:#161412;border:1px solid #24211E;border-left:3px solid #3D3833;
   border-radius:12px;padding:11px 13px;margin-bottom:8px;}
 .dsh-row.dsh-red{border-left-color:#EE5A4F;}
@@ -11941,7 +11942,8 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .dsh-act-b{flex:1;min-width:0;}
 .dsh-act-n{display:flex;align-items:baseline;gap:7px;font-size:12.5px;font-weight:800;color:#F7F4F0;}
 .dsh-act-n span{font-size:9.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:#948D83;}
-.dsh-act-s{margin-top:2px;font-size:11.5px;color:#B0A9A0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dsh-act-s{margin-top:2px;font-size:11.5px;line-height:1.45;color:#B0A9A0;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
 .dsh-act-w{flex:none;font-size:10.5px;color:#948D83;white-space:nowrap;}
 .dsh-quiet{font-size:12px;line-height:1.6;color:#948D83;background:#161412;border:1px dashed #3D3833;
   border-radius:12px;padding:14px;}
