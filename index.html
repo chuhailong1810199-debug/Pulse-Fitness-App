@@ -1347,7 +1347,7 @@ function renderDashboard() {
       </div>
       <div class="dsh-reason"${r.hint ? ' title="' + escHtml(r.hint) + '"' : ''}>${escHtml(r.reason)}</div>
       <div class="dsh-mag">${r.mag ? r.mag : '—'}<span>${escHtml(r.unit)}</span></div>
-      <button class="dsh-open" onclick="switchClient('${r.c.id}');showPage('workout')">Mở hồ sơ</button>
+      <button class="dsh-open" onclick="switchClient('${r.c.id}').then(()=>showPage('cdash'))">Mở hồ sơ</button>
     </div>`).join('')
     : `<div class="dsh-empty">
          <div class="dsh-empty-tick">✓</div>
@@ -1456,6 +1456,159 @@ async function backfillDashboard(btn) {
     if (btn) { btn.disabled = false; btn.textContent = label || 'Nạp lại dữ liệu cũ'; }
     renderDashboard();
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CLIENT DASHBOARD — màn hình một khách trên máy tính
+// App gốc cho khách xem trên điện thoại: mỗi lần một session, phải bấm qua lại.
+// Coach ngồi máy tính thì xem được cả ba session cạnh nhau, kèm tạ lần gần nhất
+// và xu hướng của từng bài — thứ hiện phải mở từng ô mới thấy.
+//
+// loadStrengthHistory() chỉ nạp session đang mở, nên màn này tự nạp rộng hơn:
+// một lần, 12 buổi gần nhất trên MỌI session. Dashboard danh sách phải miễn phí
+// tuyệt đối vì mở liên tục; màn này coach chủ động mở nên trả giá đó được.
+// ═══════════════════════════════════════════════════════════════════════════
+let _cdash = null;   // { clientId, byName:{ nameKey: [{at, kg}] }, sessions:[...] }
+
+const _cdLoads = n => (_cdash && _cdash.byName[_exNameKey(n)]) || [];
+
+async function loadClientDash(force) {
+  if (!activeClient) return;
+  if (!force && _cdash && _cdash.clientId === activeClient.id) return;
+  const id = activeClient.id;
+  const byName = {}, sessions = [];
+  try {
+    const snap = await getDocs(query(collection(db, 'clients', id, 'workoutHistory'),
+      orderBy('date', 'desc'), limit(12)));
+    const docs = snap.docs;
+    docs.forEach(d => {
+      const v = d.data(), dt = v.date && v.date.toDate ? v.date.toDate() : null;
+      sessions.push({ id: d.id, day: v.day || '?', done: v.done ?? null, total: v.total ?? null,
+        volume: v.totalVolume || 0, byMuscle: v.volumeByMuscle || {}, at: dt ? dt.toISOString() : null });
+    });
+    const per = await Promise.all(docs.map(async d => ({
+      at: (d.data().date && d.data().date.toDate ? d.data().date.toDate() : new Date()).toISOString(),
+      ex: await getDocs(collection(db, 'clients', id, 'workoutHistory', d.id, 'exercises')),
+    })));
+    // Khớp theo TÊN bài, không theo vị trí. Đổi chỗ một bài trong giáo án không
+    // được làm tạ của nó nhảy sang bài khác — đúng nguyên tắc đã áp cho cả app.
+    per.forEach(({ at, ex }) => ex.forEach(e => {
+      const v = e.data(), key = _exNameKey(v.exerciseName);
+      const kg = Number(v.loadKg);
+      if (!key || !Number.isFinite(kg) || kg <= 0) return;
+      (byName[key] = byName[key] || []).push({ at, kg });
+    }));
+    Object.values(byName).forEach(a => a.sort((x, y) => String(x.at).localeCompare(String(y.at))));
+    _cdash = { clientId: id, byName, sessions };
+  } catch (e) {
+    console.warn('[clientDash]', e.message);
+    _cdash = { clientId: id, byName: {}, sessions: [] };
+  }
+}
+
+/** Tạ gần nhất + chênh lệch so với lần trước đó. */
+function cdTrend(name) {
+  const a = _cdLoads(name);
+  if (!a.length) return null;
+  const last = a[a.length - 1].kg;
+  const prev = a.length > 1 ? a[a.length - 2].kg : null;
+  return { last, prev, delta: prev == null ? null : +(last - prev).toFixed(1), n: a.length,
+           series: a.slice(-8).map(x => x.kg) };
+}
+
+/** Gộp volume theo nhóm cơ trên toàn bộ buổi đã nạp. */
+function cdMuscles() {
+  const t = {};
+  ((_cdash && _cdash.sessions) || []).forEach(s =>
+    Object.entries(s.byMuscle || {}).forEach(([m, v]) => { t[m] = (t[m] || 0) + (Number(v) || 0); }));
+  return Object.entries(t).sort((a, b) => b[1] - a[1]).slice(0, 8);
+}
+
+
+/** Đường xu hướng tí hon, vẽ bằng SVG — không kéo thêm thư viện nào. */
+function _cdSpark(series) {
+  if (!series || series.length < 2) return '';
+  const w = 46, h = 16, min = Math.min(...series), max = Math.max(...series), sp = (max - min) || 1;
+  const pts = series.map((v, i) =>
+    (i / (series.length - 1) * w).toFixed(1) + ',' + (h - (v - min) / sp * h).toFixed(1)).join(' ');
+  const up = series[series.length - 1] >= series[0];
+  return '<svg class="cd-spark" viewBox="0 0 ' + w + ' ' + h + '" aria-hidden="true">'
+    + '<polyline points="' + pts + '" fill="none" stroke="' + (up ? '#7ED9A0' : '#EE5A4F')
+    + '" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg>';
+}
+
+async function renderClientDash() {
+  const wrap = document.getElementById('cdash-body');
+  if (!wrap || !activeClient || userRole !== 'coach') return;
+  wrap.innerHTML = '<div class="cd-loading">Đang đọc lịch sử tập…</div>';
+  await loadClientDash();
+
+  const c = activeClient, prog = c.program || {};
+  const days = Object.keys(prog).sort();
+  const st = accessStatus(c.access || {});
+  const gap = _daysSince(c.lastWorkoutAt), lim = inactiveThreshold(c);
+
+  const cols = days.length ? days.map(d => {
+    const phases = (prog[d] && prog[d].phases) || [];
+    const nEx = phases.reduce((n, p) => n + ((p.exercises || []).length), 0);
+    const recent = ((_cdash && _cdash.sessions) || []).filter(s => s.day === d);
+    const lastAt = recent.length ? recent[0].at : null;
+    return `
+      <section class="cd-day">
+        <header class="cd-day-h">
+          <div><div class="cd-day-n">${escHtml(d.replace('Session', 'Session '))}</div>
+            <div class="cd-day-m">${nEx} bài${lastAt ? ' · tập gần nhất ' + _dashWhen(lastAt) : ' · chưa tập lần nào'}</div></div>
+          <div class="cd-day-c">${recent.length ? recent.slice(0, 6).reverse().map(s => {
+            const pctv = s.total ? Math.round((s.done || 0) / s.total * 100) : 0;
+            return `<i class="cd-tick ${pctv >= 90 ? 'full' : pctv >= 50 ? 'part' : 'low'}"
+              title="${s.done ?? '?'}/${s.total ?? '?'} bài"></i>`; }).join('') : ''}</div>
+        </header>
+        ${phases.map(ph => `
+          <div class="cd-ph">${escHtml(ph.name || '')}</div>
+          ${(ph.exercises || []).map(ex => {
+            const t = cdTrend(ex.name);
+            return `<div class="cd-ex">
+              <div class="cd-ex-n">${escHtml(ex.name || '')}</div>
+              <div class="cd-ex-r">${escHtml(ex.setsReps || '')}</div>
+              <div class="cd-ex-l">${t
+                ? '<b>' + t.last + '<span>kg</span></b>' + (t.delta != null && t.delta !== 0
+                    ? '<i class="' + (t.delta > 0 ? 'up' : 'down') + '">'
+                      + (t.delta > 0 ? '+' : '') + t.delta + '</i>' : '')
+                : '<span class="cd-none">chưa có</span>'}</div>
+              <div class="cd-ex-s">${t ? _cdSpark(t.series) : ''}</div>
+            </div>`;
+          }).join('')}`).join('')}
+      </section>`;
+  }).join('') : '<div class="cd-empty">Khách này chưa có giáo án. Dùng <b>⚡ Pulse</b> để tạo.</div>';
+
+  const mus = cdMuscles(), maxMus = mus.length ? mus[0][1] : 1;
+  const sess = (_cdash && _cdash.sessions) || [];
+  const totalVol = sess.reduce((n, s) => n + (s.volume || 0), 0);
+
+  wrap.innerHTML = `
+    <div class="cd-head">
+      <div>
+        <div class="cd-back" onclick="showPage('dash')">← Tất cả khách</div>
+        <h1 class="cd-h1">${escHtml(c.name || c.id)}</h1>
+        <div class="cd-sub">${escHtml(c.level || '')}${c.sessionsPerWeek ? ' · ' + c.sessionsPerWeek + ' buổi/tuần' : ''}
+          ${c.goal ? ' · ' + escHtml(c.goal) : ''}</div>
+      </div>
+      <div class="cd-badges">
+        <span class="cd-badge bl-badge-${st.state}">${ACCESS_LABEL[st.state]}</span>
+        ${gap != null ? `<span class="cd-badge ${gap >= lim ? 'cd-warn' : 'cd-ok'}">Tập gần nhất ${gap} ngày trước</span>` : ''}
+        <button class="cd-goto" onclick="showPage('workout')">Mở giáo án để sửa</button>
+      </div>
+    </div>
+    <div class="cd-strip">
+      <div class="cd-kpi"><span>${sess.length}</span>buổi đã ghi</div>
+      <div class="cd-kpi"><span>${Math.round(totalVol).toLocaleString('vi-VN')}</span>kg tổng khối lượng</div>
+      <div class="cd-kpi"><span>${days.length}</span>session trong giáo án</div>
+      ${mus.length ? `<div class="cd-mus">${mus.map(([m, v]) => `
+        <div class="cd-mus-row"><span>${escHtml(m)}</span>
+          <i style="width:${Math.max(4, Math.round(v / maxMus * 100))}%"></i>
+          <b>${Math.round(v).toLocaleString('vi-VN')}</b></div>`).join('')}</div>` : ''}
+    </div>
+    <div class="cd-days">${cols}</div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4966,7 +5119,9 @@ function showPage(page) {
   document.getElementById('youth-page').classList.toggle('active', page === 'youth');
   document.getElementById('billing-page').classList.toggle('active', page === 'billing');
   document.getElementById('dash-page').classList.toggle('active', page === 'dash');
+  document.getElementById('cdash-page').classList.toggle('active', page === 'cdash');
   if (page === 'dash') renderDashboard();
+  if (page === 'cdash') renderClientDash();
   if (page === 'progress') {
     ensureChartJS().then(() => {
       checkCheckpointReminder();
@@ -10194,6 +10349,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 
   <!-- ── BILLING ──────────────────────────────────────────────────────── -->
   <div id="dash-page"><div id="dash-body"></div></div>
+  <div id="cdash-page"><div id="cdash-body"></div></div>
   <div id="billing-page"><div id="billing-body"></div></div>
 
   <!-- ── YOUTH DEVELOPMENT TEST BATTERY ───────────────────────────────── -->
@@ -11962,6 +12118,67 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .dsh-kv b{font-size:15px;font-weight:900;color:#F7F4F0;}
 .dsh-kv.dsh-ok b{color:#7ED9A0;} .dsh-kv.dsh-warn b{color:#FFD479;}
 .dsh-kv.dsh-bad b{color:#EE5A4F;} .dsh-kv.dsh-mute b{color:#948D83;}
+/* ── Client dashboard: một khách, trên máy tính ─────────────────────────── */
+#cdash-page{display:none;}
+#cdash-page.active{display:block;padding:0 20px 100px;max-width:1700px;margin:0 auto;}
+.cd-loading{padding:40px;text-align:center;font-size:13px;color:#948D83;}
+.cd-head{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;flex-wrap:wrap;
+  padding:16px 0 14px;border-bottom:1px solid #24211E;margin-bottom:14px;}
+.cd-back{font-size:11.5px;font-weight:700;color:#948D83;cursor:pointer;margin-bottom:6px;}
+.cd-back:hover{color:#D98E3C;}
+.cd-h1{margin:0;font-size:25px;font-weight:900;letter-spacing:-.7px;color:#F7F4F0;}
+.cd-sub{margin-top:4px;font-size:12px;color:#948D83;}
+.cd-badges{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.cd-badge{font-size:10px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;
+  border-radius:7px;padding:5px 10px;}
+.cd-badge.cd-ok{background:rgba(126,217,160,.14);border:1px solid rgba(126,217,160,.38);color:#7ED9A0;}
+.cd-badge.cd-warn{background:rgba(255,212,121,.13);border:1px solid rgba(255,212,121,.38);color:#FFD479;}
+.cd-goto{background:#EDE6DA;border:none;border-radius:9px;color:#0D0C0B;font-family:inherit;
+  font-size:11.5px;font-weight:800;padding:8px 13px;cursor:pointer;}
+.cd-goto:hover{filter:brightness(.94);}
+/* dải số liệu */
+.cd-strip{display:grid;grid-template-columns:repeat(3,minmax(0,auto)) minmax(0,1fr);gap:14px;
+  align-items:center;background:#161412;border:1px solid #24211E;border-radius:14px;
+  padding:13px 16px;margin-bottom:16px;}
+@media(max-width:900px){.cd-strip{grid-template-columns:repeat(3,1fr);}}
+.cd-kpi{font-size:10.5px;color:#948D83;white-space:nowrap;}
+.cd-kpi span{display:block;font-size:22px;font-weight:900;color:#F7F4F0;letter-spacing:-.7px;line-height:1.1;}
+.cd-mus{min-width:0;display:grid;grid-template-columns:1fr 1fr;gap:3px 16px;}
+@media(max-width:1200px){.cd-mus{grid-template-columns:1fr;}}
+.cd-mus-row{display:grid;grid-template-columns:78px 1fr 56px;align-items:center;gap:8px;font-size:10.5px;color:#948D83;}
+.cd-mus-row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cd-mus-row i{height:5px;border-radius:99px;background:#D98E3C;display:block;}
+.cd-mus-row b{text-align:right;font-size:10.5px;font-weight:700;color:#B0A9A0;}
+/* các session cạnh nhau */
+.cd-days{display:grid;grid-template-columns:1fr;gap:14px;}
+@media(min-width:900px){.cd-days{grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media(min-width:1300px){.cd-days{grid-template-columns:repeat(3,minmax(0,1fr));}}
+.cd-day{background:#161412;border:1px solid #24211E;border-radius:14px;padding:14px;min-width:0;}
+.cd-day-h{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;
+  padding-bottom:11px;border-bottom:1px solid #24211E;margin-bottom:11px;}
+.cd-day-n{font-size:14px;font-weight:900;color:#F7F4F0;letter-spacing:-.2px;}
+.cd-day-m{margin-top:3px;font-size:10.5px;color:#948D83;}
+.cd-day-c{display:flex;gap:3px;flex:none;padding-top:3px;}
+.cd-tick{width:7px;height:16px;border-radius:2px;background:#3D3833;display:block;}
+.cd-tick.full{background:#7ED9A0;} .cd-tick.part{background:#FFD479;} .cd-tick.low{background:#EE5A4F;}
+.cd-ph{font-size:9.5px;font-weight:800;letter-spacing:1.1px;text-transform:uppercase;color:#D98E3C;
+  margin:11px 0 6px;}
+.cd-ph:first-of-type{margin-top:0;}
+.cd-ex{display:grid;grid-template-columns:minmax(0,1fr) 62px 74px 46px;align-items:center;gap:8px;
+  padding:6px 0;border-bottom:1px solid rgba(61,56,51,.5);}
+.cd-ex:last-child{border-bottom:none;}
+.cd-ex-n{font-size:12px;color:#F7F4F0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cd-ex-r{font-size:10.5px;color:#948D83;white-space:nowrap;}
+.cd-ex-l{text-align:right;font-size:10px;color:#948D83;white-space:nowrap;}
+.cd-ex-l b{font-size:13px;font-weight:800;color:#F7F4F0;}
+.cd-ex-l b span{font-size:9px;font-weight:600;color:#948D83;margin-left:1px;}
+.cd-ex-l i{font-style:normal;font-size:9.5px;font-weight:800;margin-left:5px;}
+.cd-ex-l i.up{color:#7ED9A0;} .cd-ex-l i.down{color:#EE5A4F;}
+.cd-none{font-size:10px;color:#3D3833;}
+.cd-spark{width:46px;height:16px;display:block;}
+.cd-empty{grid-column:1/-1;text-align:center;font-size:13px;color:#948D83;background:#161412;
+  border:1px dashed #3D3833;border-radius:14px;padding:30px;}
+.cd-empty b{color:#D98E3C;}
 #billing-page{display:none;padding:0 16px 120px;}
 #billing-page.active{display:block;}
 .bl-client{font-size:17px;font-weight:800;color:#fff;}
