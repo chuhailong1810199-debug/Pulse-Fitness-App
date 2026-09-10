@@ -1371,7 +1371,7 @@ function renderDashboard() {
   const pct = st.target ? Math.min(100, Math.round(st.done / st.target * 100)) : 0;
   wrap.innerHTML = `
     <div class="dsh-head">
-      <div><h1 class="dsh-h1">Bảng điều khiển</h1>
+      <div><h1 class="dsh-h1">Dashboard</h1>
         <div class="dsh-sub">${st.total} khách đang coach · ${rows.length
           ? rows.length + ' người cần chú ý' : 'không ai cần chú ý'}</div></div>
       <button class="dsh-refill" onclick="backfillDashboard(this)">Nạp lại dữ liệu cũ</button>
@@ -10072,7 +10072,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   <div id="access-strip"></div>
 
   <div class="nav">
-    <div class="nav-tab" id="dash-nav-tab" data-page="dash" style="display:none" onclick="showPage('dash')">Bảng điều khiển</div>
+    <div class="nav-tab" id="dash-nav-tab" data-page="dash" style="display:none" onclick="showPage('dash')">Dashboard</div>
     <div class="nav-tab active" data-page="workout" onclick="showPage('workout')">Workout</div>
     <div class="nav-tab" data-page="progress" onclick="showPage('progress')">Progress</div>
     <div class="nav-tab" data-page="nutrition" onclick="showPage('nutrition')">Nutrition</div>
