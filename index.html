@@ -1332,6 +1332,43 @@ function _dashWhen(iso) {
   return d === 1 ? 'hôm qua' : d + ' ngày trước';
 }
 
+/**
+ * Thanh chọn khách — mọi client, luôn hiện, ở cả Dashboard lẫn màn hình một khách.
+ *
+ * Trước đây đường duy nhất để mở hồ sơ một người là nút "Mở hồ sơ" trên dòng cảnh
+ * báo. Nghĩa là khách nào đang ổn — không nợ, có giáo án, vẫn tập đều — thì KHÔNG
+ * có cách nào bấm vào từ dashboard, dù đó mới là nhóm đông nhất. Thanh này lấp chỗ
+ * đó: một cú bấm là qua được bất kỳ ai, không cần quay lại trang trước.
+ *
+ * Chấm màu lấy thẳng từ clientAlert() nên không có nguồn sự thật thứ hai — thanh
+ * này và danh sách "Cần chú ý" không thể mâu thuẫn nhau.
+ */
+function dashClientStrip(activeId) {
+  const cs = (clientsData || []).slice()
+    .sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id), 'vi'));
+  if (!cs.length) return '';
+  const chips = cs.map(c => {
+    const a = clientAlert(c);
+    const dot = a ? (a.sev === 'red' ? 'bad' : 'warn') : 'ok';
+    const nDay = Object.keys(c.program || {}).length;
+    const gap = _daysSince(c.lastWorkoutAt);
+    const sub = nDay
+      ? nDay + ' session' + (gap != null ? ' · ' + (gap === 0 ? 'hôm nay' : gap + 'n') : ' · chưa tập')
+      : 'chưa có giáo án';
+    return `<button class="dcs-chip${c.id === activeId ? ' on' : ''}"
+      onclick="openClientDash('${c.id}')"
+      title="${escHtml(c.name || c.id)}${a ? ' — ' + escHtml(a.reason) : ''}">
+      <i class="dcs-dot dcs-${dot}"></i>
+      <span class="dcs-n">${escHtml(c.name || c.id)}</span>
+      <span class="dcs-s">${escHtml(sub)}</span>
+    </button>`;
+  }).join('');
+  return `<div class="dcs-wrap">
+    <div class="dcs-cap">Khách<span>${cs.length}</span></div>
+    <div class="dcs-strip">${chips}</div>
+  </div>`;
+}
+
 function renderDashboard() {
   const wrap = document.getElementById('dash-body');
   if (!wrap || userRole !== 'coach') return;
@@ -1376,6 +1413,7 @@ function renderDashboard() {
           ? rows.length + ' người cần chú ý' : 'không ai cần chú ý'}</div></div>
       <button class="dsh-refill" onclick="backfillDashboard(this)">Nạp lại dữ liệu cũ</button>
     </div>
+    ${dashClientStrip(activeClient && activeClient.id)}
     <div class="dsh-grid">
       <section class="dsh-col dsh-col-main">
         <div class="dsh-cap">Cần chú ý<span>xếp theo mức độ khẩn</span></div>
@@ -1616,6 +1654,7 @@ async function renderClientDash() {
         <button class="cd-goto" onclick="showPage('workout')">Mở giáo án để sửa</button>
       </div>
     </div>
+    ${dashClientStrip(c.id)}
     <div class="cd-strip">
       <div class="cd-kpi"><span>${sess.length}</span>buổi đã ghi</div>
       <div class="cd-kpi"><span>${Math.round(totalVol).toLocaleString('vi-VN')}</span>kg tổng khối lượng</div>
@@ -12137,6 +12176,34 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .dsh-kv b{font-size:15px;font-weight:900;color:#F7F4F0;}
 .dsh-kv.dsh-ok b{color:#7ED9A0;} .dsh-kv.dsh-warn b{color:#FFD479;}
 .dsh-kv.dsh-bad b{color:#EE5A4F;} .dsh-kv.dsh-mute b{color:#948D83;}
+/* ── Thanh chọn khách (dashboard + màn hình một khách) ───────────────────── */
+.dcs-wrap{display:flex;align-items:stretch;gap:12px;margin-bottom:18px;min-width:0;}
+.dcs-cap{flex:none;display:flex;flex-direction:column;justify-content:center;gap:2px;padding-right:12px;
+  border-right:1px solid #24211E;font-size:10.5px;font-weight:800;letter-spacing:1.3px;
+  text-transform:uppercase;color:#D98E3C;}
+.dcs-cap span{font-size:17px;font-weight:900;letter-spacing:-.5px;color:#F7F4F0;}
+/* Cuộn ngang thay vì xuống dòng: thanh giữ đúng một hàng nên chiều cao dashboard
+   không đổi khi thêm khách. 18 người hiện tại vừa khít màn 1600px. */
+.dcs-strip{display:flex;gap:8px;overflow-x:auto;padding:1px 2px 7px;min-width:0;
+  scrollbar-width:thin;scrollbar-color:#3D3833 transparent;}
+.dcs-strip::-webkit-scrollbar{height:5px;}
+.dcs-strip::-webkit-scrollbar-thumb{background:#3D3833;border-radius:99px;}
+.dcs-strip::-webkit-scrollbar-track{background:transparent;}
+.dcs-chip{flex:0 0 auto;display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto;
+  column-gap:7px;row-gap:1px;align-items:center;text-align:left;background:#161412;border:1px solid #24211E;
+  border-radius:11px;padding:8px 13px 8px 10px;cursor:pointer;font-family:inherit;
+  transition:border-color .12s,background .12s;}
+.dcs-chip:hover{background:#1C1917;border-color:#3D3833;}
+.dcs-chip.on{background:#221B12;border-color:#D98E3C;}
+.dcs-dot{grid-row:1/3;width:7px;height:7px;border-radius:50%;}
+.dcs-ok{background:#7ED9A0;}
+.dcs-warn{background:#FFD479;}
+.dcs-bad{background:#EE5A4F;}
+.dcs-n{font-size:12.5px;font-weight:800;color:#F7F4F0;white-space:nowrap;}
+.dcs-chip.on .dcs-n{color:#F0BE7C;}
+.dcs-s{font-size:10px;font-weight:600;color:#948D83;white-space:nowrap;}
+@media(max-width:900px){.dcs-cap{display:none;}}
+
 /* ── Client dashboard: một khách, trên máy tính ─────────────────────────── */
 #cdash-page{display:none;}
 #cdash-page.active{display:block;padding:0 20px 100px;max-width:1700px;margin:0 auto;}
