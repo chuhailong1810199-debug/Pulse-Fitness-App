@@ -512,6 +512,8 @@ async function loadApp() {
     renderClientBar(true);
     const schTab = document.getElementById('schedule-nav-tab');
     if (schTab) schTab.style.display = '';
+    const dashTab = document.getElementById('dash-nav-tab');
+    if (dashTab) dashTab.style.display = '';
     // Coach with no clients yet — show empty state
     if (clientsData.length === 0) {
       activeClient = null;
@@ -1317,6 +1319,240 @@ async function getCPs() {
     );
     return snap.docs.map(d => d.data());
   } catch(e) { return []; }
+}
+
+
+const _DASH_ICON = { workout:'🏋️', nutrition:'🍽️', photo:'📷', inbody:'📊' };
+function _dashWhen(iso) {
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 60) return mins <= 1 ? 'vừa xong' : mins + ' phút trước';
+  const h = Math.floor(mins / 60);
+  if (h < 24) return h + ' giờ trước';
+  const d = Math.floor(h / 24);
+  return d === 1 ? 'hôm qua' : d + ' ngày trước';
+}
+
+function renderDashboard() {
+  const wrap = document.getElementById('dash-body');
+  if (!wrap || userRole !== 'coach') return;
+  const rows = dashRows(), feed = dashFeed(30), st = dashStats();
+
+  const alerts = rows.length ? rows.map((r, i) => `
+    <div class="dsh-row dsh-${r.sev}">
+      <span class="dsh-rank">${i + 1}</span>
+      <div class="dsh-who">
+        <div class="dsh-name">${escHtml(r.c.name || r.c.id)}</div>
+        <div class="dsh-meta">${escHtml((r.c.goal || '').slice(0, 34))}${
+          r.c.sessionsPerWeek ? ' · ' + r.c.sessionsPerWeek + ' buổi/tuần' : ''}</div>
+      </div>
+      <div class="dsh-reason">${escHtml(r.reason)}</div>
+      <div class="dsh-mag">${r.mag ? r.mag : '—'}<span>${escHtml(r.unit)}</span></div>
+      <button class="dsh-open" onclick="switchClient('${r.c.id}');showPage('workout')">Mở hồ sơ</button>
+    </div>`).join('')
+    : `<div class="dsh-empty">
+         <div class="dsh-empty-tick">✓</div>
+         <div class="dsh-empty-t">Không ai cần nhắc hôm nay</div>
+         <div class="dsh-empty-s">Cả ${st.total} khách đều còn hạn gói, đã thanh toán, có giáo án
+           và vẫn tập trong ngưỡng của mình.</div>
+       </div>`;
+
+  const feedHtml = feed.length ? feed.map(e => `
+    <div class="dsh-act">
+      <span class="dsh-act-i">${_DASH_ICON[e.type] || '•'}</span>
+      <div class="dsh-act-b">
+        <div class="dsh-act-n">${escHtml(e.name)}<span>${escHtml(ACTIVITY_LABEL[e.type] || '')}</span></div>
+        <div class="dsh-act-s">${escHtml(e.summary || '')}</div>
+      </div>
+      <span class="dsh-act-w">${_dashWhen(e.at)}</span>
+    </div>`).join('')
+    : `<div class="dsh-quiet">Chưa có hoạt động nào được ghi. Dữ liệu bắt đầu tích từ lúc
+        tính năng này bật, hoặc bấm <b>Nạp lại dữ liệu cũ</b> bên dưới.</div>`;
+
+  const pct = st.target ? Math.min(100, Math.round(st.done / st.target * 100)) : 0;
+  wrap.innerHTML = `
+    <div class="dsh-head">
+      <div><h1 class="dsh-h1">Bảng điều khiển</h1>
+        <div class="dsh-sub">${st.total} khách đang coach · ${rows.length
+          ? rows.length + ' người cần chú ý' : 'không ai cần chú ý'}</div></div>
+      <button class="dsh-refill" onclick="backfillDashboard(this)">Nạp lại dữ liệu cũ</button>
+    </div>
+    <div class="dsh-grid">
+      <section class="dsh-col dsh-col-main">
+        <div class="dsh-cap">Cần chú ý<span>xếp theo mức độ khẩn</span></div>
+        ${alerts}
+      </section>
+      <section class="dsh-col">
+        <div class="dsh-cap">Hoạt động gần đây<span>7 ngày</span></div>
+        ${feedHtml}
+      </section>
+      <section class="dsh-col dsh-col-side">
+        <div class="dsh-cap">Số liệu</div>
+        <div class="dsh-stat">
+          <div class="dsh-stat-l">Buổi tập tuần này</div>
+          <div class="dsh-stat-n">${st.done}<span> / ${st.target}</span></div>
+          <div class="dsh-bar"><div class="dsh-bar-f" style="width:${pct}%"></div></div>
+          ${st.capped ? '<div class="dsh-note">Là con số tối thiểu — mỗi khách chỉ lưu '
+            + ACTIVITY_CAP + ' sự kiện gần nhất.</div>' : ''}
+        </div>
+        <div class="dsh-stat">
+          <div class="dsh-stat-l">Trạng thái gói</div>
+          ${[['active','Đang hoạt động','ok'],['ending','Sắp hết hạn','warn'],
+             ['expired','Đã hết hạn','bad'],['none','Chưa có gói','mute']]
+            .map(([k, label, cls]) => `<div class="dsh-kv dsh-${cls}"><span>${label}</span><b>${st.by[k] || 0}</b></div>`).join('')}
+        </div>
+        <div class="dsh-stat">
+          <div class="dsh-stat-l">Quá hạn đo InBody</div>
+          <div class="dsh-stat-n dsh-${st.overdue ? 'warn' : 'ok'}">${st.overdue}<span> khách</span></div>
+          <div class="dsh-note">Quá 8 tuần kể từ lần đo gần nhất.</div>
+        </div>
+      </section>
+    </div>`;
+}
+
+/**
+ * Sự kiện chỉ được ghi từ lúc tính năng này tồn tại, nên 18 khách hiện tại chưa có
+ * gì. Chạy một lần: đọc buổi tập và checkpoint gần nhất của từng người rồi dựng lại
+ * mốc thời gian. Tốn 2 query mỗi khách, nhưng chỉ một lần chứ không phải mỗi lần mở.
+ */
+async function backfillDashboard(btn) {
+  if (userRole !== 'coach') return;
+  const label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Đang nạp…'; }
+  let done = 0;
+  try {
+    for (const c of (clientsData || [])) {
+      const patch = {};
+      try {
+        const w = await getDocs(query(collection(db, 'clients', c.id, 'workoutHistory'),
+          orderBy('date', 'desc'), limit(ACTIVITY_CAP)));
+        const evs = [];
+        w.forEach(d => {
+          const v = d.data(), dt = v.date && v.date.toDate ? v.date.toDate() : null;
+          if (!dt) return;
+          evs.push({ type:'workout', at: dt.toISOString(),
+            summary: (v.day || '') + ' · ' + (v.done ?? '?') + '/' + (v.total ?? '?') + ' bài'
+              + (v.totalVolume ? ' · ' + Math.round(v.totalVolume).toLocaleString('vi-VN') + ' kg' : '') });
+        });
+        if (evs.length) { patch.lastWorkoutAt = evs[0].at; patch.recentActivity = evs.slice(0, ACTIVITY_CAP); }
+      } catch (_e) {}
+      try {
+        const cp = await getDocs(query(collection(db, 'clients', c.id, 'checkpoints'),
+          orderBy('date', 'desc'), limit(1)));
+        cp.forEach(d => {
+          const v = d.data(), dt = v.date && v.date.toDate ? v.date.toDate() : null;
+          if (dt) patch.lastCheckpointAt = dt.toISOString();
+        });
+      } catch (_e) {}
+      if (Object.keys(patch).length) {
+        await updateDoc(doc(db, 'clients', c.id), patch);
+        Object.assign(c, patch);
+        done++;
+      }
+    }
+    alert('Đã nạp lại dữ liệu cho ' + done + '/' + (clientsData || []).length + ' khách.');
+  } catch (e) {
+    alert('Nạp lại lỗi: ' + (e.message || ''));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = label || 'Nạp lại dữ liệu cũ'; }
+    renderDashboard();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COACH DASHBOARD — logic
+// Đọc hoàn toàn từ clientsData đã nạp sẵn. Không một query nào.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Bao nhiêu ngày im lặng thì đáng gọi là "chưa tập"?
+ * Coach đặt tay được cho từng khách (field inactiveDays). Nếu chưa đặt thì suy từ
+ * số buổi/tuần: bỏ lỡ khoảng 2 buổi liên tiếp. Khách 5 buổi/tuần báo sau 3 ngày,
+ * khách 2 buổi/tuần sau 7 — cùng một ngưỡng cứng sẽ báo nhầm liên tục ở nhóm sau,
+ * mà nhóm đó chiếm 5 trong 18 khách hiện tại.
+ */
+function inactiveThreshold(c) {
+  const manual = Number((c || {}).inactiveDays);
+  if (Number.isFinite(manual) && manual > 0) return Math.round(manual);
+  const f = Number((c || {}).sessionsPerWeek) || 3;
+  return Math.max(3, Math.min(10, Math.ceil(14 / f)));
+}
+
+const _daysSince = iso => {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return null;
+  return Math.floor((Date.now() - t) / 86400000);
+};
+
+/** Lý do khẩn nhất của một khách, hoặc null nếu không có gì. */
+function clientAlert(c) {
+  const st = accessStatus(c.access || {});
+  if (st.state === 'expired')
+    return { kind:'expired', sev:'red', reason:'Gói đã hết hạn', mag:-st.daysLeft, unit:'ngày' };
+  if (st.state === 'grace')
+    return { kind:'grace', sev:'red', reason:'Đang trong ân hạn', mag:-st.daysLeft, unit:'ngày' };
+
+  const inv = c.openInvoice;
+  if (inv && inv.since) {
+    const d = _diffDays(_ymd(inv.since), _ymd());
+    if (d > 3) return { kind:'unpaid', sev:'red',
+      reason:'Chưa thanh toán ' + fmtVnd(inv.amount), mag:d, unit:'ngày' };
+  }
+
+  const noProgram = !c.program || Object.keys(c.program).length === 0;
+  if (noProgram) return { kind:'noprogram', sev:'amber', reason:'Chưa có giáo án', mag:0, unit:'' };
+
+  const gap = _daysSince(c.lastWorkoutAt);
+  const lim = inactiveThreshold(c);
+  if (gap != null && gap >= lim)
+    return { kind:'inactive', sev:'amber',
+      reason:'Chưa tập (ngưỡng ' + lim + ' ngày)', mag:gap, unit:'ngày' };
+
+  const cp = _daysSince(c.lastCheckpointAt);
+  if (cp != null && cp >= 56)
+    return { kind:'inbody', sev:'amber', reason:'Quá hạn đo InBody', mag:Math.floor(cp/7), unit:'tuần' };
+
+  return null;
+}
+
+const _ALERT_RANK = { expired:0, grace:1, unpaid:2, noprogram:3, inactive:4, inbody:5 };
+
+function dashRows() {
+  return (clientsData || [])
+    .map(c => { const a = clientAlert(c); return a ? { c, ...a } : null; })
+    .filter(Boolean)
+    .sort((x, y) => (_ALERT_RANK[x.kind] - _ALERT_RANK[y.kind]) || (y.mag - x.mag));
+}
+
+/** Gộp recentActivity của mọi khách thành một dòng thời gian. */
+function dashFeed(limit) {
+  const out = [];
+  (clientsData || []).forEach(c => {
+    (Array.isArray(c.recentActivity) ? c.recentActivity : []).forEach(e => {
+      if (e && e.at) out.push({ ...e, name: c.name || c.id, id: c.id });
+    });
+  });
+  return out.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, limit || 30);
+}
+
+function dashStats() {
+  const cs = clientsData || [];
+  const weekStart = (() => { const d = new Date(); d.setDate(d.getDate() - 6); return d.getTime(); })();
+  let done = 0, target = 0;
+  cs.forEach(c => {
+    target += Number(c.sessionsPerWeek) || 0;
+    (Array.isArray(c.recentActivity) ? c.recentActivity : []).forEach(e => {
+      if (e && e.type === 'workout' && new Date(e.at).getTime() >= weekStart) done++;
+    });
+  });
+  const by = { active:0, ending:0, expired:0, none:0 };
+  cs.forEach(c => { const st = accessStatus(c.access || {});
+    by[st.state === 'grace' ? 'expired' : st.state] = (by[st.state === 'grace' ? 'expired' : st.state] || 0) + 1; });
+  const overdue = cs.filter(c => { const d = _daysSince(c.lastCheckpointAt); return d != null && d >= 56; }).length;
+  // Buổi tập tuần này bị chặn bởi mảng 5 sự kiện/khách, nên là sàn chứ không phải
+  // con số tuyệt đối. Nói rõ ra còn hơn hiện một số sai mà trông như đúng.
+  const capped = cs.some(c => (c.recentActivity || []).filter(e => e && e.type === 'workout').length >= ACTIVITY_CAP);
+  return { done, target, by, overdue, capped, total: cs.length };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4729,6 +4965,8 @@ function showPage(page) {
   document.getElementById('nutrition-page').classList.toggle('active', page === 'nutrition');
   document.getElementById('youth-page').classList.toggle('active', page === 'youth');
   document.getElementById('billing-page').classList.toggle('active', page === 'billing');
+  document.getElementById('dash-page').classList.toggle('active', page === 'dash');
+  if (page === 'dash') renderDashboard();
   if (page === 'progress') {
     ensureChartJS().then(() => {
       checkCheckpointReminder();
@@ -6365,6 +6603,21 @@ async function loadBilling() {
   renderBillingPage();
 }
 
+/**
+ * Ghi hoá đơn còn nợ lên client doc. Dashboard cần biết ai chưa trả tiền mà không
+ * được query invoices của cả 18 khách; đây là bản tóm tắt đủ cho cột "cần chú ý".
+ * Như logActivity, hỏng thì nuốt — không được làm hỏng việc lập hoá đơn.
+ */
+async function _syncOpenInvoice(v) {
+  if (!activeClient) return;
+  try {
+    await updateDoc(doc(db, 'clients', activeClient.id), { openInvoice: v });
+    activeClient.openInvoice = v;
+    const row = (typeof clientsData !== 'undefined') && clientsData.find(c => c.id === activeClient.id);
+    if (row) row.openInvoice = v;
+  } catch (e) { console.warn('[openInvoice] bỏ qua:', e.message); }
+}
+
 /** Raise an invoice for one more term of the client's plan. */
 async function billIssue(planId) {
   if (!activeClient) return;
@@ -6384,6 +6637,7 @@ async function billIssue(planId) {
       kind: 'access', planId: plan.id, planName: plan.name, months: plan.months,
       amount: plan.price, issuedOn: today, status: 'unpaid', paidAt: null, method: null,
     });
+    _syncOpenInvoice({ amount: plan.price, since: today });
     // Only the coach may touch access; a client's choice rides on the invoice
     // and is applied when the payment is confirmed.
     if (userRole === 'coach' && !(activeClient.access || {}).planId) {
@@ -6412,6 +6666,7 @@ async function billIssueCoaching(pkgId, months) {
       kind: 'coaching', packageId: pkg.id, planName: pkg.name, months: term.m,
       amount: coachingPrice(pkg, term.m), issuedOn: today, status: 'unpaid', paidAt: null, method: null,
     });
+    _syncOpenInvoice({ amount: coachingPrice(pkg, term.m), since: today });
     await loadBilling();
     _blSheet = id; renderBillingPage();
   } catch (e) { alert('Không tạo được hoá đơn: ' + (e.message || '')); }
@@ -6444,6 +6699,7 @@ async function billConfirm(invoiceId) {
     await updateDoc(doc(db, 'clients', activeClient.id), patch);
     activeClient.access = { ...(activeClient.access || {}), planId, paidUntil: until };
     if (isCoaching) activeClient.coaching = { packageId: inv.packageId, paidUntil: until, termMonths: inv.months };
+    _syncOpenInvoice(null);
     _blSheet = null;
     await loadBilling();
   } catch (e) { alert('Không xác nhận được: ' + (e.message || '')); }
@@ -6463,6 +6719,7 @@ async function billCancel(invoiceId) {
   try {
     await updateDoc(doc(db, 'clients', activeClient.id, 'invoices', invoiceId),
       { status: 'cancelled', cancelledAt: new Date().toISOString() });
+    _syncOpenInvoice(null);
     await loadBilling();
   } catch (e) { alert('Không huỷ được: ' + (e.message || '')); }
 }
@@ -8192,7 +8449,7 @@ body{font-family:"Figtree",-apple-system,BlinkMacSystemFont,sans-serif;backgroun
 .pwa-phone{width:160px;height:290px;background:#22201E;border:2px solid #6E512D;border-radius:26px;position:relative;overflow:hidden;display:flex;flex-direction:column;margin-bottom:1.5rem;flex-shrink:0;}
 .pwa-notch{width:52px;height:16px;background:#0D0C0B;border-radius:0 0 10px 10px;margin:0 auto;}
 .pwa-browser{background:#302D2A;padding:5px 8px;display:flex;align-items:center;gap:6px;}
-.pwa-url{flex:1;background:#423F3B;border-radius:5px;padding:3px 7px;font-size:8px;color:#D98E3C;overflow:hidden;white-space:nowrap;}
+.pwa-url{flex:1;background:#423F3B;border-radius:5px;padding:3px 7px;font-size:8px;color:#EDE6DA;overflow:hidden;white-space:nowrap;}
 .pwa-share-btn{width:16px;height:16px;flex-shrink:0;animation:pwaSharePulse 5s ease infinite;}
 .pwa-content{flex:1;background:#0D0C0B;position:relative;display:flex;align-items:center;justify-content:center;}
 .pwa-app-preview{display:flex;flex-direction:column;align-items:center;gap:5px;}
@@ -9815,6 +10072,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   <div id="access-strip"></div>
 
   <div class="nav">
+    <div class="nav-tab" id="dash-nav-tab" data-page="dash" style="display:none" onclick="showPage('dash')">Bảng điều khiển</div>
     <div class="nav-tab active" data-page="workout" onclick="showPage('workout')">Workout</div>
     <div class="nav-tab" data-page="progress" onclick="showPage('progress')">Progress</div>
     <div class="nav-tab" data-page="nutrition" onclick="showPage('nutrition')">Nutrition</div>
@@ -9935,6 +10193,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   </div>
 
   <!-- ── BILLING ──────────────────────────────────────────────────────── -->
+  <div id="dash-page"><div id="dash-body"></div></div>
   <div id="billing-page"><div id="billing-body"></div></div>
 
   <!-- ── YOUTH DEVELOPMENT TEST BATTERY ───────────────────────────────── -->
@@ -11627,6 +11886,80 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   color:rgba(255,255,255,.6);font-size:9px;font-weight:700;padding:2px 7px;cursor:pointer;}
 .stg-recalc:disabled{opacity:.5;}
 
+/* ── Coach dashboard ──────────────────────────────────────────────────────
+   Màn hình làm việc của coach trên máy tính. Toàn bộ nằm dưới #dash-page nên
+   không đụng vào layout điện thoại của khách (app còn max-width:420px ở 9 chỗ). */
+#dash-page{display:none;}
+#dash-page.active{display:block;padding:0 20px 100px;max-width:1600px;margin:0 auto;}
+.dsh-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;
+  padding:18px 0 14px;border-bottom:1px solid #24211E;margin-bottom:18px;}
+.dsh-h1{margin:0;font-size:26px;font-weight:900;letter-spacing:-.8px;color:#F7F4F0;}
+.dsh-sub{margin-top:4px;font-size:12.5px;color:#948D83;}
+.dsh-refill{flex:none;background:transparent;border:1px solid #3D3833;border-radius:9px;
+  color:#B0A9A0;font-family:inherit;font-size:11.5px;font-weight:700;padding:8px 13px;cursor:pointer;}
+.dsh-refill:hover{border-color:#D98E3C;color:#D98E3C;}
+.dsh-refill:disabled{opacity:.5;cursor:progress;}
+.dsh-grid{display:grid;grid-template-columns:1fr;gap:18px;}
+@media(min-width:1024px){.dsh-grid{grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);}}
+@media(min-width:1360px){.dsh-grid{grid-template-columns:minmax(0,1.7fr) minmax(0,1fr) 300px;}}
+.dsh-col{min-width:0;}
+.dsh-cap{display:flex;align-items:baseline;gap:9px;font-size:11px;font-weight:800;letter-spacing:1.5px;
+  text-transform:uppercase;color:#D98E3C;margin-bottom:11px;}
+.dsh-cap span{font-size:10px;letter-spacing:.4px;text-transform:none;font-weight:600;color:#948D83;}
+/* dòng cần chú ý */
+.dsh-row{display:grid;grid-template-columns:26px minmax(0,1.4fr) minmax(0,1fr) 62px auto;
+  align-items:center;gap:12px;background:#161412;border:1px solid #24211E;border-left:3px solid #3D3833;
+  border-radius:12px;padding:11px 13px;margin-bottom:8px;}
+.dsh-row.dsh-red{border-left-color:#EE5A4F;}
+.dsh-row.dsh-amber{border-left-color:#FFD479;}
+.dsh-rank{font-size:11px;font-weight:800;color:#948D83;text-align:center;}
+.dsh-name{font-size:14px;font-weight:800;color:#F7F4F0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dsh-meta{margin-top:2px;font-size:10.5px;color:#948D83;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dsh-reason{font-size:12px;color:#B0A9A0;}
+.dsh-red .dsh-reason{color:#EE5A4F;}
+.dsh-amber .dsh-reason{color:#FFD479;}
+.dsh-mag{text-align:right;font-size:20px;font-weight:900;color:#F7F4F0;letter-spacing:-.6px;line-height:1;}
+.dsh-mag span{display:block;margin-top:2px;font-size:9.5px;font-weight:600;color:#948D83;letter-spacing:0;}
+.dsh-open{flex:none;background:#EDE6DA;border:none;border-radius:8px;color:#0D0C0B;
+  font-family:inherit;font-size:11.5px;font-weight:800;padding:8px 13px;cursor:pointer;white-space:nowrap;}
+.dsh-open:hover{filter:brightness(.94);}
+@media(max-width:900px){
+  .dsh-row{grid-template-columns:22px minmax(0,1fr) auto;row-gap:6px;}
+  .dsh-reason{grid-column:2/4;}
+  .dsh-mag{display:none;}
+}
+/* trạng thái rỗng */
+.dsh-empty{text-align:center;background:#161412;border:1px solid #24211E;border-radius:14px;padding:34px 20px;}
+.dsh-empty-tick{width:42px;height:42px;margin:0 auto 12px;border-radius:50%;background:rgba(126,217,160,.14);
+  border:1px solid rgba(126,217,160,.4);color:#7ED9A0;font-size:20px;line-height:42px;}
+.dsh-empty-t{font-size:15px;font-weight:800;color:#F7F4F0;}
+.dsh-empty-s{margin:6px auto 0;max-width:46ch;font-size:12px;line-height:1.55;color:#948D83;}
+/* feed */
+.dsh-act{display:flex;align-items:flex-start;gap:10px;padding:9px 11px;background:#161412;
+  border:1px solid #24211E;border-radius:11px;margin-bottom:7px;}
+.dsh-act-i{flex:none;font-size:14px;line-height:1.4;}
+.dsh-act-b{flex:1;min-width:0;}
+.dsh-act-n{display:flex;align-items:baseline;gap:7px;font-size:12.5px;font-weight:800;color:#F7F4F0;}
+.dsh-act-n span{font-size:9.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:#948D83;}
+.dsh-act-s{margin-top:2px;font-size:11.5px;color:#B0A9A0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dsh-act-w{flex:none;font-size:10.5px;color:#948D83;white-space:nowrap;}
+.dsh-quiet{font-size:12px;line-height:1.6;color:#948D83;background:#161412;border:1px dashed #3D3833;
+  border-radius:12px;padding:14px;}
+.dsh-quiet b{color:#D98E3C;}
+/* số liệu */
+.dsh-stat{background:#161412;border:1px solid #24211E;border-radius:13px;padding:14px;margin-bottom:11px;}
+.dsh-stat-l{font-size:10.5px;font-weight:800;letter-spacing:.9px;text-transform:uppercase;color:#948D83;}
+.dsh-stat-n{margin-top:7px;font-size:30px;font-weight:900;letter-spacing:-1.2px;color:#F7F4F0;line-height:1;}
+.dsh-stat-n span{font-size:13px;font-weight:700;color:#948D83;letter-spacing:0;}
+.dsh-stat-n.dsh-ok{color:#7ED9A0;} .dsh-stat-n.dsh-warn{color:#FFD479;}
+.dsh-bar{height:6px;border-radius:99px;background:#24211E;overflow:hidden;margin-top:10px;}
+.dsh-bar-f{height:100%;border-radius:99px;background:#D98E3C;}
+.dsh-note{margin-top:8px;font-size:10.5px;line-height:1.5;color:#948D83;}
+.dsh-kv{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-top:9px;
+  font-size:12px;color:#B0A9A0;}
+.dsh-kv b{font-size:15px;font-weight:900;color:#F7F4F0;}
+.dsh-kv.dsh-ok b{color:#7ED9A0;} .dsh-kv.dsh-warn b{color:#FFD479;}
+.dsh-kv.dsh-bad b{color:#EE5A4F;} .dsh-kv.dsh-mute b{color:#948D83;}
 #billing-page{display:none;padding:0 16px 120px;}
 #billing-page.active{display:block;}
 .bl-client{font-size:17px;font-weight:800;color:#fff;}
