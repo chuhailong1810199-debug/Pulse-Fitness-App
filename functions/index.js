@@ -196,6 +196,13 @@ const WARMUP_RULES = `WARM-UP RULES (mandatory — read before generating any wa
 const GROQ_MODEL = "qwen/qwen3.8-27b";
 
 /**
+ * groq-sdk tự thử lại 429 hai lần với backoff. Với lỗi quota thì lần nào cũng
+ * hỏng, nên nó chỉ kéo dài thời gian chờ (đo được: 21.4s cho một lỗi lẽ ra trả
+ * về trong 0.3s) và ăn thêm hạn mức của chính phút đó. Tắt hẳn — nhánh xử lý lỗi
+ * bên dưới đã nói rõ khi nào đáng thử lại.
+ */
+
+/**
  * Groq admits a request against prompt + max_tokens, not against what the model
  * actually returns, and this key's ceiling is 8000 tokens a minute. A flat
  * max_tokens of 6000 meant a five-day program asked for 2210 + 6000 = 8210 and
@@ -211,29 +218,58 @@ function groqMaxTokens(days) {
   return Math.min(5000, 1500 + n * 650);
 }
 
+/**
+ * Groq 429 nào cũng từng rơi vào một câu duy nhất: "Pulse is busy right now".
+ *
+ * Hai lỗi sau đây trước đây KHÔNG bao giờ tới được nhánh của mình, vì cả hai đều
+ * mang status 429 nên bị nhánh isRateLimit ở trên chặn mất:
+ *   - "tokens per minute (TPM)" → là lỗi cấu trúc: prompt + max_tokens vượt trần,
+ *     bấm lại bao nhiêu lần cũng hỏng y như vậy.
+ *   - "requests per day (RPD)"  → hết quota ngày, phải đợi sang hôm sau.
+ * Cả hai đều được báo là "đợi một lát rồi thử lại" — lời khuyên sai, và đó là lý
+ * do lỗi này trông như tự khỏi rồi tái phát chứ không ai lần ra được.
+ *
+ * Nên: xét nhánh cụ thể TRƯỚC nhánh 429 chung, và luôn đính kèm nguyên văn lỗi
+ * của Groq. Không còn trường hợp nào mà coach nhìn màn hình đoán mò được nữa.
+ */
 function groqErrorMessage(err) {
-  const msg = (err.message || "").toLowerCase();
+  const rawMsg = err.message || String(err) || "";
+  const msg = rawMsg.toLowerCase();
   const status = err.status || err.statusCode || (err.error && err.error.status);
   const isRateLimit = status === 429 || msg.includes("rate_limit") || msg.includes("rate limit");
-  const isDailyLimit = msg.includes("tokens per day") || msg.includes("tpd") || msg.includes("day (tpd)");
-  const isTimeout   = msg.includes("timeout") || msg.includes("timed out") || status === 504;
-  const isOverload  = msg.includes("overloaded") || msg.includes("503") || status === 503;
+  const has = (...keys) => keys.some((k) => msg.includes(k));
 
-  if (isRateLimit && isDailyLimit)
-    return "Pulse has reached its limit for today — please try again tomorrow or come back in a few hours.";
+  // Nguyên văn lỗi của Groq, cắt ngắn cho vừa màn hình. Đây là thứ duy nhất phân
+  // biệt được TPM / TPD / RPD / key hỏng, và trước đây nó bị vứt đi hoàn toàn.
+  const detail = rawMsg ? ` [Groq ${status || "?"}: ${rawMsg.replace(/\s+/g, " ").slice(0, 220)}]` : "";
+
+  // ── Hết quota: đợi cũng không giải quyết trong hôm nay ────────────────────
+  if (has("tokens per day", "tpd", "requests per day", "rpd"))
+    return "Pulse đã hết hạn mức của Groq cho hôm nay. Đợi sang ngày mai, hoặc nâng cấp gói Groq." + detail;
+
+  // ── Vượt trần mỗi phút: là lỗi kích thước, bấm lại không sửa được ──────────
+  if (has("request too large", "tokens per minute", "tpm"))
+    return "Yêu cầu vượt trần token mỗi phút của Groq — chương trình này quá lớn so với hạn mức, "
+      + "bấm lại sẽ hỏng y hệt. Cần giảm max_tokens hoặc nâng gói Groq." + detail;
+
+  // ── Key sai / hết hạn / chưa cấu hình ─────────────────────────────────────
+  if (status === 401 || has("invalid api key", "invalid_api_key", "unauthorized"))
+    return "GROQ_API_KEY không hợp lệ hoặc đã bị thu hồi. Chạy: firebase functions:secrets:set GROQ_API_KEY" + detail;
+  if (status === 402 || has("insufficient", "quota exceeded", "billing"))
+    return "Tài khoản Groq hết credit hoặc có vấn đề thanh toán." + detail;
+
+  // ── Model bị khai tử: là lỗi deploy, không phải thứ đợi được ──────────────
+  if (status === 404 || has("does not exist", "model_not_found", "decommissioned", "deprecated"))
+    return `Model "${GROQ_MODEL}" không còn trên Groq — cần đổi model trong functions/index.js.` + detail;
+
   if (isRateLimit)
-    return "Pulse is busy right now — please wait a moment and try again.";
-  if (isTimeout)
-    return "Pulse took too long to respond — please try again.";
-  if (isOverload)
-    return "Pulse servers are overloaded — please try again in a few minutes.";
-  // A retired model is a deploy problem, not something the coach can wait out.
-  // Saying so names the fix instead of sending them to try again forever.
-  if (msg.includes("does not exist") || msg.includes("model_not_found") || msg.includes("decommissioned"))
-    return `Pulse model "${GROQ_MODEL}" is no longer available on Groq — the model was retired and needs swapping in functions/index.js.`;
-  if (msg.includes("request too large") || msg.includes("tokens per minute") || msg.includes("tpm"))
-    return "Pulse is over its per-minute limit — wait about a minute and try again.";
-  return "Something went wrong — please try again.";
+    return "Groq đang quá tải hoặc bị giới hạn tốc độ — đợi một lát rồi thử lại." + detail;
+  if (has("timeout", "timed out") || status === 504)
+    return "Groq phản hồi quá chậm — thử lại." + detail;
+  if (has("overloaded") || status === 503)
+    return "Máy chủ Groq đang quá tải — thử lại sau vài phút." + detail;
+
+  return "Tạo chương trình thất bại." + detail;
 }
 
 function isHyroxGoal(goalStr, notesStr) {
@@ -610,7 +646,7 @@ ${WARMUP_RULES}
 - Do NOT add any text outside the JSON`;
 
     // ── Call Groq ────────────────────────────────────────────────────────────
-    const groq = new Groq({ apiKey: GROQ_API_KEY.value() });
+    const groq = new Groq({ apiKey: GROQ_API_KEY.value(), maxRetries: 0 });
 
     // Groq failures were thrown raw here, so Firebase stripped them and the coach
     // got a bare "internal" naming nothing — which is how a retired model went
@@ -1043,7 +1079,7 @@ ${WARMUP_RULES}
 - Do NOT add any text outside the JSON`;
 
     // ── Call Groq ─────────────────────────────────────────────────────────────
-    const groq = new Groq({ apiKey: GROQ_API_KEY.value() });
+    const groq = new Groq({ apiKey: GROQ_API_KEY.value(), maxRetries: 0 });
     // Groq failures were thrown raw here, so Firebase stripped them and the coach
     // got a bare "internal" naming nothing — which is how a retired model went
     // unnoticed. pulseGenerateFree already routed through groqErrorMessage.
@@ -1477,7 +1513,7 @@ IMPORTANT: Fill in ALL days from the schedule (${Object.keys(sessionDays).join('
 Each day must have 2 phases minimum. Warmup: exactly 2 exercises. Strength/Run/Brick: 3 exercises max.
 Cues: max 6 words each. Use the periodisation rules to make phases genuinely different.`;
 
-      const groq = new Groq({ apiKey: GROQ_API_KEY.value() });
+      const groq = new Groq({ apiKey: GROQ_API_KEY.value(), maxRetries: 0 });
       let hyroxCompletion;
       try {
         hyroxCompletion = await groq.chat.completions.create({
@@ -1649,7 +1685,7 @@ ${cueRule}
 - Do NOT add any text outside the JSON`;
 
     // ── Step 5: Call Groq ─────────────────────────────────────────────────────
-    const groq = new Groq({ apiKey: GROQ_API_KEY.value() });
+    const groq = new Groq({ apiKey: GROQ_API_KEY.value(), maxRetries: 0 });
     let completion;
     try {
       completion = await groq.chat.completions.create({
