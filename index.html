@@ -1580,6 +1580,21 @@ async function openClientDash(id) {
   sp('cdash');
 }
 
+/**
+ * Ngày tháng tuyệt đối, dd/mm. "3 ngày trước" bắt coach tự cộng trừ để biết buổi
+ * đó rơi vào thứ mấy; ngày thật thì đối chiếu thẳng với lịch được. Năm chỉ hiện
+ * khi khác năm hiện tại, vì thêm "/26" vào mọi dòng chỉ tổ dài ra.
+ */
+function _cdDate(iso) {
+  // new Date(null) là 01/01/1970 chứ không phải Invalid Date, nên chỉ kiểm
+  // isFinite thôi là chưa đủ — thiếu dữ liệu sẽ hiện thành một ngày trông có thật.
+  if (typeof iso !== 'string' || !iso) return '';
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return '';
+  const dm = String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0');
+  return d.getFullYear() === new Date().getFullYear() ? dm : dm + '/' + String(d.getFullYear()).slice(-2);
+}
+
 /** Đường xu hướng tí hon, vẽ bằng SVG — không kéo thêm thư viện nào. */
 function _cdSpark(series) {
   if (!series || series.length < 2) return '';
@@ -1612,7 +1627,7 @@ async function renderClientDash() {
       <section class="cd-day">
         <header class="cd-day-h">
           <div><div class="cd-day-n">${escHtml(d.replace('Session', 'Session '))}</div>
-            <div class="cd-day-m">${nEx} bài${lastAt ? ' · tập gần nhất ' + _dashWhen(lastAt) : ' · chưa tập lần nào'}</div></div>
+            <div class="cd-day-m">${nEx} bài${lastAt ? ' · tập gần nhất ' + _cdDate(lastAt) : ' · chưa tập lần nào'}</div></div>
           <div class="cd-day-c">${recent.length ? recent.slice(0, 6).reverse().map(s => {
             const pctv = s.total ? Math.round((s.done || 0) / s.total * 100) : 0;
             return `<i class="cd-tick ${pctv >= 90 ? 'full' : pctv >= 50 ? 'part' : 'low'}"
@@ -1650,7 +1665,8 @@ async function renderClientDash() {
       </div>
       <div class="cd-badges">
         <span class="cd-badge bl-badge-${st.state}">${ACCESS_LABEL[st.state]}</span>
-        ${gap != null ? `<span class="cd-badge ${gap >= lim ? 'cd-warn' : 'cd-ok'}">Tập gần nhất ${gap} ngày trước</span>` : ''}
+        ${gap != null ? `<span class="cd-badge ${gap >= lim ? 'cd-warn' : 'cd-ok'}">Tập gần nhất ${
+          _cdDate(c.lastWorkoutAt)} · ${gap} ngày</span>` : ''}
         <button class="cd-goto" onclick="showPage('workout')">Mở giáo án để sửa</button>
       </div>
     </div>
