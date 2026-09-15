@@ -113,10 +113,15 @@ let strengthByName   = {};        // normalised exercise name → [{date, kg}] �
 let strengthPosOk    = new Set(); // positions no name can claim (unnamed / ambiguous docs)
 let strengthDupNames = new Set(); // names the current day uses twice — name alone can't identify them
 
-function parseSetsCount(setsReps) {
-  if (!setsReps) return 3;
+function parseSetsCount(setsReps, tag) {
+  // Một WOD được tick MỘT lần, không phải ba. "8 rounds × 200m" không khớp dạng
+  // "N ×" nên rơi về mặc định 3, hiện ra ba ô set trông như ba hiệp rời.
+  // Chỉ gộp khi vừa là circuit vừa không parse được — circuit ghi "3 × 10" vẫn
+  // giữ nguyên 3 set.
+  const fallback = tag === 'circuit' ? 1 : 3;
+  if (!setsReps) return fallback;
   const m = setsReps.match(/^(\d+)\s*[×x]/i);
-  return m ? Math.min(parseInt(m[1]), 6) : 3; // cap at 6 sets
+  return m ? Math.min(parseInt(m[1]), 6) : fallback; // cap at 6 sets
 }
 // Split "4 × 8" → { sets:'4', reps:'8' } for table columns
 // Handles: "3 x 10", "4 × 8-12", "1 x 45s", "2 x 5 min", "3 x AMRAP", "3 x 10+"
@@ -3360,7 +3365,7 @@ function renderExercises() {
             <div class="node-check${done?' done':''}" onclick="event.stopPropagation();toggleExercise('${key}')">${done?'✓':''}</div>
           </div>
           <div class="node-setloads">
-            ${Array.from({length: parseSetsCount(ex.setsReps)}, (_,si) => `
+            ${Array.from({length: parseSetsCount(ex.setsReps, phase.tag)}, (_,si) => `
               <label class="set-load-row">
                 <span class="set-load-label">S${si+1}</span>
                 <input class="set-load-input${ex.bw?' set-load-bw':''}" type="number" ${ex.bw?'':'min="0" '}step="0.5" placeholder="${ex.bw?'+0':'—'}"
