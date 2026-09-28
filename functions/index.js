@@ -19,6 +19,7 @@
 
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onSchedule }         = require("firebase-functions/v2/scheduler");
 const { defineSecret }       = require("firebase-functions/params");
 const { initializeApp }      = require("firebase-admin/app");
 const { getFirestore }       = require("firebase-admin/firestore");
@@ -31,6 +32,7 @@ const SMTP_USER      = defineSecret("SMTP_USER");
 const SMTP_PASS      = defineSecret("SMTP_PASS");
 const GROQ_API_KEY   = defineSecret("GROQ_API_KEY");
 const GEMINI_API_KEY = defineSecret("GEMINI_API_KEY");
+const POLAR_TOKEN    = defineSecret("POLAR_TOKEN");
 
 const COACH_EMAIL = "chuhailong1810199@gmail.com";
 const APP_NAME = "Striveo";
@@ -2164,4 +2166,140 @@ Rules:
     console.log(`[recommendMacros] ${name}: ${parsed.calories}kcal P${parsed.protein} C${parsed.carbs} F${parsed.fat} (LBM ${lbm}kg, SMM ${smm}kg)`);
     return parsed;
   }
+);
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POLAR RECOVERY SYNC
+//
+// Kéo giấc ngủ + Nightly Recharge từ Polar AccessLink về
+// clients/{id}/recovery/{YYYY-MM-DD}, mỗi ngày một bản tóm tắt.
+//
+// Chỉ lưu số tóm tắt. API còn trả hrv_samples và heart_rate_samples —
+// hàng trăm điểm mỗi đêm — phình doc cho những con số màn hình không hề dùng.
+//
+// Token AccessLink sống 3650 ngày nên KHÔNG cần refresh flow. Nó nằm trong
+// Functions secret, không nằm trong Firestore và càng không nằm trong
+// index.html (repo này public).
+//
+// Đặt secret một lần:
+//   firebase functions:secrets:set POLAR_TOKEN
+// ═══════════════════════════════════════════════════════════════════════════
+
+const POLAR_API = "https://www.polaraccesslink.com";
+
+// Client duy nhất đang nối Polar. Mỗi người cần token riêng, nên đây là map
+// chứ không phải một hằng số — thêm người sau này chỉ là thêm một dòng.
+const POLAR_CLIENTS = [{ clientId: "longchu", secret: () => POLAR_TOKEN.value() }];
+
+async function polarGet(path, token) {
+  const r = await fetch(POLAR_API + path, {
+    headers: { Authorization: "Bearer " + token, Accept: "application/json" },
+  });
+  const text = await r.text();
+  if (!r.ok) {
+    throw new Error(`Polar ${path} → HTTP ${r.status}: ${String(text).slice(0, 200)}`);
+  }
+  try { return text ? JSON.parse(text) : null; } catch { return null; }
+}
+
+/** Polar bọc mảng dưới nhiều tên khác nhau tuỳ endpoint. */
+function polarArray(o, ...keys) {
+  if (Array.isArray(o)) return o;
+  for (const k of keys) if (o && Array.isArray(o[k])) return o[k];
+  return [];
+}
+
+/** Gộp recharge + sleep thành một doc mỗi ngày. */
+function buildRecoveryDocs(nightly, sleep) {
+  const days = {};
+  const seed = (d) => (days[d] = days[d] || { date: d, source: "polar" });
+
+  for (const x of polarArray(nightly, "recharges", "nights")) {
+    if (!x || !x.date) continue;
+    seed(x.date).recharge = {
+      rhr:        x.heart_rate_avg ?? null,
+      hrv:        x.heart_rate_variability_avg ?? null,
+      breathing:  x.breathing_rate_avg ?? null,
+      beatToBeat: x.beat_to_beat_avg ?? null,
+    };
+  }
+  for (const x of polarArray(sleep, "nights", "sleeps")) {
+    if (!x || !x.date) continue;
+    const total = (x.light_sleep || 0) + (x.deep_sleep || 0) +
+                  (x.rem_sleep || 0) + (x.unrecognized_sleep_stage || 0);
+    seed(x.date).sleep = {
+      total,
+      light: x.light_sleep ?? null,
+      deep:  x.deep_sleep ?? null,
+      rem:   x.rem_sleep ?? null,
+      score: x.sleep_score ?? null,
+      charge: x.sleep_charge ?? null,
+      rating: x.sleep_rating ?? null,
+      continuity: x.continuity ?? null,
+      goal: x.sleep_goal ?? null,
+      interruptions: x.total_interruption_duration ?? null,
+      start: x.sleep_start_time ?? null,
+      end:   x.sleep_end_time ?? null,
+    };
+  }
+  return Object.keys(days).sort().map((k) => days[k]);
+}
+
+/** Lõi dùng chung cho cả lịch lẫn nút đồng bộ tay. */
+async function syncPolarFor(clientId, token) {
+  const [nightly, sleep] = await Promise.all([
+    polarGet("/v3/users/nightly-recharge", token),
+    polarGet("/v3/users/sleep", token),
+  ]);
+  const docs = buildRecoveryDocs(nightly, sleep);
+  if (!docs.length) return { clientId, written: 0, dates: [] };
+
+  const db = getFirestore();
+  const col = db.collection("clients").doc(clientId).collection("recovery");
+  const batch = db.batch();
+  const now = new Date().toISOString();
+  for (const d of docs) batch.set(col.doc(d.date), { ...d, updatedAt: now }, { merge: true });
+  await batch.commit();
+
+  return { clientId, written: docs.length, dates: docs.map((d) => d.date) };
+}
+
+async function syncAllPolar() {
+  const out = [];
+  for (const c of POLAR_CLIENTS) {
+    try {
+      const r = await syncPolarFor(c.clientId, c.secret());
+      console.log(`[polar] ${r.clientId}: ghi ${r.written} ngày (${r.dates.join(", ")})`);
+      out.push(r);
+    } catch (e) {
+      // Một khách lỗi không được làm chết cả lượt chạy của những người còn lại.
+      console.error(`[polar] ${c.clientId} LỖI:`, e.message);
+      out.push({ clientId: c.clientId, error: e.message });
+    }
+  }
+  return out;
+}
+
+exports.syncPolarRecovery = onSchedule(
+  {
+    schedule: "0 7 * * *",
+    timeZone: "Asia/Ho_Chi_Minh",
+    region: "asia-southeast1",
+    secrets: [POLAR_TOKEN],
+    retryCount: 2,
+  },
+  async () => { await syncAllPolar(); },
+);
+
+/** Nút "đồng bộ ngay" — chỉ coach gọi được. */
+exports.syncPolarNow = onCall(
+  { region: "asia-southeast1", secrets: [POLAR_TOKEN] },
+  async (request) => {
+    const email = request.auth && request.auth.token && request.auth.token.email;
+    if (email !== COACH_EMAIL) {
+      throw new HttpsError("permission-denied", "Chỉ coach mới đồng bộ được.");
+    }
+    return { results: await syncAllPolar() };
+  },
 );
