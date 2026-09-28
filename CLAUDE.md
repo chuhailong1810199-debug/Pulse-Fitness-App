@@ -1,5 +1,5 @@
 
-## Current clients (verified against Firestore 2026-09-09 — 18 clients)
+## Current clients (verified against Firestore 2026-09-20 — 19 clients)
 
 ### Self-login clients — each has their own Gmail
 | Name | Client ID | Gmail | Level | Sessions/wk | Days | Goal |
@@ -7,8 +7,8 @@
 | Chị Nguyệt | chị_nguyệt_1776562700235 | nguyet.cm83@gmail.com | Intermediate | 3 | 4 | Strength + Fatloss + Boxing |
 | Cindy | cindy | dollykim1401@gmail.com | Intermediate | 3 | 3 | Strength & Fat Loss — Glutes/Back/Core |
 | Giao | giao | hqunhgiao.18@gmail.com | Beginner | 2 | 2 | HYROX / Hybrid — nền aerobic + kỹ thuật trạm |
-| Joost | joost | joost123@gmail.com | Beginner | 3 | 3 | — |
-| Lee | lee | kuanyu41@gmail.com | Intermediate | 3 | 3 | Strength & Hypertrophy |
+| Joost | joost | joost123@gmail.com | Beginner | 3 | 3 | Strength — tăng sức mạnh, full-body 3 buổi/tuần |
+| Lee | lee | kuanyu41@gmail.com | Intermediate | 3 | 2 | Strength & Hypertrophy — 2 block Anterior/Posterior, xoay A/B/A |
 | Long Chu | longchu | coach@fitwithlongchu.com | Advanced | 3 | 3 | Strength & Hypertrophy |
 | Nam | nam | namdoxuan0104@gmail.com | Intermediate | 3 | 3 | Tăng cơ giảm mỡ |
 | Nguyên | nguyen | tbn010112@gmail.com | Beginner | 3 | 3 | Giảm mỡ + tăng hiệu suất thể thao |
@@ -25,6 +25,7 @@
 | Chị Tâm | tam | Beginner | 2 | 2 | Tăng cơ + strength — dân chạy 35km/tuần, ưu tiên chân |
 | Rome | rome | Beginner | 2 | 2 | Tăng chiều cao, mật độ xương, hiệu suất thể thao |
 | Thai Son | thaison | Advanced | 4 | 3 | Shoulder Rehab → Strength + Boxing |
+| Kem | kem | Beginner | 3 | 3 | Phát triển thể chất — sức mạnh, sức bật, nền thể lực |
 | Trần Văn Tiến | tien | Beginner | 2 | 2 | Sức khỏe tổng quát, tăng cơ giảm mỡ tuổi 48 |
 
 A coach-managed client carries `email: ''`, **never** a placeholder address. The
