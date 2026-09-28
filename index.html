@@ -5236,6 +5236,47 @@ function renderRecovery() {
   if (!wrap) return;
   wrap.classList.add('rc-root');
   if (typeof window.rcRender === 'function') window.rcRender(_recovery);
+  _rcMountSync(wrap);
+}
+
+/**
+ * Nút "Đồng bộ ngay" được GẮN THÊM từ ngoài chứ không sửa vào khối render
+ * của bản thiết kế — để lần sau xuất lại từ Claude Design thì chỉ cần thay
+ * khối đó, nút này không bị mất theo.
+ */
+function _rcMountSync(wrap) {
+  if (userRole !== 'coach') return;        // callable phía server cũng chỉ cho coach
+  const head = wrap.querySelector('.rc-head');
+  if (!head || head.querySelector('.rc-sync')) return;
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'rc-sync';
+  b.textContent = 'Đồng bộ ngay';
+  b.onclick = () => polarSyncNow();
+  head.appendChild(b);
+}
+
+/**
+ * Ép kéo Polar ngay, cho trường hợp đồng bộ Polar Flow muộn hơn 7h sáng —
+ * giờ chạy của lịch tự động. Không có nút này thì phải chờ tới hôm sau.
+ */
+async function polarSyncNow() {
+  const btn = () => document.querySelector('.rc-sync');
+  const set = (txt, busy) => { const b = btn(); if (b) { b.textContent = txt; b.disabled = !!busy; } };
+  set('Đang kéo…', true);
+  try {
+    const fn = firebase.app().functions('asia-southeast1')
+      .httpsCallable('syncPolarNow', { timeout: 120000 });
+    const res = await fn({});
+    const r = (res.data && res.data.results && res.data.results[0]) || {};
+    if (r.error) throw new Error(r.error);
+    await loadRecovery();                  // đọc lại Firestore rồi vẽ lại — nút được gắn mới
+    set('Đã cập nhật ' + (r.written || 0) + ' ngày', true);
+  } catch (e) {
+    console.warn('[polarSyncNow]', e);
+    set('Lỗi: ' + String(e.message || e).slice(0, 36), true);
+  }
+  setTimeout(() => set('Đồng bộ ngay', false), 3500);
 }
 
 (function(){
@@ -12578,7 +12619,14 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .rc-micro{font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--rc-muted);}
 
 /* header */
-.rc-head{display:flex;flex-direction:column;gap:6px;padding-bottom:6px;}
+.rc-head{display:flex;flex-direction:column;gap:6px;padding-bottom:6px;position:relative;}
+/* Đặt tuyệt đối để không phá bố cục cột của header bản thiết kế. */
+.rc-sync{position:absolute;top:2px;right:0;border:1px solid var(--rc-line);
+  background:var(--rc-surface);color:var(--rc-txt);font:inherit;font-size:12px;
+  font-weight:600;letter-spacing:.03em;padding:7px 13px;border-radius:999px;
+  cursor:pointer;white-space:nowrap;-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);}
+.rc-sync:hover:not(:disabled){background:rgba(255,255,255,.12);}
+.rc-sync:disabled{opacity:.55;cursor:default;}
 .rc-title{margin:0;font-size:28px;font-weight:700;letter-spacing:-.02em;line-height:1.1;}
 .rc-head-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--rc-muted);}
 .rc-sep{width:3px;height:3px;border-radius:50%;background:var(--rc-muted);}
