@@ -6116,7 +6116,10 @@ function _schedRenderCalendar(keepScroll = false) {
 // The delay matters: without it, the first finger-move would drag the block
 // instead of scrolling the calendar.
 const SCH_SLOT_H   = 30;   // px per 30-min slot — must match _schedRenderCalendar
-const SCH_HOLD_MS  = 400;
+const SCH_HOLD_MS  = 400;   // chỉ áp dụng cho cảm ứng — chuột không phải giữ
+const SCH_SNAP_MIN = 15;    // trước đây 30; 15 cho phép đặt buổi lệch nửa khung
+const SCH_EDGE_PX  = 44;    // vào sát mép bao nhiêu thì tự cuộn
+const SCH_EDGE_SPD = 14;    // px mỗi khung hình
 let _dg = null;            // active drag state, null when idle
 
 function schedDragDown(event, id) {
@@ -6130,7 +6133,11 @@ function schedDragDown(event, id) {
     startX:event.clientX, startY:event.clientY,
     pointerId:event.pointerId,
     durMin: Math.max(30, _tToMin(evt.endTime||'10:00') - _tToMin(evt.startTime||'09:00')),
-    timer: setTimeout(() => schedDragArm(), SCH_HOLD_MS)
+    // Chuột có con trỏ chính xác và không cần cuộn bằng ngón, nên nhấc ngay khi
+    // nhích 3px. Bắt chuột giữ 400ms là thứ khiến thao tác trên máy tính thấy ì.
+    isMouse: event.pointerType === 'mouse',
+    raf: 0, lastEv: null,
+    timer: event.pointerType === 'mouse' ? 0 : setTimeout(() => schedDragArm(), SCH_HOLD_MS)
   };
 
   window.addEventListener('pointermove', schedDragMove, { passive:false });
@@ -6157,21 +6164,42 @@ function schedDragMove(event) {
   const dy = Math.abs(event.clientY - _dg.startY);
 
   if (!_dg.armed) {
-    // Moved before the hold completed → user is scrolling, not dragging
-    if (dx > 8 || dy > 8) { clearTimeout(_dg.timer); schedDragTeardown(); }
-    return;
+    if (_dg.isMouse) { if (dx > 3 || dy > 3) schedDragArm(); else return; }
+    else {
+      // Nhích trước khi giữ đủ lâu → người dùng đang cuộn, không phải kéo
+      if (dx > 8 || dy > 8) { clearTimeout(_dg.timer); schedDragTeardown(); }
+      return;
+    }
   }
 
-  event.preventDefault();          // stop the calendar scrolling mid-drag
+  event.preventDefault();          // chặn lịch cuộn khi đang kéo
   if (dx > 3 || dy > 3) _dg.moved = true;
 
-  const t = schedDropTarget(event.clientX, event.clientY);
+  // Gộp mọi sự kiện trong một khung hình. Pointermove bắn tới 120 lần/giây;
+  // elementsFromPoint ở mỗi lần là lý do chính khiến thao tác kéo bị khựng.
+  _dg.lastEv = { x: event.clientX, y: event.clientY };
+  if (!_dg.raf) _dg.raf = requestAnimationFrame(schedDragFrame);
+}
+
+function schedDragFrame() {
+  if (!_dg) return;
+  _dg.raf = 0;
+  const pt = _dg.lastEv;
+  if (!pt) return;
+
+  // Thẻ bám theo ngón/chuột 1:1. Trước đây chỉ có bóng mờ nhảy theo ô, còn
+  // thẻ đứng yên — nên cảm giác là "không kéo được", chứ không phải "kéo chậm".
+  if (_dg.el) {
+    _dg.el.style.transform = 'translate(' + (pt.x - _dg.startX) + 'px,' + (pt.y - _dg.startY) + 'px)';
+  }
+
+  schedEdgeScroll(pt.y);
+
+  const t = schedDropTarget(pt.x, pt.y);
   const ghost = document.getElementById('sch-drop-ghost');
   if (!ghost) return;
   if (!t) { ghost.style.display = 'none'; _dg.target = null; return; }
   _dg.target = t;
-  // Live inside the hovered column — it is position:relative, so top/left
-  // need no scroll maths and the ghost scrolls with the grid.
   if (ghost.parentElement !== t.col) t.col.appendChild(ghost);
   ghost.style.display = 'block';
   ghost.style.left    = '1px';
@@ -6181,6 +6209,19 @@ function schedDragMove(event) {
   ghost.textContent   = _minToT(t.startMin);
 }
 
+/** Kéo sát mép trên/dưới thì cuộn lịch, nếu không sẽ không với tới giờ ngoài khung nhìn. */
+function schedEdgeScroll(y) {
+  const sc = document.getElementById('sch-grid-scroll');
+  if (!sc) return;
+  const r = sc.getBoundingClientRect();
+  let d = 0;
+  if (y < r.top + SCH_EDGE_PX)         d = -SCH_EDGE_SPD;
+  else if (y > r.bottom - SCH_EDGE_PX) d =  SCH_EDGE_SPD;
+  if (!d) return;
+  sc.scrollTop += d;
+  if (_dg && !_dg.raf) _dg.raf = requestAnimationFrame(schedDragFrame);  // giữ nhịp cuộn
+}
+
 /** Which day column + 30-min slot is under this point? */
 function schedDropTarget(x, y) {
   const col = document.elementsFromPoint(x, y).find(n => n.classList && n.classList.contains('sch-dcol'));
@@ -6188,7 +6229,7 @@ function schedDropTarget(x, y) {
 
   const rect = col.getBoundingClientRect();
   const rawMin = SCH_START * 60 + ((y - rect.top) / SCH_SLOT_H) * 30;
-  const snapped = Math.round(rawMin / 30) * 30;                       // snap to :00 / :30
+  const snapped = Math.round(rawMin / SCH_SNAP_MIN) * SCH_SNAP_MIN;   // bám mốc 15 phút
   const maxStart = SCH_END * 60 - 30;
   const startMin = Math.min(Math.max(snapped, SCH_START * 60), maxStart);
 
@@ -6237,6 +6278,8 @@ function schedDragTeardown() {
   window.removeEventListener('pointercancel', schedDragCancel);
   if (_dg) {
     clearTimeout(_dg.timer);
+    if (_dg.raf) cancelAnimationFrame(_dg.raf);
+    if (_dg.el) _dg.el.style.transform = '';      // bỏ dịch chuyển, trả thẻ về lưới
     _dg.el?.classList.remove('sch-evt-dragging');
     try { _dg.el?.releasePointerCapture(_dg.pointerId); } catch(_e) {}
     // Swallow the click that follows a real drag so the detail modal doesn't open
@@ -6318,6 +6361,73 @@ async function schedSaveNew(date) {
   }
 }
 
+/**
+ * Booking chỉ lưu `title` là chuỗi tự do, không có clientId. Nối sang khách
+ * bằng tên — nhưng CHỈ khớp chính xác sau khi chuẩn hoá hoa/thường và khoảng
+ * trắng. KHÔNG dùng chuỗi con: dữ liệu thật cho thấy "Anh Ân", "Anh Tiến",
+ * "Anh Đao" và "Anh Nhân" đều chứa "an" nên đều ánh xạ nhầm về client `an`.
+ * Mở nhầm giáo án của người khác còn tệ hơn là không có nút.
+ * Cũng KHÔNG bỏ dấu: "Ân" và "An" là hai người khác nhau.
+ */
+function _schNorm(v) {
+  return String(v == null ? '' : v).toLowerCase().normalize('NFC').replace(/\s+/g, ' ').trim();
+}
+function schedClientOf(evt) {
+  if (!evt) return null;
+  const all = (typeof clientsData !== 'undefined' && clientsData) || [];
+  if (evt.clientId) {                       // đã liên kết thủ công — tin tuyệt đối
+    const c = all.find(x => x.id === evt.clientId);
+    if (c) return c;
+  }
+  const t = _schNorm(evt.title);
+  if (!t) return null;
+  const hits = all.filter(c => _schNorm(c.name) === t);
+  return hits.length === 1 ? hits[0] : null;   // mơ hồ thì coi như không khớp
+}
+
+/** Gán booking này cho một khách và ghi nhớ, để lần sau khỏi đoán theo tên. */
+async function schedLinkClient(evtId, clientId) {
+  const evt = _schedEvents.find(e => e.id === evtId);
+  if (!evt || !clientId) return;
+  try {
+    await updateDoc(doc(db, 'bookings', evtId), { clientId, updatedAt: serverTimestamp() });
+    evt.clientId = clientId;
+    schedCloseModal();
+    schedOpenEvt(evtId);
+  } catch (err) {
+    console.error('[schedule] link client failed', err);
+    alert('Không liên kết được khách. Thử lại nhé.');
+  }
+}
+
+/** Đóng lịch rồi mở thẳng dashboard giáo án của khách. */
+async function schedGoDash(clientId) {
+  schedCloseModal();
+  try { await openClientDash(clientId); }
+  catch (e) { console.warn('[schedule] openClientDash:', e.message); }
+}
+
+/** Khối "khách" trong modal: nút mở dashboard, hoặc ô chọn để liên kết. */
+function schedClientBlock(evt) {
+  if (userRole !== 'coach') return '';
+  const c = schedClientOf(evt);
+  if (c) {
+    return '<div class="sch-cli-row">'
+      + '<div class="sch-cli-name">' + escHtml(c.name || c.id) + '</div>'
+      + '<button class="sch-cli-go" onclick="schedGoDash(\'' + c.id + '\')">Mở dashboard →</button>'
+      + '</div>';
+  }
+  const all = ((typeof clientsData !== 'undefined' && clientsData) || [])
+    .slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id), 'vi'));
+  if (!all.length) return '';
+  return '<div class="sch-cli-row sch-cli-unlinked">'
+    + '<div class="sch-cli-hint">Chưa nhận ra khách nào</div>'
+    + '<select class="sch-cli-sel" onchange="if(this.value)schedLinkClient(\'' + evt.id + '\',this.value)">'
+    + '<option value="">Liên kết khách…</option>'
+    + all.map(x => '<option value="' + x.id + '">' + escHtml(x.name || x.id) + '</option>').join('')
+    + '</select></div>';
+}
+
 function schedOpenEvt(id) {
   const evt = _schedEvents.find(e => e.id === id);
   if (!evt) return;
@@ -6329,6 +6439,7 @@ function schedOpenEvt(id) {
     <button class="sch-modal-x" onclick="schedCloseModal()">✕</button>
     <div class="sch-modal-ttl">${evt.title||'Session'}</div>
     <div class="sch-modal-sub">${evt.date} · ${evt.startTime||''} – ${evt.endTime||''}</div>
+    ${schedClientBlock(evt)}
     <div class="sch-kind-pick" style="margin-top:16px">
       <button type="button" class="sch-kind-btn sch-kind-co${schedKindOf(evt)==='company'?' on':''}" onclick="schedSetKind('${id}','company')">Công ty</button>
       <button type="button" class="sch-kind-btn sch-kind-fr${schedKindOf(evt)==='freelance'?' on':''}" onclick="schedSetKind('${id}','freelance')">Freelance</button>
@@ -12040,7 +12151,26 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 }
 .sch-evt:active{opacity:.7;}
 /* drag to reschedule */
-.sch-evt{touch-action:pan-y;}
+/* ── Schedule: kéo thả + khối khách trong modal ── */
+.sch-evt{touch-action:pan-y;transition:box-shadow .15s ease,opacity .15s ease;}
+.sch-evt-dragging{z-index:60;opacity:.96;cursor:grabbing;
+  box-shadow:0 10px 26px rgba(0,0,0,.55),0 0 0 1px rgba(118,101,255,.55);
+  transition:none;}                      /* theo con trỏ thì không được có transition */
+.sch-drop-ghost{position:absolute;z-index:50;pointer-events:none;
+  border:1px dashed rgba(118,101,255,.75);border-radius:8px;
+  background:rgba(118,101,255,.16);
+  font-size:10px;font-weight:700;letter-spacing:.04em;color:#E7E2FA;
+  padding:3px 6px;display:flex;align-items:flex-start;}
+.sch-cli-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.10);}
+.sch-cli-name{font-size:14px;font-weight:700;color:#fff;flex:1;min-width:0;}
+.sch-cli-hint{font-size:12px;color:rgba(255,255,255,.45);flex:1;min-width:0;}
+.sch-cli-go{border:1px solid rgba(118,101,255,.55);background:rgba(118,101,255,.16);
+  color:#E7E2FA;font:inherit;font-size:12.5px;font-weight:700;padding:8px 14px;
+  border-radius:999px;cursor:pointer;white-space:nowrap;}
+.sch-cli-go:hover{background:rgba(118,101,255,.28);}
+.sch-cli-sel{background:rgba(255,255,255,.06);color:#fff;font:inherit;font-size:12.5px;
+  border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:7px 12px;cursor:pointer;}
 .sch-evt-dragging{
   opacity:.5;transform:scale(1.04);z-index:20 !important;
   box-shadow:0 10px 26px -8px rgba(0,0,0,.8);touch-action:none;
