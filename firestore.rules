@@ -180,6 +180,10 @@ service cloud.firestore {
       match /progressPhotos/{d=**} { allow read, write: if isCoach() || isClientOwner(clientId); }
       match /nutrition/{d=**}      { allow read, write: if isCoach() || isClientOwner(clientId); }
       match /youthTests/{d=**}     { allow read, write: if isCoach() || isClientOwner(clientId); }
+      // Dữ liệu hồi phục kéo từ Polar AccessLink (ngủ, HRV, nhịp tim nghỉ).
+      // Phải liệt kê tường minh như mọi subcollection khác — không có wildcard
+      // bao trùm, nên thiếu dòng này là client đọc ra permission-denied.
+      match /recovery/{d=**}       { allow read, write: if isCoach() || isClientOwner(clientId); }
     }
   }
 }

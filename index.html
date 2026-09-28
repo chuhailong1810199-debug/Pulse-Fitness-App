@@ -655,6 +655,7 @@ async function loadApp() {
   initNavAutoHide();
   renderStats(); // non-blocking — stats update in background
   subscribeProgram();
+  checkRecoveryTab();   // non-blocking — tab chỉ hiện nếu khách có dữ liệu Polar
   renderAccessAlert();
   if (userRole === 'coach') {
     showScreen('app');
@@ -723,6 +724,8 @@ async function switchClient(id) {
   clearTimeout(_saveLoadsFBTimer);
 
   activeClient = next;
+  _recovery = [];                 // dữ liệu hồi phục của khách CŨ, phải xoá
+  checkRecoveryTab();             // hiện/ẩn tab Recovery theo khách mới (không await)
   _historyCache = null; // clear cache for new client
   _nutritionData = null; _macroTargets = null; _macroMeta = null; // clear nutrition for new client
   _sessionLogged = false; updateFinishBtn();
@@ -5176,6 +5179,153 @@ async function saveMacroTargets() {
   renderNutritionMonth();
 }
 
+// ── RECOVERY — dữ liệu ngủ / HRV / nhịp tim nghỉ kéo từ Polar AccessLink ──
+// Doc nằm ở clients/{id}/recovery/{YYYY-MM-DD}, mỗi ngày một bản tóm tắt.
+// Tab chỉ hiện khi khách đó THỰC SỰ có dữ liệu — không hard-code theo tên
+// khách, nên client nào nối Polar sau này cũng tự có tab mà không phải sửa code.
+let _recovery = [];
+
+const RC_DAYS = 28;
+function _rcHM(sec) {
+  if (sec == null || !Number.isFinite(sec)) return '—';
+  return Math.floor(sec / 3600) + 'h' + String(Math.round(sec % 3600 / 60)).padStart(2, '0');
+}
+function _rcDate(iso) {
+  if (typeof iso !== 'string' || !iso) return '';
+  const p = iso.split('-');
+  return p.length === 3 ? p[2] + '/' + p[1] : iso;
+}
+/** Màu theo điểm ngủ Polar: >=80 tốt, >=65 tạm, dưới nữa là kém. */
+function _rcScoreCls(v) {
+  if (v == null) return '';
+  return v >= 80 ? 'rc-good' : v >= 65 ? 'rc-mid' : 'rc-bad';
+}
+
+async function checkRecoveryTab() {
+  const tab = document.getElementById('recovery-nav-tab');
+  if (!tab) return;
+  if (!activeClient) { tab.style.display = 'none'; return; }
+  try {
+    const snap = await getDocs(query(
+      collection(db, 'clients', activeClient.id, 'recovery'), limit(1)));
+    tab.style.display = snap.empty ? 'none' : '';
+  } catch (_e) {
+    tab.style.display = 'none';   // chưa có quyền hoặc chưa có dữ liệu
+  }
+}
+
+async function loadRecovery() {
+  const wrap = document.getElementById('recovery-body');
+  if (!wrap || !activeClient) return;
+  wrap.innerHTML = '<div class="rc-empty">Đang đọc dữ liệu hồi phục…</div>';
+  try {
+    const snap = await getDocs(query(
+      collection(db, 'clients', activeClient.id, 'recovery'),
+      orderBy('date', 'desc'), limit(RC_DAYS)));
+    _recovery = [];
+    snap.forEach(d => _recovery.push(d.data()));
+  } catch (e) {
+    wrap.innerHTML = '<div class="rc-empty">Không đọc được dữ liệu hồi phục: ' +
+      escHtml(e.message || '') + '</div>';
+    return;
+  }
+  renderRecovery();
+}
+
+function renderRecovery() {
+  const wrap = document.getElementById('recovery-body');
+  if (!wrap) return;
+  if (!_recovery.length) {
+    wrap.innerHTML = '<div class="rc-empty">Chưa có dữ liệu hồi phục.<br>' +
+      'Dữ liệu được kéo từ Polar Flow qua AccessLink.</div>';
+    return;
+  }
+  // _recovery đang xếp mới→cũ; đảo lại để vẽ xu hướng theo thời gian
+  const asc = _recovery.slice().reverse();
+  const last = _recovery[0];
+  const sl = last.sleep || {}, rc = last.recharge || {};
+
+  const num = (arr, f) => arr.map(f).filter(v => v != null && Number.isFinite(v));
+  const avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+
+  const sleepArr = num(asc, d => d.sleep && d.sleep.total);
+  const hrvArr   = num(asc, d => d.recharge && d.recharge.hrv);
+  const rhrArr   = num(asc, d => d.recharge && d.recharge.rhr);
+  const scoreArr = num(asc, d => d.sleep && d.sleep.score);
+
+  const avgSleep = avg(sleepArr), goal = sl.goal || null;
+  const debt = (goal && avgSleep != null) ? goal - avgSleep : null;
+
+  const tile = (label, value, sub, cls) =>
+    '<div class="rc-tile ' + (cls || '') + '">' +
+      '<div class="rc-tile-v">' + value + '</div>' +
+      '<div class="rc-tile-l">' + label + '</div>' +
+      (sub ? '<div class="rc-tile-s">' + sub + '</div>' : '') +
+    '</div>';
+
+  let html = '<div class="rc-head">' +
+    '<div><div class="rc-h1">Hồi phục</div>' +
+    '<div class="rc-h2">Đêm gần nhất · ' + _rcDate(last.date) +
+    ' · nguồn ' + escHtml(last.source || 'polar') + '</div></div></div>';
+
+  html += '<div class="rc-tiles">' +
+    tile('Ngủ', _rcHM(sl.total), goal ? 'mục tiêu ' + _rcHM(goal) : '',
+         (goal && sl.total < goal * 0.85) ? 'rc-bad' : '') +
+    tile('Sleep score', sl.score != null ? sl.score : '—', 'thang 100', _rcScoreCls(sl.score)) +
+    tile('HRV', rc.hrv != null ? rc.hrv : '—', 'ms, lúc ngủ') +
+    tile('Nhịp tim nghỉ', rc.rhr != null ? rc.rhr : '—', 'bpm') +
+  '</div>';
+
+  // Cảnh báo nợ ngủ — thứ đáng nói nhất nếu nó đang xảy ra
+  if (debt != null && debt > 1800) {
+    html += '<div class="rc-alert">Trung bình ' + _rcHM(avgSleep) + '/đêm trên ' +
+      sleepArr.length + ' đêm, mục tiêu ' + _rcHM(goal) + ' — thiếu ' + _rcHM(debt) +
+      ' mỗi đêm. Không giáo án nào bù được khoản này.</div>';
+  }
+
+  const trend = (label, arr, fmt, unit) => {
+    if (arr.length < 2) return '';
+    const a = avg(arr);
+    return '<div class="rc-trend-row">' +
+      '<span class="rc-trend-l">' + label + '</span>' +
+      _cdSpark(arr) +
+      '<span class="rc-trend-v">' + fmt(a) + (unit ? ' ' + unit : '') + '</span>' +
+      '<span class="rc-trend-n">TB ' + arr.length + ' ngày</span>' +
+    '</div>';
+  };
+  html += '<div class="rc-card"><div class="rc-card-t">Xu hướng</div>' +
+    trend('Ngủ',        sleepArr, _rcHM, '') +
+    trend('Sleep score', scoreArr, v => Math.round(v), '') +
+    trend('HRV',         hrvArr,  v => Math.round(v), 'ms') +
+    trend('Nhịp tim nghỉ', rhrArr, v => Math.round(v), 'bpm') +
+  '</div>';
+
+  html += '<div class="rc-card"><div class="rc-card-t">Theo ngày</div>' +
+    '<div class="rc-table-wrap"><table class="rc-table"><thead><tr>' +
+    '<th>Ngày</th><th>Ngủ</th><th>Sâu</th><th>REM</th><th>Score</th><th>HRV</th><th>RHR</th>' +
+    '</tr></thead><tbody>';
+  _recovery.forEach(d => {
+    const s = d.sleep || {}, r = d.recharge || {};
+    html += '<tr>' +
+      '<td class="rc-d">' + _rcDate(d.date) + '</td>' +
+      '<td>' + _rcHM(s.total) + '</td>' +
+      '<td>' + _rcHM(s.deep) + '</td>' +
+      '<td>' + _rcHM(s.rem) + '</td>' +
+      '<td class="' + _rcScoreCls(s.score) + '">' + (s.score != null ? s.score : '—') + '</td>' +
+      '<td>' + (r.hrv != null ? r.hrv : '—') + '</td>' +
+      '<td>' + (r.rhr != null ? r.rhr : '—') + '</td>' +
+    '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+
+  if (hrvArr.length < 14) {
+    html += '<div class="rc-note">Mới ' + hrvArr.length +
+      ' đêm dữ liệu. HRV dao động mạnh giữa các đêm — cần khoảng 3–4 tuần mới có đường nền ' +
+      'đáng tin để so sánh.</div>';
+  }
+  wrap.innerHTML = html;
+}
+
 // ── NAV ────────────────────────────────────────────────
 function centerActiveNavTab() {
   const active = document.querySelector('.nav-tab.active');
@@ -5196,6 +5346,7 @@ function showPage(page) {
   document.getElementById('youth-page').classList.toggle('active', page === 'youth');
   document.getElementById('billing-page').classList.toggle('active', page === 'billing');
   document.getElementById('dash-page').classList.toggle('active', page === 'dash');
+  document.getElementById('recovery-page').classList.toggle('active', page === 'recovery');
   document.getElementById('cdash-page').classList.toggle('active', page === 'cdash');
   if (page === 'dash') renderDashboard();
   if (page === 'cdash') renderClientDash();
@@ -5216,6 +5367,9 @@ function showPage(page) {
   }
   if (page === 'billing') {
     loadBilling();
+  }
+  if (page === 'recovery') {
+    loadRecovery();
   }
   renderAccessAlert();
   if (page === 'log') {
@@ -10309,6 +10463,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <div class="nav-tab" id="dash-nav-tab" data-page="dash" style="display:none" onclick="showPage('dash')">Dashboard</div>
     <div class="nav-tab active" data-page="workout" onclick="showPage('workout')">Workout</div>
     <div class="nav-tab" data-page="progress" onclick="showPage('progress')">Progress</div>
+    <div class="nav-tab" id="recovery-nav-tab" data-page="recovery" style="display:none" onclick="showPage('recovery')">Recovery</div>
     <div class="nav-tab" data-page="nutrition" onclick="showPage('nutrition')">Nutrition</div>
     <div class="nav-tab" data-page="youth" onclick="showPage('youth')">Youth</div>
     <div class="nav-tab" data-page="billing" onclick="showPage('billing')">Billing</div>
@@ -10430,6 +10585,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   <div id="dash-page"><div id="dash-body"></div></div>
   <div id="cdash-page"><div id="cdash-body"></div></div>
   <div id="billing-page"><div id="billing-body"></div></div>
+  <div id="recovery-page"><div id="recovery-body"></div></div>
 
   <!-- ── YOUTH DEVELOPMENT TEST BATTERY ───────────────────────────────── -->
   <div id="youth-page">
@@ -12283,6 +12439,53 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .cd-ex-l i.up{color:#7ED9A0;} .cd-ex-l i.down{color:#EE5A4F;}
 .cd-none{font-size:10px;color:#3D3833;}
 .cd-spark{width:46px;height:16px;display:block;}
+/* ── RECOVERY tab ── */
+#recovery-page{display:none;}
+#recovery-page.active{display:block;}
+.rc-head{padding:14px 0 10px;border-bottom:1px solid #1A1816;margin-bottom:14px;}
+.rc-h1{font-size:15px;font-weight:800;color:#fff;letter-spacing:.3px;}
+.rc-h2{font-size:11px;color:rgba(255,255,255,.45);margin-top:3px;}
+.rc-tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px;}
+.rc-tile{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.10);
+  border-radius:10px;padding:11px 10px;text-align:center;}
+.rc-tile-v{font-size:21px;font-weight:800;color:#fff;line-height:1.15;}
+.rc-tile-l{font-size:10px;text-transform:uppercase;letter-spacing:.7px;
+  color:rgba(255,255,255,.50);margin-top:4px;}
+.rc-tile-s{font-size:10px;color:rgba(255,255,255,.32);margin-top:2px;}
+.rc-tile.rc-good .rc-tile-v{color:#7ED9A0;}
+.rc-tile.rc-mid  .rc-tile-v{color:#E6B34A;}
+.rc-tile.rc-bad  .rc-tile-v{color:#EE5A4F;}
+.rc-alert{background:rgba(238,90,79,.10);border:1px solid rgba(238,90,79,.32);
+  border-radius:10px;padding:11px 13px;font-size:12.5px;line-height:1.55;
+  color:#F2A9A3;margin-bottom:14px;}
+.rc-card{background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.09);
+  border-radius:12px;padding:13px;margin-bottom:12px;}
+.rc-card-t{font-size:10px;text-transform:uppercase;letter-spacing:1px;
+  color:rgba(255,255,255,.42);font-weight:700;margin-bottom:10px;}
+.rc-trend-row{display:flex;align-items:center;gap:10px;padding:7px 0;
+  border-bottom:1px solid rgba(255,255,255,.05);}
+.rc-trend-row:last-child{border-bottom:none;}
+.rc-trend-l{flex:0 0 108px;font-size:12px;color:rgba(255,255,255,.72);}
+.rc-trend-v{flex:0 0 66px;text-align:right;font-size:13px;font-weight:700;color:#fff;}
+.rc-trend-n{font-size:10px;color:rgba(255,255,255,.32);}
+.rc-table-wrap{overflow-x:auto;}
+.rc-table{width:100%;border-collapse:collapse;font-size:12px;}
+.rc-table th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.6px;
+  color:rgba(255,255,255,.38);font-weight:700;padding:5px 7px;
+  border-bottom:1px solid rgba(255,255,255,.10);white-space:nowrap;}
+.rc-table td{padding:6px 7px;color:rgba(255,255,255,.80);
+  border-bottom:1px solid rgba(255,255,255,.045);white-space:nowrap;}
+.rc-table td.rc-d{color:#fff;font-weight:700;}
+.rc-table td.rc-good{color:#7ED9A0;font-weight:700;}
+.rc-table td.rc-mid{color:#E6B34A;font-weight:700;}
+.rc-table td.rc-bad{color:#EE5A4F;font-weight:700;}
+.rc-note{font-size:11.5px;color:rgba(255,255,255,.40);line-height:1.55;padding:2px 2px 10px;}
+.rc-empty{padding:28px 14px;text-align:center;color:rgba(255,255,255,.42);
+  font-size:12.5px;line-height:1.6;}
+@media(max-width:700px){
+  .rc-tiles{grid-template-columns:repeat(2,1fr);}
+  .rc-trend-l{flex:0 0 84px;}
+}
 .cd-empty{grid-column:1/-1;text-align:center;font-size:13px;color:#948D83;background:#161412;
   border:1px dashed #3D3833;border-radius:14px;padding:30px;}
 .cd-empty b{color:#D98E3C;}
