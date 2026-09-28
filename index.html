@@ -663,12 +663,21 @@ async function loadApp() {
   // For clients: app stays hidden until skipSlides() is called
 }
 
+// Khách mà coach muốn thấy đầu tiên khi mở app — hồ sơ tập của chính coach.
+// Trước đây app mở vào clientsData[0], tức là khách có NHIỀU ngày giáo án nhất
+// (Anh Đạo, 5 ngày), thuần do thứ tự sắp xếp chứ không phải chủ ý.
+const COACH_HOME_CLIENT = 'longchu';
+
 async function loadAllClients() {
   const snap = await getDocs(collection(db, 'clients'));
   clientsData = [];
   snap.forEach(d => clientsData.push({ id: d.id, ...d.data() }));
   // Sort by most program days first — ensures Thai Son/Sang load before empty clients
   clientsData.sort((a,b) => Object.keys(b.program||{}).length - Object.keys(a.program||{}).length);
+  // Ghim hồ sơ của coach lên đầu. Không tìm thấy thì giữ nguyên thứ tự cũ —
+  // đổi tên/xoá client đó cũng không làm hỏng màn hình mở app.
+  const homeIdx = clientsData.findIndex(c => c.id === COACH_HOME_CLIENT);
+  if (homeIdx > 0) clientsData.unshift(clientsData.splice(homeIdx, 1)[0]);
   if (clientsData.length > 0) {
     activeClient = clientsData[0];
     const sel = document.getElementById('client-select');
