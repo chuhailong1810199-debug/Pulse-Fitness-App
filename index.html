@@ -5186,21 +5186,6 @@ async function saveMacroTargets() {
 let _recovery = [];
 
 const RC_DAYS = 28;
-function _rcHM(sec) {
-  if (sec == null || !Number.isFinite(sec)) return '—';
-  return Math.floor(sec / 3600) + 'h' + String(Math.round(sec % 3600 / 60)).padStart(2, '0');
-}
-function _rcDate(iso) {
-  if (typeof iso !== 'string' || !iso) return '';
-  const p = iso.split('-');
-  return p.length === 3 ? p[2] + '/' + p[1] : iso;
-}
-/** Màu theo điểm ngủ Polar: >=80 tốt, >=65 tạm, dưới nữa là kém. */
-function _rcScoreCls(v) {
-  if (v == null) return '';
-  return v >= 80 ? 'rc-good' : v >= 65 ? 'rc-mid' : 'rc-bad';
-}
-
 async function checkRecoveryTab() {
   const tab = document.getElementById('recovery-nav-tab');
   if (!tab) return;
@@ -5232,99 +5217,223 @@ async function loadRecovery() {
   renderRecovery();
 }
 
+/**
+ * Vẽ màn hình Recovery. Toàn bộ phần dựng HTML nằm trong IIFE bên dưới —
+ * nó tự giữ helper riêng nên không đụng tên với biến toàn cục của app,
+ * và chỉ lộ ra đúng window.rcRender.
+ */
 function renderRecovery() {
   const wrap = document.getElementById('recovery-body');
   if (!wrap) return;
-  if (!_recovery.length) {
-    wrap.innerHTML = '<div class="rc-empty">Chưa có dữ liệu hồi phục.<br>' +
-      'Dữ liệu được kéo từ Polar Flow qua AccessLink.</div>';
-    return;
-  }
-  // _recovery đang xếp mới→cũ; đảo lại để vẽ xu hướng theo thời gian
-  const asc = _recovery.slice().reverse();
-  const last = _recovery[0];
-  const sl = last.sleep || {}, rc = last.recharge || {};
-
-  const num = (arr, f) => arr.map(f).filter(v => v != null && Number.isFinite(v));
-  const avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
-
-  const sleepArr = num(asc, d => d.sleep && d.sleep.total);
-  const hrvArr   = num(asc, d => d.recharge && d.recharge.hrv);
-  const rhrArr   = num(asc, d => d.recharge && d.recharge.rhr);
-  const scoreArr = num(asc, d => d.sleep && d.sleep.score);
-
-  const avgSleep = avg(sleepArr), goal = sl.goal || null;
-  const debt = (goal && avgSleep != null) ? goal - avgSleep : null;
-
-  const tile = (label, value, sub, cls) =>
-    '<div class="rc-tile ' + (cls || '') + '">' +
-      '<div class="rc-tile-v">' + value + '</div>' +
-      '<div class="rc-tile-l">' + label + '</div>' +
-      (sub ? '<div class="rc-tile-s">' + sub + '</div>' : '') +
-    '</div>';
-
-  let html = '<div class="rc-head">' +
-    '<div><div class="rc-h1">Hồi phục</div>' +
-    '<div class="rc-h2">Đêm gần nhất · ' + _rcDate(last.date) +
-    ' · nguồn ' + escHtml(last.source || 'polar') + '</div></div></div>';
-
-  html += '<div class="rc-tiles">' +
-    tile('Ngủ', _rcHM(sl.total), goal ? 'mục tiêu ' + _rcHM(goal) : '',
-         (goal && sl.total < goal * 0.85) ? 'rc-bad' : '') +
-    tile('Sleep score', sl.score != null ? sl.score : '—', 'thang 100', _rcScoreCls(sl.score)) +
-    tile('HRV', rc.hrv != null ? rc.hrv : '—', 'ms, lúc ngủ') +
-    tile('Nhịp tim nghỉ', rc.rhr != null ? rc.rhr : '—', 'bpm') +
-  '</div>';
-
-  // Cảnh báo nợ ngủ — thứ đáng nói nhất nếu nó đang xảy ra
-  if (debt != null && debt > 1800) {
-    html += '<div class="rc-alert">Trung bình ' + _rcHM(avgSleep) + '/đêm trên ' +
-      sleepArr.length + ' đêm, mục tiêu ' + _rcHM(goal) + ' — thiếu ' + _rcHM(debt) +
-      ' mỗi đêm. Không giáo án nào bù được khoản này.</div>';
-  }
-
-  const trend = (label, arr, fmt, unit) => {
-    if (arr.length < 2) return '';
-    const a = avg(arr);
-    return '<div class="rc-trend-row">' +
-      '<span class="rc-trend-l">' + label + '</span>' +
-      _cdSpark(arr) +
-      '<span class="rc-trend-v">' + fmt(a) + (unit ? ' ' + unit : '') + '</span>' +
-      '<span class="rc-trend-n">TB ' + arr.length + ' ngày</span>' +
-    '</div>';
-  };
-  html += '<div class="rc-card"><div class="rc-card-t">Xu hướng</div>' +
-    trend('Ngủ',        sleepArr, _rcHM, '') +
-    trend('Sleep score', scoreArr, v => Math.round(v), '') +
-    trend('HRV',         hrvArr,  v => Math.round(v), 'ms') +
-    trend('Nhịp tim nghỉ', rhrArr, v => Math.round(v), 'bpm') +
-  '</div>';
-
-  html += '<div class="rc-card"><div class="rc-card-t">Theo ngày</div>' +
-    '<div class="rc-table-wrap"><table class="rc-table"><thead><tr>' +
-    '<th>Ngày</th><th>Ngủ</th><th>Sâu</th><th>REM</th><th>Score</th><th>HRV</th><th>RHR</th>' +
-    '</tr></thead><tbody>';
-  _recovery.forEach(d => {
-    const s = d.sleep || {}, r = d.recharge || {};
-    html += '<tr>' +
-      '<td class="rc-d">' + _rcDate(d.date) + '</td>' +
-      '<td>' + _rcHM(s.total) + '</td>' +
-      '<td>' + _rcHM(s.deep) + '</td>' +
-      '<td>' + _rcHM(s.rem) + '</td>' +
-      '<td class="' + _rcScoreCls(s.score) + '">' + (s.score != null ? s.score : '—') + '</td>' +
-      '<td>' + (r.hrv != null ? r.hrv : '—') + '</td>' +
-      '<td>' + (r.rhr != null ? r.rhr : '—') + '</td>' +
-    '</tr>';
-  });
-  html += '</tbody></table></div></div>';
-
-  if (hrvArr.length < 14) {
-    html += '<div class="rc-note">Mới ' + hrvArr.length +
-      ' đêm dữ liệu. HRV dao động mạnh giữa các đêm — cần khoảng 3–4 tuần mới có đường nền ' +
-      'đáng tin để so sánh.</div>';
-  }
-  wrap.innerHTML = html;
+  wrap.classList.add('rc-root');
+  if (typeof window.rcRender === 'function') window.rcRender(_recovery);
 }
+
+(function(){
+  var WK = ['Chủ Nhật','Thứ Hai','Thứ Ba','Thứ Tư','Thứ Năm','Thứ Sáu','Thứ Bảy'];
+  var WK_S = ['CN','T2','T3','T4','T5','T6','T7'];
+
+  function n(v){ return (typeof v === 'number' && isFinite(v)) ? v : null; }
+  function get(o, a, b){ return (o && o[a] && o[a][b] !== undefined) ? o[a][b] : null; }
+  function pad(x){ return (x < 10 ? '0' : '') + x; }
+  function dur(s){
+    s = n(s); if (s === null) return '—';
+    var neg = s < 0; s = Math.abs(s);
+    var m = Math.round(s / 60), h = Math.floor(m / 60);
+    return (neg ? '−' : '') + h + 'h' + pad(m % 60);
+  }
+  function clock(iso){ var m = /T(\d{2}):(\d{2})/.exec(iso || ''); return m ? m[1] + ':' + m[2] : null; }
+  function parseD(s){ var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s || ''); return m ? new Date(Date.UTC(+m[1], +m[2]-1, +m[3])) : null; }
+  function dKey(d){ return d.toISOString().slice(0,10); }
+  function ddmm(d){ return d ? pad(d.getUTCDate()) + '/' + pad(d.getUTCMonth()+1) : '—'; }
+  function avg(a){ a = a.filter(function(x){ return x !== null; }); if (!a.length) return null; return a.reduce(function(s,x){ return s+x; }, 0) / a.length; }
+  function fmt(v, d){ v = n(v); return v === null ? '—' : (d ? v.toFixed(d).replace('.', ',') : String(Math.round(v))); }
+  function state(score){
+    score = n(score);
+    if (score === null) return { c:'rgba(255,255,255,.22)', w:'' };
+    if (score >= 80) return { c:'var(--rc-green)', w:'Tốt' };
+    if (score >= 65) return { c:'var(--rc-amber)', w:'Khá' };
+    return { c:'var(--rc-red)', w:'Thấp' };
+  }
+  function lightOf(r){
+    var l = n(get(r,'sleep','light'));
+    if (l !== null) return l;
+    var t = n(get(r,'sleep','total')), d = n(get(r,'sleep','deep')), m = n(get(r,'sleep','rem'));
+    return (t !== null && d !== null && m !== null && t - d - m >= 0) ? t - d - m : null;
+  }
+
+  function header(r){
+    var d = r ? parseD(r.date) : null;
+    var src = r && r.source ? r.source.charAt(0).toUpperCase() + r.source.slice(1) : null;
+    return '<header class="rc-head"><h1 class="rc-title">Hồi phục</h1><div class="rc-head-meta">'
+      + (d ? '<span>' + WK[d.getUTCDay()] + ', ' + ddmm(d) + '</span>' : '<span>Chưa có dữ liệu</span>')
+      + (src ? '<span class="rc-sep"></span><span>Nguồn: ' + src + '</span>' : '')
+      + '</div></header>';
+  }
+
+  function hero(r){
+    var score = n(get(r,'sleep','score')), st = state(score);
+    var C = 2 * Math.PI * 104, pct = score === null ? 0 : Math.max(0, Math.min(100, score)) / 100;
+    var s = clock(get(r,'sleep','start')), e = clock(get(r,'sleep','end'));
+    return '<section class="rc-hero"><div class="rc-ring">'
+      + '<svg viewBox="0 0 236 236" aria-hidden="true">'
+      + '<circle cx="118" cy="118" r="104" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="12"></circle>'
+      + '<circle cx="118" cy="118" r="104" fill="none" stroke="' + st.c + '" stroke-width="12" stroke-linecap="round" '
+      + 'stroke-dasharray="' + C.toFixed(1) + '" stroke-dashoffset="' + (C * (1 - pct)).toFixed(1) + '"></circle></svg>'
+      + '<div class="rc-ring-in"><span class="rc-micro">Sleep score</span>'
+      + '<span class="rc-score rc-num">' + fmt(score) + '</span>'
+      + (st.w ? '<span class="rc-state" style="color:' + st.c + '">' + st.w + '</span>' : '')
+      + '</div></div>'
+      + '<div class="rc-hero-sub">'
+      + '<div class="rc-hero-item"><span class="rc-hero-val rc-num">' + dur(get(r,'sleep','total')) + '</span><span class="rc-micro">Ngủ</span></div>'
+      + '<span class="rc-vr"></span>'
+      + '<div class="rc-hero-item"><span class="rc-hero-val-sm rc-num">' + (s && e ? s + ' → ' + e : '—') + '</span><span class="rc-micro">Lên giường → dậy</span></div>'
+      + '</div></section>';
+  }
+
+  function debt(win){
+    var rows = win.filter(function(r){ return n(get(r,'sleep','total')) !== null && n(get(r,'sleep','goal')) !== null; });
+    if (rows.length < 3) return '';
+    var gaps = rows.map(function(r){ return get(r,'sleep','goal') - get(r,'sleep','total'); });
+    var avgGap = avg(gaps);
+    if (avgGap < 1800) return '';
+    var avgT = avg(rows.map(function(r){ return get(r,'sleep','total'); }));
+    var avgG = avg(rows.map(function(r){ return get(r,'sleep','goal'); }));
+    var below = gaps.filter(function(g){ return g > 0; }).length;
+    var cum = gaps.reduce(function(s,g){ return s + Math.max(0,g); }, 0);
+    var streak = 0; for (var i = 0; i < gaps.length && gaps[i] > 0; i++) streak++;
+    var note = below === rows.length
+      ? 'Cả ' + rows.length + ' đêm đều dưới mục tiêu. Tổng thiếu ' + dur(cum) + '.'
+      : below + '/' + rows.length + ' đêm dưới mục tiêu'
+        + (streak >= 2 ? ', ' + streak + ' đêm liên tiếp gần nhất' : '') + '. Tổng thiếu ' + dur(cum) + '.';
+    var w = Math.max(2, Math.min(100, avgT / avgG * 100));
+    return '<section class="rc-debt" role="status">'
+      + '<div class="rc-debt-top"><span class="rc-micro rc-debt-k">Thiếu ngủ kéo dài</span>'
+      + '<span class="rc-micro">' + rows.length + ' đêm gần nhất</span></div>'
+      + '<div class="rc-debt-main"><span class="rc-debt-num rc-num">' + dur(-avgGap) + '</span>'
+      + '<span class="rc-debt-unit">mỗi đêm so với mục tiêu ' + dur(avgG) + '</span></div>'
+      + '<div class="rc-debt-bar"><span style="width:' + w.toFixed(1) + '%"></span></div>'
+      + '<div class="rc-debt-legend rc-num"><span>Trung bình ' + dur(avgT) + '</span><span>mục tiêu ' + dur(avgG) + '</span></div>'
+      + '<p class="rc-debt-note">' + note + '</p></section>';
+  }
+
+  function perf(r){
+    var t = n(get(r,'sleep','total')), g = n(get(r,'sleep','goal'));
+    var p = (t !== null && g) ? t / g * 100 : null;
+    var gap = (t !== null && g !== null) ? g - t : null;
+    return '<section class="rc-sec"><div class="rc-sec-head"><h2 class="rc-h2">Hiệu suất ngủ</h2>'
+      + '<span class="rc-sec-val rc-num">' + (p === null ? '—' : Math.round(p) + '%') + '</span></div>'
+      + '<div class="rc-bar"><span style="width:' + (p === null ? 0 : Math.min(100, p)).toFixed(1) + '%"></span></div>'
+      + '<div class="rc-bar-legend rc-num"><span>' + dur(t) + ' ngủ</span><span>mục tiêu ' + dur(g) + '</span></div>'
+      + (gap !== null ? '<p class="rc-note">' + (gap > 0 ? 'Đêm qua thiếu ' + dur(gap) + ' so với mục tiêu.' : 'Đêm qua đạt mục tiêu.') + '</p>' : '')
+      + '</section>';
+  }
+
+  function stages(r){
+    var parts = [
+      { k:'deep',  name:'Sâu',  v:n(get(r,'sleep','deep')) },
+      { k:'rem',   name:'REM',  v:n(get(r,'sleep','rem')) },
+      { k:'light', name:'Nhẹ',  v:lightOf(r) },
+      { k:'awake', name:'Thức', v:n(get(r,'sleep','interruptions')) }
+    ];
+    var sum = parts.reduce(function(s,p){ return s + (p.v || 0); }, 0);
+    var bar = sum ? parts.filter(function(p){ return p.v; }).map(function(p){
+      return '<span class="rc-sw-' + p.k + '" style="flex:' + p.v + '" title="' + p.name + ' ' + dur(p.v) + '"></span>';
+    }).join('') : '<span style="flex:1;background:var(--rc-line)"></span>';
+    var legend = parts.map(function(p){
+      return '<div class="rc-leg"><span class="rc-leg-sw rc-sw-' + p.k + '"></span>'
+        + '<span class="rc-leg-name">' + p.name + '</span>'
+        + '<span class="rc-leg-val rc-num">' + dur(p.v) + '</span>'
+        + '<span class="rc-leg-pct rc-num">' + (p.v !== null && sum ? Math.round(p.v / sum * 100) + '%' : '—') + '</span></div>';
+    }).join('');
+    var cont = n(get(r,'sleep','continuity')), ch = n(get(r,'sleep','charge'));
+    return '<section class="rc-sec"><div class="rc-sec-head"><h2 class="rc-h2">Ngủ</h2>'
+      + '<span class="rc-micro">Giai đoạn</span></div>'
+      + '<div class="rc-stages">' + bar + '</div>'
+      + '<div class="rc-legend">' + legend + '</div>'
+      + '<div class="rc-meta"><span>Liên tục <b class="rc-num">' + (cont === null ? '—' : fmt(cont,1) + ' / 5') + '</b></span>'
+      + '<span>Sleep charge <b class="rc-num">' + fmt(ch) + '</b></span></div></section>';
+  }
+
+  function stats(r, win){
+    function one(label, v, unit, all, dec){
+      var vals = win.map(all).map(n), have = vals.filter(function(x){ return x !== null; });
+      var a = have.length >= 2 ? avg(have) : null;
+      return '<div class="rc-stat"><span class="rc-micro">' + label + '</span>'
+        + '<span class="rc-stat-val"><span class="rc-stat-num rc-num">' + fmt(v, dec) + '</span>'
+        + (n(v) !== null ? '<span class="rc-stat-unit">' + unit + '</span>' : '') + '</span>'
+        + '<span class="rc-stat-sub rc-num">' + (a === null ? 'TB —' : 'TB ' + have.length + ' đêm ' + fmt(a, dec)) + '</span></div>';
+    }
+    return '<section class="rc-sec"><div class="rc-stats">'
+      + one('HRV', get(r,'recharge','hrv'), 'ms', function(x){ return get(x,'recharge','hrv'); })
+      + one('Nhịp tim nghỉ', get(r,'recharge','rhr'), 'bpm', function(x){ return get(x,'recharge','rhr'); })
+      + one('Nhịp thở', get(r,'recharge','breathing'), 'lần/phút', function(x){ return get(x,'recharge','breathing'); }, 1)
+      + '</div></section>';
+  }
+
+  function trend(data, newest){
+    var map = {}; data.forEach(function(r){ if (r && r.date) map[r.date.slice(0,10)] = r; });
+    var days = [];
+    for (var i = 13; i >= 0; i--) { var d = new Date(newest.getTime() - i * 864e5); days.push({ d:d, r:map[dKey(d)] || null }); }
+    var goal = n(get(data[0],'sleep','goal'));
+    var maxT = Math.max.apply(null, days.map(function(x){ return n(get(x.r,'sleep','total')) || 0; }).concat([goal ? goal * 1.1 : 0, 3600]));
+    var cols = days.map(function(x){
+      var t = n(get(x.r,'sleep','total'));
+      if (t === null) return '<span class="rc-col rc-col-empty" title="' + ddmm(x.d) + ': —"></span>';
+      var sc = get(x.r,'sleep','score');
+      return '<span class="rc-col" style="height:' + (t / maxT * 100).toFixed(1) + '%;background:' + state(sc).c + '" title="'
+        + ddmm(x.d) + ': ' + dur(t) + ' · Sleep score ' + fmt(sc) + '"></span>';
+    }).join('');
+    var labels = days.map(function(x, i){ return '<span class="rc-num' + (i === 13 ? ' rc-today' : '') + '">' + x.d.getUTCDate() + '</span>'; }).join('');
+    var goalLine = goal ? '<div class="rc-goal" style="bottom:' + (goal / maxT * 100).toFixed(1) + '%"><span>mục tiêu ' + dur(goal) + '</span></div>' : '';
+    return '<section class="rc-sec"><div class="rc-sec-head"><h2 class="rc-h2">Xu hướng</h2><span class="rc-micro">14 đêm</span></div>'
+      + '<div class="rc-strip"><div class="rc-cols">' + cols + '</div>' + goalLine + '</div>'
+      + '<div class="rc-days">' + labels + '</div>'
+      + '<div class="rc-key"><span>Chiều cao = giờ ngủ · màu = Sleep score</span>'
+      + '<span><i style="background:var(--rc-green)"></i>≥ 80</span>'
+      + '<span><i style="background:var(--rc-amber)"></i>65–79</span>'
+      + '<span><i style="background:var(--rc-red)"></i>&lt; 65</span></div></section>';
+  }
+
+  function table(data){
+    var rows = data.map(function(r){
+      var d = parseD(r.date), sc = get(r,'sleep','score');
+      var t = n(get(r,'sleep','total')), g = n(get(r,'sleep','goal'));
+      return '<tr><td><span class="rc-dday rc-num">' + ddmm(d) + '</span><span class="rc-dwk">' + (d ? WK_S[d.getUTCDay()] : '') + '</span></td>'
+        + '<td class="rc-num">' + dur(t) + '</td>'
+        + '<td class="rc-num">' + (t !== null && g ? Math.round(t / g * 100) + '%' : '—') + '</td>'
+        + '<td class="rc-num">' + dur(get(r,'sleep','deep')) + '</td>'
+        + '<td class="rc-num">' + dur(get(r,'sleep','rem')) + '</td>'
+        + '<td><span class="rc-sc rc-num"><i style="background:' + state(sc).c + '"></i>' + fmt(sc) + '</span></td>'
+        + '<td class="rc-num">' + fmt(get(r,'recharge','hrv')) + '</td>'
+        + '<td class="rc-num">' + fmt(get(r,'recharge','rhr')) + '</td></tr>';
+    }).join('');
+    return '<section class="rc-sec"><div class="rc-sec-head"><h2 class="rc-h2">Theo ngày</h2></div>'
+      + '<div class="rc-card"><div class="rc-scroll"><table class="rc-table"><thead><tr>'
+      + '<th>Ngày</th><th>Ngủ</th><th>% mục tiêu</th><th>Sâu</th><th>REM</th><th>Sleep score</th><th>HRV</th><th>Nhịp tim nghỉ</th>'
+      + '</tr></thead><tbody>' + rows + '</tbody></table></div></div></section>';
+  }
+
+  function empty(){
+    return '<div class="rc-empty"><div class="rc-empty-ring">—</div>'
+      + '<p class="rc-empty-t">Chưa có dữ liệu giấc ngủ</p>'
+      + '<p class="rc-empty-s">Đeo Polar khi ngủ và đồng bộ vào buổi sáng. Sleep score, HRV và nhịp tim nghỉ sẽ hiện ở đây sau đêm đầu tiên.</p></div>';
+  }
+
+  function render(root, data){
+    data = (Array.isArray(data) ? data : []).filter(function(r){ return r && parseD(r.date); });
+    if (!data.length) { root.innerHTML = header(null) + empty(); return; }
+    var last = data[0], newest = parseD(last.date);
+    var win = data.filter(function(r){ return (newest - parseD(r.date)) / 864e5 < 14; });
+    root.innerHTML = header(last) + hero(last) + debt(win) + perf(last) + stages(last) + stats(last, win) + trend(data, newest) + table(data);
+  }
+
+  // Host app dựng sẵn #recovery-body; bản standalone dùng #rc-root.
+  window.rcRender = function(data, root){
+    root = root || document.getElementById('recovery-body') || document.getElementById('rc-root');
+    if (root) render(root, data);
+  };
+})();
 
 // ── NAV ────────────────────────────────────────────────
 function centerActiveNavTab() {
@@ -12439,53 +12548,127 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .cd-ex-l i.up{color:#7ED9A0;} .cd-ex-l i.down{color:#EE5A4F;}
 .cd-none{font-size:10px;color:#3D3833;}
 .cd-spark{width:46px;height:16px;display:block;}
-/* ── RECOVERY tab ── */
+/* ── RECOVERY tab — thiết kế theo ngôn ngữ WHOOP ── */
 #recovery-page{display:none;}
 #recovery-page.active{display:block;}
-.rc-head{padding:14px 0 10px;border-bottom:1px solid #1A1816;margin-bottom:14px;}
-.rc-h1{font-size:15px;font-weight:800;color:#fff;letter-spacing:.3px;}
-.rc-h2{font-size:11px;color:rgba(255,255,255,.45);margin-top:3px;}
-.rc-tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px;}
-.rc-tile{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.10);
-  border-radius:10px;padding:11px 10px;text-align:center;}
-.rc-tile-v{font-size:21px;font-weight:800;color:#fff;line-height:1.15;}
-.rc-tile-l{font-size:10px;text-transform:uppercase;letter-spacing:.7px;
-  color:rgba(255,255,255,.50);margin-top:4px;}
-.rc-tile-s{font-size:10px;color:rgba(255,255,255,.32);margin-top:2px;}
-.rc-tile.rc-good .rc-tile-v{color:#7ED9A0;}
-.rc-tile.rc-mid  .rc-tile-v{color:#E6B34A;}
-.rc-tile.rc-bad  .rc-tile-v{color:#EE5A4F;}
-.rc-alert{background:rgba(238,90,79,.10);border:1px solid rgba(238,90,79,.32);
-  border-radius:10px;padding:11px 13px;font-size:12.5px;line-height:1.55;
-  color:#F2A9A3;margin-bottom:14px;}
-.rc-card{background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.09);
-  border-radius:12px;padding:13px;margin-bottom:12px;}
-.rc-card-t{font-size:10px;text-transform:uppercase;letter-spacing:1px;
-  color:rgba(255,255,255,.42);font-weight:700;margin-bottom:10px;}
-.rc-trend-row{display:flex;align-items:center;gap:10px;padding:7px 0;
-  border-bottom:1px solid rgba(255,255,255,.05);}
-.rc-trend-row:last-child{border-bottom:none;}
-.rc-trend-l{flex:0 0 108px;font-size:12px;color:rgba(255,255,255,.72);}
-.rc-trend-v{flex:0 0 66px;text-align:right;font-size:13px;font-weight:700;color:#fff;}
-.rc-trend-n{font-size:10px;color:rgba(255,255,255,.32);}
-.rc-table-wrap{overflow-x:auto;}
-.rc-table{width:100%;border-collapse:collapse;font-size:12px;}
-.rc-table th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.6px;
-  color:rgba(255,255,255,.38);font-weight:700;padding:5px 7px;
-  border-bottom:1px solid rgba(255,255,255,.10);white-space:nowrap;}
-.rc-table td{padding:6px 7px;color:rgba(255,255,255,.80);
-  border-bottom:1px solid rgba(255,255,255,.045);white-space:nowrap;}
-.rc-table td.rc-d{color:#fff;font-weight:700;}
-.rc-table td.rc-good{color:#7ED9A0;font-weight:700;}
-.rc-table td.rc-mid{color:#E6B34A;font-weight:700;}
-.rc-table td.rc-bad{color:#EE5A4F;font-weight:700;}
-.rc-note{font-size:11.5px;color:rgba(255,255,255,.40);line-height:1.55;padding:2px 2px 10px;}
-.rc-empty{padding:28px 14px;text-align:center;color:rgba(255,255,255,.42);
-  font-size:12.5px;line-height:1.6;}
-@media(max-width:700px){
-  .rc-tiles{grid-template-columns:repeat(2,1fr);}
-  .rc-trend-l{flex:0 0 84px;}
+.rc-root{
+  --rc-bg:var(--bg-1,#0d0d0d);
+  --rc-bg-2:var(--bg-2,#111111);
+  --rc-txt:var(--txt,#ffffff);
+  --rc-muted:var(--txt-muted,rgba(255,255,255,0.55));
+  --rc-surface:var(--surface,rgba(255,255,255,0.06));
+  --rc-line:var(--line,rgba(255,255,255,0.12));
+  --rc-green:#7ED9A0;--rc-amber:#E6B34A;--rc-red:#EE5A4F;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","Helvetica Neue",Inter,sans-serif;
+  color:var(--rc-txt);background:var(--rc-bg);
+  max-width:560px;margin:0 auto;padding:24px 20px 56px;
+  -webkit-font-smoothing:antialiased;overflow-x:hidden;
 }
+.rc-root *{box-sizing:border-box;}
+.rc-num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;}
+.rc-micro{font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--rc-muted);}
+
+/* header */
+.rc-head{display:flex;flex-direction:column;gap:6px;padding-bottom:6px;}
+.rc-title{margin:0;font-size:28px;font-weight:700;letter-spacing:-.02em;line-height:1.1;}
+.rc-head-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--rc-muted);}
+.rc-sep{width:3px;height:3px;border-radius:50%;background:var(--rc-muted);}
+
+/* hero */
+.rc-hero{display:flex;flex-direction:column;align-items:center;gap:22px;padding:26px 0 30px;}
+.rc-ring{position:relative;width:236px;height:236px;max-width:72vw;max-height:72vw;}
+.rc-ring svg{display:block;width:100%;height:100%;transform:rotate(-90deg);}
+.rc-ring-in{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;}
+.rc-score{font-size:88px;font-weight:700;letter-spacing:-.055em;line-height:.9;}
+.rc-state{font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;}
+.rc-hero-sub{display:flex;align-items:stretch;justify-content:center;gap:22px;}
+.rc-hero-item{display:flex;flex-direction:column;align-items:center;gap:5px;}
+.rc-hero-val{font-size:24px;font-weight:600;letter-spacing:-.02em;line-height:1;}
+.rc-hero-val-sm{font-size:17px;font-weight:600;line-height:1.4;}
+.rc-vr{width:1px;background:var(--rc-line);}
+
+/* sustained deficit */
+.rc-debt{border-radius:18px;padding:20px 18px 18px;border:1px solid rgba(238,90,79,.38);background:rgba(238,90,79,.08);-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);margin-bottom:6px;}
+.rc-debt-top{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+.rc-debt-k{color:var(--rc-red);}
+.rc-debt-main{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-top:12px;}
+.rc-debt-num{font-size:52px;font-weight:700;letter-spacing:-.05em;line-height:.95;color:var(--rc-red);}
+.rc-debt-unit{font-size:14px;font-weight:500;color:var(--rc-txt);}
+.rc-debt-bar{position:relative;height:10px;border-radius:6px;background:rgba(238,90,79,.32);overflow:hidden;margin-top:18px;}
+.rc-debt-bar span{position:absolute;left:0;top:0;bottom:0;border-radius:6px;background:rgba(255,255,255,.88);}
+.rc-debt-legend{display:flex;justify-content:space-between;gap:10px;margin-top:8px;font-size:12px;color:var(--rc-muted);}
+.rc-debt-note{margin:14px 0 0;font-size:14px;line-height:1.55;color:var(--rc-txt);}
+
+/* sections */
+.rc-sec{padding:26px 0;border-top:1px solid var(--rc-line);}
+.rc-sec:first-of-type{border-top:0;}
+.rc-sec-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:16px;}
+.rc-h2{margin:0;font-size:17px;font-weight:600;letter-spacing:-.01em;}
+.rc-sec-val{font-size:28px;font-weight:700;letter-spacing:-.03em;line-height:1;}
+.rc-note{margin:12px 0 0;font-size:13.5px;line-height:1.5;color:var(--rc-muted);}
+
+/* performance bar */
+.rc-bar{position:relative;height:10px;border-radius:6px;background:var(--rc-surface);border:1px solid var(--rc-line);overflow:hidden;}
+.rc-bar span{position:absolute;left:0;top:0;bottom:0;background:var(--rc-txt);border-radius:6px;}
+.rc-bar-legend{display:flex;justify-content:space-between;gap:10px;margin-top:8px;font-size:12px;color:var(--rc-muted);}
+
+/* stage bar */
+.rc-stages{display:flex;gap:2px;height:14px;border-radius:7px;overflow:hidden;}
+.rc-stages span{display:block;height:100%;}
+.rc-sw-deep{background:#ffffff;}
+.rc-sw-rem{background:rgba(255,255,255,.6);}
+.rc-sw-light{background:rgba(255,255,255,.28);}
+.rc-sw-awake{background:repeating-linear-gradient(135deg,rgba(255,255,255,.22) 0 3px,rgba(255,255,255,.06) 3px 6px);}
+.rc-legend{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px;margin-top:16px;}
+.rc-leg{display:flex;align-items:center;gap:9px;min-width:0;}
+.rc-leg-sw{flex:none;width:10px;height:10px;border-radius:3px;}
+.rc-leg-name{flex:1;font-size:13.5px;}
+.rc-leg-val{font-size:13.5px;font-weight:600;}
+.rc-leg-pct{width:36px;text-align:right;font-size:12px;color:var(--rc-muted);}
+.rc-meta{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:16px;font-size:12.5px;color:var(--rc-muted);}
+.rc-meta b{color:var(--rc-txt);font-weight:600;}
+
+/* supporting stats */
+.rc-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));}
+.rc-stat{display:flex;flex-direction:column;gap:8px;min-width:0;padding:0 12px;}
+.rc-stat:first-child{padding-left:0;}
+.rc-stat + .rc-stat{border-left:1px solid var(--rc-line);}
+.rc-stat-val{display:flex;align-items:baseline;gap:4px;flex-wrap:wrap;}
+.rc-stat-num{font-size:30px;font-weight:700;letter-spacing:-.03em;line-height:1;}
+.rc-stat-unit{font-size:12px;color:var(--rc-muted);}
+.rc-stat-sub{font-size:12px;color:var(--rc-muted);}
+
+/* trend strip */
+.rc-strip{position:relative;height:132px;margin-top:6px;}
+.rc-cols{position:absolute;inset:0;display:grid;grid-template-columns:repeat(14,minmax(0,1fr));gap:5px;align-items:end;}
+.rc-col{display:block;width:100%;border-radius:4px 4px 1px 1px;min-height:3px;cursor:pointer;}
+.rc-col-empty{height:3px;background:var(--rc-line);border-radius:1px;cursor:default;}
+.rc-goal{position:absolute;left:0;right:0;border-top:1px dashed rgba(255,255,255,.5);pointer-events:none;}
+.rc-goal span{position:absolute;right:0;bottom:4px;font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--rc-txt);background:var(--rc-bg);padding-left:6px;}
+.rc-days{display:grid;grid-template-columns:repeat(14,minmax(0,1fr));gap:5px;margin-top:8px;}
+.rc-days span{text-align:center;font-size:11px;color:var(--rc-muted);}
+.rc-days .rc-today{color:var(--rc-txt);font-weight:700;}
+.rc-key{display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:14px;font-size:12px;color:var(--rc-muted);}
+.rc-key i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;vertical-align:0;}
+
+/* table */
+.rc-card{border-radius:18px;border:1px solid var(--rc-line);background:var(--rc-surface);-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);}
+.rc-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+.rc-table{width:100%;min-width:560px;border-collapse:collapse;font-size:13.5px;}
+.rc-table th{padding:12px 12px 10px;text-align:right;font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--rc-muted);border-bottom:1px solid var(--rc-line);white-space:nowrap;}
+.rc-table td{padding:12px;text-align:right;border-bottom:1px solid var(--rc-line);white-space:nowrap;}
+.rc-table tr:last-child td{border-bottom:0;}
+.rc-table th:first-child,.rc-table td:first-child{text-align:left;}
+.rc-dday{font-weight:600;}
+.rc-dwk{margin-left:6px;color:var(--rc-muted);font-size:12px;}
+.rc-sc{display:inline-flex;align-items:center;gap:7px;font-weight:700;}
+.rc-sc i{width:7px;height:7px;border-radius:50%;}
+
+/* empty */
+.rc-empty{display:flex;flex-direction:column;align-items:center;gap:12px;padding:56px 18px;text-align:center;}
+.rc-empty-ring{width:120px;height:120px;border-radius:50%;border:10px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:center;font-size:32px;font-weight:700;color:var(--rc-muted);}
+.rc-empty-t{margin:8px 0 0;font-size:18px;font-weight:600;}
+.rc-empty-s{margin:0;max-width:300px;font-size:14px;line-height:1.55;color:var(--rc-muted);}
 .cd-empty{grid-column:1/-1;text-align:center;font-size:13px;color:#948D83;background:#161412;
   border:1px dashed #3D3833;border-radius:14px;padding:30px;}
 .cd-empty b{color:#D98E3C;}
