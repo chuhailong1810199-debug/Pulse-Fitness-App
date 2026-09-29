@@ -5259,10 +5259,10 @@ function _rcScoreCls(v) {
   return v >= 80 ? 'rc-good' : v >= 65 ? 'rc-mid' : 'rc-bad';
 }
 
-// ── Ba vòng: Giấc ngủ · Sẵn sàng · Tải ──────────────────────────────────
-// Tên đặt bằng tiếng Việt chứ KHÔNG dùng "Recovery"/"Strain": công thức khác
-// WHOOP và thiếu nhiệt độ da lẫn SpO2, gọi trùng tên sẽ khiến đem so với
-// người đeo WHOOP rồi kết luận sai.
+// ── Ba vòng: Sleep · Recovery · Strain ──────────────────────────────────
+// Coach chọn dùng đúng tên của WHOOP. Công thức KHÔNG giống WHOOP và thiếu
+// nhiệt độ da lẫn SpO2, nên dòng chú thích dưới ba vòng ghi rõ đầu vào —
+// đó là thứ giữ cho con số không bị đem so thẳng với người đeo WHOOP.
 const RC_BASE_MIN = 14;   // số đêm tối thiểu để nền cá nhân đáng tin
 
 /** Điểm sẵn sàng 0-100: HRV 50%, nhịp tim nghỉ 25%, giấc ngủ 25%. */
@@ -5325,19 +5325,25 @@ function _rcMountRings(wrap) {
   box.id = 'rc-rings';
   box.className = 'rc-rings';
   box.innerHTML =
-      _rcRing('Giấc ngủ', sc, '', scCol, sc == null ? 'chưa có' : _rcHM(sl.total), sc == null ? 0 : sc / 100)
-    + _rcRing('Sẵn sàng', rd ? rd.score : null, '%', rdCol,
+      _rcRing('Sleep', sc, '', scCol, sc == null ? 'chưa có' : _rcHM(sl.total), sc == null ? 0 : sc / 100)
+    + _rcRing('Recovery', rd ? rd.score : null, '%', rdCol,
         rd ? (rd.thin ? 'nền ' + rd.nights + '/' + RC_BASE_MIN + ' đêm' : 'nền ' + rd.nights + ' đêm')
            : 'cần ≥4 đêm', rd ? rd.score / 100 : 0)
-    + _rcRing('Tải', st, '', '#B9AAFF',
+    + _rcRing('Strain', st, '', '#B9AAFF',
         ld ? _rcHM((ld.zoneMin || []).reduce((a, b) => a + b, 0) * 60) + ' vùng cao' : 'chưa có nhịp tim ngày',
         st == null ? 0 : st / 21);
   head.insertAdjacentElement('afterend', box);
 
+  const src = document.createElement('p');
+  src.className = 'rc-rings-src';
+  src.textContent = 'Recovery từ HRV, nhịp tim nghỉ và giấc ngủ · Strain từ nhịp tim cả ngày. '
+    + 'Không có nhiệt độ da và SpO₂ nên không so thẳng được với WHOOP.';
+  box.insertAdjacentElement('afterend', src);
+
   if (rd && rd.thin) {
     const note = document.createElement('p');
     note.className = 'rc-rings-note';
-    note.textContent = 'Sẵn sàng so hôm nay với nền ' + rd.nights + ' đêm của chính bạn. '
+    note.textContent = 'Recovery so hôm nay với nền ' + rd.nights + ' đêm của chính bạn. '
       + 'Cần khoảng ' + RC_BASE_MIN + ' đêm nền mới đủ chắc — trước đó hãy đọc nó như một gợi ý, không phải kết luận.';
     box.insertAdjacentElement('afterend', note);
   }
@@ -13101,6 +13107,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .rc-r-l{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--rc-muted);}
 .rc-r-s{font-size:10.5px;color:rgba(255,255,255,.33);text-align:center;line-height:1.35;}
 .rc-rings-note{margin:10px 0 0;font-size:11.5px;line-height:1.55;color:var(--rc-muted);}
+.rc-rings-src{margin:10px 0 0;font-size:10.5px;line-height:1.5;color:rgba(255,255,255,.30);}
 @media(max-width:380px){ .rc-r-v{font-size:18px;} .rc-r-l{font-size:10px;letter-spacing:.06em;} }
 /* chỉ số giấc ngủ + cột tuần */
 .rc-sleepm{margin:4px 0 6px;}
