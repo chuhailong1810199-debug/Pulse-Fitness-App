@@ -2480,7 +2480,7 @@ function buildBriefPrompt(ctx) {
     const l = n.load || {};
     return `${n.date} | ngủ ${_hm(s.total)} | sâu ${_hm(s.deep)} | REM ${_hm(s.rem)} | thức ${_hm(s.interruptions)}`
       + ` | score ${s.score ?? "—"} (thời lượng ${_r(s.dur)}, bền giấc ${_r(s.solid)}, tái tạo ${_r(s.regen)})`
-      + ` | HRV ${r.hrv ?? "—"} | RHR ${r.rhr ?? "—"} | nhịp thở ${r.breathing ?? "—"}`
+      + ` | HRV ${r.hrv ?? "—"} | nhịp tim ngủ TB ${r.rhr ?? "—"} | nhịp thở ${r.breathing ?? "—"}`
       + ` | Nightly Recharge ${r.status ?? "—"}/6 | ANS charge ${r.ansCharge ?? "—"}`
       + ` | tải tập ${l.cardioLoad ?? 0}${l.sessions ? ` (${l.sessions} buổi)` : ""}`
       + ` | lên giường ${(s.start || "").slice(11, 16) || "—"}`;
@@ -2517,7 +2517,7 @@ DỮ LIỆU GIẤC NGỦ — mới nhất trước, ${nights.length} đêm
 ${rows}
 
 TRUNG BÌNH ${prev.length} ĐÊM TRƯỚC ĐÓ (không tính đêm gần nhất)
-ngủ ${_hm(avg((n) => (n.sleep || {}).total))} | score ${avg((n) => (n.sleep || {}).score) ?? "—"} | HRV ${avg((n) => (n.recharge || {}).hrv) ?? "—"} | RHR ${avg((n) => (n.recharge || {}).rhr) ?? "—"}
+ngủ ${_hm(avg((n) => (n.sleep || {}).total))} | score ${avg((n) => (n.sleep || {}).score) ?? "—"} | HRV ${avg((n) => (n.recharge || {}).hrv) ?? "—"} | nhịp tim ngủ TB ${avg((n) => (n.recharge || {}).rhr) ?? "—"}
 mục tiêu ngủ khách tự đặt: ${_hm((last.sleep || {}).goal)}
 
 GIÁO ÁN HIỆN TẠI
@@ -2532,6 +2532,8 @@ ${actTxt}
 THANG ĐO — đọc cho đúng, đừng quy đổi lẫn nhau
 Nightly Recharge 1..6 của Polar: 1 rất kém, 2 kém, 3 suy giảm, 4 ổn, 5 tốt, 6 rất tốt.
 ANS charge -10..+10, quanh 0 là mức thường ngày của chính khách.
+"Nhịp tim ngủ TB" là nhịp tim TRUNG BÌNH khoảng 4 tiếng đầu giấc ngủ, KHÔNG phải
+mức thấp nhất trong đêm. Đừng gọi nó là nhịp tim nghỉ thấp nhất.
 sleep score 0-100, gồm ba điểm thành phần thời lượng / bền giấc / tái tạo, cũng 0-100.
 Tải tập là cardio load của Polar Training Load Pro, KHÔNG có trần cố định và
 KHÔNG phải thang 0-21 của WHOOP — chỉ so ngày này với ngày khác của cùng khách.

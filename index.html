@@ -5314,7 +5314,10 @@ function renderActive() {
   wrap.innerHTML = html;
 }
 
-// ── RECOVERY — dữ liệu ngủ / HRV / nhịp tim nghỉ kéo từ Polar AccessLink ──
+// ── RECOVERY — dữ liệu ngủ / HRV / nhịp tim khi ngủ kéo từ Polar AccessLink ──
+// Lưu ý tên gọi: trường `recharge.rhr` là `heart_rate_avg` của Polar, tức nhịp
+// tim TRUNG BÌNH ~4 tiếng đầu giấc ngủ — không phải đáy trong đêm. Đáy thật nằm
+// trong `heart_rate_samples` của endpoint sleep, hiện chưa lấy.
 // Doc nằm ở clients/{id}/recovery/{YYYY-MM-DD}, mỗi ngày một bản tóm tắt.
 // Tab chỉ hiện khi khách đó THỰC SỰ có dữ liệu — không hard-code theo tên
 // khách, nên client nào nối Polar sau này cũng tự có tab mà không phải sửa code.
@@ -5848,7 +5851,7 @@ async function polarSyncNow() {
     }
     return '<section class="rc-sec"><div class="rc-stats">'
       + one('HRV', get(r,'recharge','hrv'), 'ms', function(x){ return get(x,'recharge','hrv'); })
-      + one('Nhịp tim nghỉ', get(r,'recharge','rhr'), 'bpm', function(x){ return get(x,'recharge','rhr'); })
+      + one('Nhịp tim ngủ (TB)', get(r,'recharge','rhr'), 'bpm', function(x){ return get(x,'recharge','rhr'); })
       + one('Nhịp thở', get(r,'recharge','breathing'), 'lần/phút', function(x){ return get(x,'recharge','breathing'); }, 1)
       + '</div></section>';
   }
@@ -5892,14 +5895,14 @@ async function polarSyncNow() {
     }).join('');
     return '<section class="rc-sec"><div class="rc-sec-head"><h2 class="rc-h2">Theo ngày</h2></div>'
       + '<div class="rc-card"><div class="rc-scroll"><table class="rc-table"><thead><tr>'
-      + '<th>Ngày</th><th>Ngủ</th><th>% mục tiêu</th><th>Sâu</th><th>REM</th><th>Sleep score</th><th>HRV</th><th>Nhịp tim nghỉ</th>'
+      + '<th>Ngày</th><th>Ngủ</th><th>% mục tiêu</th><th>Sâu</th><th>REM</th><th>Sleep score</th><th>HRV</th><th>Nhịp tim ngủ (TB)</th>'
       + '</tr></thead><tbody>' + rows + '</tbody></table></div></div></section>';
   }
 
   function empty(){
     return '<div class="rc-empty"><div class="rc-empty-ring">—</div>'
       + '<p class="rc-empty-t">Chưa có dữ liệu giấc ngủ</p>'
-      + '<p class="rc-empty-s">Đeo Polar khi ngủ và đồng bộ vào buổi sáng. Sleep score, HRV và nhịp tim nghỉ sẽ hiện ở đây sau đêm đầu tiên.</p></div>';
+      + '<p class="rc-empty-s">Đeo Polar khi ngủ và đồng bộ vào buổi sáng. Sleep score, HRV và nhịp tim khi ngủ sẽ hiện ở đây sau đêm đầu tiên.</p></div>';
   }
 
   function render(root, data){
