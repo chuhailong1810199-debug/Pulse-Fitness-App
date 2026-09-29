@@ -2222,6 +2222,13 @@ function buildRecoveryDocs(nightly, sleep) {
       hrv:        x.heart_rate_variability_avg ?? null,
       breathing:  x.breathing_rate_avg ?? null,
       beatToBeat: x.beat_to_beat_avg ?? null,
+      // Đánh giá của chính Polar. Thang chính thức: nightly recharge 1..6
+      // (very poor → very good), ans_charge -10..+10 quanh mức thường ngày,
+      // ans status 1..5 (much below → much above usual). Polar cần vài đêm
+      // nền mới điền, nên hai đêm đầu thường trống — để null, KHÔNG đoán.
+      status:     x.nightly_recharge_status ?? null,
+      ansCharge:  x.ans_charge ?? null,
+      ansStatus:  x.ans_charge_status ?? null,
     };
   }
   for (const x of polarArray(sleep, "nights", "sleeps")) {
@@ -2239,6 +2246,14 @@ function buildRecoveryDocs(nightly, sleep) {
       continuity: x.continuity ?? null,
       goal: x.sleep_goal ?? null,
       interruptions: x.total_interruption_duration ?? null,
+      // Ba điểm thành phần Polar cộng lại thành sleep_score. Dùng thẳng số
+      // của Polar thay vì tự tính lại từ tổng giờ ngủ.
+      dur:   x.group_duration_score ?? null,
+      solid: x.group_solidity_score ?? null,
+      regen: x.group_regeneration_score ?? null,
+      cycles: x.sleep_cycles ?? null,
+      shortInt: x.short_interruption_duration ?? null,
+      longInt:  x.long_interruption_duration ?? null,
       start: x.sleep_start_time ?? null,
       end:   x.sleep_end_time ?? null,
     };
@@ -2248,52 +2263,25 @@ function buildRecoveryDocs(nightly, sleep) {
 
 /** Lõi dùng chung cho cả lịch lẫn nút đồng bộ tay. */
 /**
- * Tải ngày từ nhịp tim liên tục. Polar lấy mẫu ~5 phút/lần, đủ để ước lượng
- * tải cả ngày nhưng KHÔNG đủ mịn cho những đợt gắng sức ngắn — nên đây là ước
- * lượng, không phải đo. Dùng công thức Karvonen (%dự trữ nhịp tim) rồi cộng
- * dồn kiểu TRIMP, cuối cùng ép về thang 0-21 bằng hàm bão hoà: càng lên cao
- * càng khó tăng thêm, giống cách thang này vẫn được dùng.
+ * Tải tim mạch của một ngày = tổng cardio-load Polar tự tính cho từng buổi
+ * tập (Training Load Pro). Trước đây chỗ này là công thức TRIMP tự viết, cần
+ * nhịp tim tối đa mà AccessLink không cung cấp — nên phải đoán, và số đoán đó
+ * làm điểm đổi theo từng lần sync. Polar đã tính sẵn, dùng thẳng.
+ *
+ * Chỉ buổi tập có nhịp tim mới có cardio-load; buổi không có trả 0, bỏ qua.
  */
-function computeDayLoad(samples, rhr, hrMax) {
-  if (!Array.isArray(samples) || samples.length < 4) return null;
-  const RHR = rhr || 50;
-  const MAX = hrMax || 190;
-  const span = Math.max(1, MAX - RHR);
-  // khoảng cách trung bình giữa hai mẫu, chặn ở 10 phút để một khoảng trống
-  // dài (tháo vòng ra) không bị tính thành tải
-  const mins = [];
-  for (let i = 1; i < samples.length; i++) {
-    const a = _secOfDay(samples[i - 1].sample_time), b = _secOfDay(samples[i].sample_time);
-    if (a != null && b != null && b > a) mins.push(Math.min((b - a) / 60, 10));
+function dayCardioLoad(exercises) {
+  let load = 0, sessions = 0, sec = 0;
+  for (const x of exercises) {
+    const v = Number(((x.training_load_pro || {})["cardio-load"]));
+    if (!isFinite(v) || v <= 0) continue;
+    load += v; sessions++; sec += _isoDur(x.duration) || 0;
   }
-  const step = mins.length ? mins.reduce((x, y) => x + y, 0) / mins.length : 5;
+  return sessions
+    ? { cardioLoad: Math.round(load * 10) / 10, sessions, sec, source: "polar-training-load-pro" }
+    : null;
+}
 
-  const zoneMin = [0, 0, 0, 0, 0];   // z1..z5
-  let trimp = 0, peak = 0, sum = 0, n = 0;
-  for (const s of samples) {
-    const hr = Number(s.heart_rate);
-    if (!isFinite(hr) || hr <= 0) continue;
-    sum += hr; n++; if (hr > peak) peak = hr;
-    const i = (hr - RHR) / span;
-    let z = 0;
-    if (i >= 0.9) z = 5; else if (i >= 0.8) z = 4; else if (i >= 0.7) z = 3;
-    else if (i >= 0.6) z = 2; else if (i >= 0.5) z = 1;
-    if (z > 0) { zoneMin[z - 1] += step; trimp += step * z; }
-  }
-  const strain = Math.round(21 * (1 - Math.exp(-trimp / 120)) * 10) / 10;
-  return {
-    strain,
-    trimp: Math.round(trimp),
-    zoneMin: zoneMin.map((m) => Math.round(m)),
-    hrAvg: n ? Math.round(sum / n) : null,
-    hrMax: peak || null,
-    samples: n,
-  };
-}
-function _secOfDay(t) {
-  const m = /^(\d{2}):(\d{2}):(\d{2})/.exec(String(t || ""));
-  return m ? (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) : null;
-}
 
 /** ISO 8601 duration → giây. Polar trả cả "PT2H44M" lẫn "PT2792.985S". */
 function _isoDur(v) {
@@ -2366,28 +2354,22 @@ async function syncPolarFor(clientId, token) {
   const docs = buildRecoveryDocs(nightly, sleep);
   if (!docs.length) return { clientId, written: 0, dates: [] };
 
-  // Nhịp tim liên tục → tải ngày. Lấy mẫu thô về để TÍNH, nhưng chỉ lưu con số
-  // tổng hợp: mỗi ngày hàng trăm điểm, phình doc cho thứ màn hình không đọc tới.
+  // Tải tim mạch theo ngày, lấy từ Training Load Pro của Polar.
+  let exByDate = {};
   try {
-    const from = docs[0].date, to = docs[docs.length - 1].date;
-    const chr = await polarGet(`/v3/users/continuous-heart-rate?from=${from}&to=${to}`, token);
-    const byDate = {};
-    for (const d of polarArray(chr, "heart_rates", "data")) {
-      if (d && d.date) byDate[d.date] = d.heart_rate_samples || [];
+    const exes = polarArray(await polarGet("/v3/exercises", token), "exercises", "data");
+    for (const x of exes) {
+      if (!x || !x.start_time) continue;
+      const d = String(x.start_time).slice(0, 10);
+      (exByDate[d] = exByDate[d] || []).push(x);
     }
-    // Nhịp tim tối đa quan sát được trong cả kỳ — cá nhân hơn công thức 220 trừ tuổi.
-    let seenMax = 0;
-    for (const k of Object.keys(byDate)) {
-      for (const s of byDate[k]) { const v = Number(s.heart_rate); if (v > seenMax) seenMax = v; }
-    }
-    const hrMax = Math.max(seenMax, 185);
     for (const doc of docs) {
-      const load = computeDayLoad(byDate[doc.date], (doc.recharge || {}).rhr, hrMax);
+      const load = dayCardioLoad(exByDate[doc.date] || []);
       if (load) doc.load = load;
     }
   } catch (e) {
-    // Không có nhịp tim liên tục thì vẫn ghi phần giấc ngủ — đừng để một
-    // endpoint hỏng làm mất luôn dữ liệu đã lấy được.
+    // Hỏng phần tải thì vẫn ghi phần giấc ngủ — đừng để một endpoint hỏng
+    // làm mất luôn dữ liệu đã lấy được.
     console.warn(`[polar] ${clientId}: bỏ qua tải ngày — ${e.message}`);
   }
 
@@ -2479,11 +2461,13 @@ const BRIEF_SCHEMA = {
   required: ["status", "headline", "sleep", "today", "sessionKey", "sessionWhy", "advice", "caveat"],
 };
 
+const _r = (v) => (typeof v === "number" ? Math.round(v) : "—");
+
 const _hm = (sec) => (sec == null ? "—"
   : Math.floor(sec / 3600) + "h" + String(Math.round((sec % 3600) / 60)).padStart(2, "0"));
 
 function buildBriefPrompt(ctx) {
-  const { client, nights, program, workouts } = ctx;
+  const { client, nights, program, workouts, activity } = ctx;
   const last = nights[0];
   const prev = nights.slice(1);
   const avg = (f) => {
@@ -2493,9 +2477,13 @@ function buildBriefPrompt(ctx) {
 
   const rows = nights.map((n) => {
     const s = n.sleep || {}, r = n.recharge || {};
+    const l = n.load || {};
     return `${n.date} | ngủ ${_hm(s.total)} | sâu ${_hm(s.deep)} | REM ${_hm(s.rem)} | thức ${_hm(s.interruptions)}`
-      + ` | score ${s.score ?? "—"} | liên tục ${s.continuity ?? "—"}/5 | HRV ${r.hrv ?? "—"} | RHR ${r.rhr ?? "—"}`
-      + ` | nhịp thở ${r.breathing ?? "—"} | lên giường ${(s.start || "").slice(11, 16) || "—"}`;
+      + ` | score ${s.score ?? "—"} (thời lượng ${_r(s.dur)}, bền giấc ${_r(s.solid)}, tái tạo ${_r(s.regen)})`
+      + ` | HRV ${r.hrv ?? "—"} | RHR ${r.rhr ?? "—"} | nhịp thở ${r.breathing ?? "—"}`
+      + ` | Nightly Recharge ${r.status ?? "—"}/6 | ANS charge ${r.ansCharge ?? "—"}`
+      + ` | tải tập ${l.cardioLoad ?? 0}${l.sessions ? ` (${l.sessions} buổi)` : ""}`
+      + ` | lên giường ${(s.start || "").slice(11, 16) || "—"}`;
   }).join("\n");
 
   const days = Object.keys(program || {}).sort();
@@ -2511,6 +2499,12 @@ function buildBriefPrompt(ctx) {
     ? workouts.map((w) => `${w.date} — ${w.day || "?"} — ${w.done ?? "?"}/${w.total ?? "?"} bài`
         + (w.totalVolume ? ` — ${Math.round(w.totalVolume)} kg` : "")).join("\n")
     : "(không có buổi tập nào được ghi lại)";
+
+  const actTxt = (activity && activity.length)
+    ? activity.map((a) => `${a.date} | ${a.steps ?? "—"} bước | ${a.calories ?? "—"} kcal cả ngày`
+        + ` | ${a.activeCalories ?? "—"} kcal vận động`
+        + ` | buổi tập ${a.workoutCalories || 0} kcal / ${_hm(a.workoutSec)}`).join("\n")
+    : "(chưa có dữ liệu hoạt động)";
 
   return `Bạn là huấn luyện viên thể hình đọc dữ liệu hồi phục từ vòng đeo tay Polar.
 Viết một bản tóm tắt ngắn cho HLV về đêm gần nhất và hôm nay nên làm gì.
@@ -2532,6 +2526,18 @@ ${progTxt}
 BUỔI TẬP ĐÃ GHI GẦN ĐÂY
 ${wkTxt}
 
+HOẠT ĐỘNG BAN NGÀY (bước chân, calo)
+${actTxt}
+
+THANG ĐO — đọc cho đúng, đừng quy đổi lẫn nhau
+Nightly Recharge 1..6 của Polar: 1 rất kém, 2 kém, 3 suy giảm, 4 ổn, 5 tốt, 6 rất tốt.
+ANS charge -10..+10, quanh 0 là mức thường ngày của chính khách.
+sleep score 0-100, gồm ba điểm thành phần thời lượng / bền giấc / tái tạo, cũng 0-100.
+Tải tập là cardio load của Polar Training Load Pro, KHÔNG có trần cố định và
+KHÔNG phải thang 0-21 của WHOOP — chỉ so ngày này với ngày khác của cùng khách.
+Nightly Recharge và ANS charge để trống ở những đêm Polar chưa đủ nền; trống thì
+nói là chưa có, tuyệt đối không tự chấm thay.
+
 QUY TẮC — bắt buộc tuân thủ
 1. CHỈ dùng những con số ở trên. Tuyệt đối không bịa thêm số liệu, không suy ra
    cân nặng, calo, hay bất cứ chỉ số nào không có trong dữ liệu.
@@ -2539,8 +2545,9 @@ QUY TẮC — bắt buộc tuân thủ
    thức giấc nhiều và độ liên tục thấp là vấn đề chất lượng — phải nói đúng như vậy.
 3. sessionKey PHẢI là một trong các key giáo án ở trên (ví dụ "SessionA"), hoặc
    chuỗi rỗng "" nếu khuyến nghị nghỉ. Không được bịa key không tồn tại.
-4. Nếu có dưới 14 đêm dữ liệu, nêu rõ trong "caveat" rằng đường nền HRV chưa đủ
-   chắc để kết luận, vì HRV dao động mạnh giữa các đêm.
+4. Ưu tiên Nightly Recharge và ANS charge của Polar khi kết luận về hồi phục —
+   đó là đánh giá đã so với nền riêng của khách. HRV và RHR thô chỉ để giải
+   thích thêm, đừng tự so chúng với nhau rồi rút ra kết luận khác.
 5. Dữ liệu chỉ cho biết ĐIỀU GÌ xảy ra, không cho biết VÌ SAO. Nếu các chỉ số
    xấu đi, nêu vài khả năng (tải tập, rượu, ăn muộn, căng thẳng, chớm ốm, phòng
    nóng) và nói rõ là dữ liệu không phân biệt được — đừng khẳng định một nguyên nhân.
@@ -2603,7 +2610,12 @@ exports.recoveryBrief = onCall(
       return { date: dt, day: v.day, done: v.done, total: v.total, totalVolume: v.totalVolume };
     });
 
-    const prompt = buildBriefPrompt({ client, nights, program: client.program || {}, workouts });
+    const aSnap = await cRef.collection("activity").orderBy("date", "desc").limit(7).get();
+    const activity = aSnap.docs.map((d) => d.data());
+
+    const prompt = buildBriefPrompt({
+      client, nights, program: client.program || {}, workouts, activity,
+    });
     const raw = await callGemini(GEMINI_API_KEY.value(), [{ type: "text", text: prompt }],
       BRIEF_SCHEMA, "recoveryBrief", "low");
 
