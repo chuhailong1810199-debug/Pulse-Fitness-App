@@ -184,6 +184,9 @@ service cloud.firestore {
       // Phải liệt kê tường minh như mọi subcollection khác — không có wildcard
       // bao trùm, nên thiếu dòng này là client đọc ra permission-denied.
       match /recovery/{d=**}       { allow read, write: if isCoach() || isClientOwner(clientId); }
+      // Bước chân, calo ngày và buổi tập kéo từ Polar. Tách khỏi recovery vì
+      // đây là dữ liệu hoạt động ban ngày, không phải hồi phục ban đêm.
+      match /activity/{d=**}       { allow read, write: if isCoach() || isClientOwner(clientId); }
     }
   }
 }

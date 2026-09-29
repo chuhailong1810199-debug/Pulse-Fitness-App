@@ -656,6 +656,7 @@ async function loadApp() {
   renderStats(); // non-blocking — stats update in background
   subscribeProgram();
   checkRecoveryTab();   // non-blocking — tab chỉ hiện nếu khách có dữ liệu Polar
+  checkActiveTab();
   renderAccessAlert();
   if (userRole === 'coach') {
     showScreen('app');
@@ -735,6 +736,7 @@ async function switchClient(id) {
   activeClient = next;
   _recovery = [];                 // dữ liệu hồi phục của khách CŨ, phải xoá
   checkRecoveryTab();             // hiện/ẩn tab Recovery theo khách mới (không await)
+  _activity = []; checkActiveTab();
   _historyCache = null; // clear cache for new client
   _nutritionData = null; _macroTargets = null; _macroMeta = null; // clear nutrition for new client
   _sessionLogged = false; updateFinishBtn();
@@ -5188,6 +5190,130 @@ async function saveMacroTargets() {
   renderNutritionMonth();
 }
 
+// ── ACTIVE — bước chân, calo, buổi tập kéo từ Polar ─────────────────────
+let _activity = [];
+const AC_DAYS = 28;
+
+async function checkActiveTab() {
+  const tab = document.getElementById('active-nav-tab');
+  if (!tab) return;
+  if (!activeClient) { tab.style.display = 'none'; return; }
+  try {
+    const snap = await getDocs(query(
+      collection(db, 'clients', activeClient.id, 'activity'), limit(1)));
+    tab.style.display = snap.empty ? 'none' : '';
+  } catch (_e) { tab.style.display = 'none'; }
+}
+
+async function loadActive() {
+  const wrap = document.getElementById('active-body');
+  if (!wrap || !activeClient) return;
+  wrap.innerHTML = '<div class="rc-empty">Đang đọc dữ liệu hoạt động…</div>';
+  try {
+    const snap = await getDocs(query(
+      collection(db, 'clients', activeClient.id, 'activity'),
+      orderBy('date', 'desc'), limit(AC_DAYS)));
+    _activity = [];
+    snap.forEach(d => _activity.push(d.data()));
+  } catch (e) {
+    wrap.innerHTML = '<div class="rc-empty">Không đọc được: ' + escHtml(e.message || '') + '</div>';
+    return;
+  }
+  renderActive();
+}
+
+const _acNum = n => (n == null || !Number.isFinite(n)) ? '—' : Math.round(n).toLocaleString('vi-VN');
+const AC_SPORT = { RUNNING:'Chạy', CYCLING:'Đạp xe', STRENGTH_TRAINING:'Tạ', WALKING:'Đi bộ',
+                   SWIMMING:'Bơi', OTHER:'Khác', OTHER_INDOOR:'Trong nhà', OTHER_OUTDOOR:'Ngoài trời' };
+
+function renderActive() {
+  const wrap = document.getElementById('active-body');
+  if (!wrap) return;
+  if (!_activity.length) {
+    wrap.innerHTML = '<div class="rc-empty">Chưa có dữ liệu hoạt động.<br>'
+      + 'Đeo Polar và đồng bộ Polar Flow để thấy bước chân và calo.</div>';
+    return;
+  }
+  wrap.classList.add('rc-root');
+  const asc = _activity.slice().reverse();
+  const last = _activity[0];
+
+  const sum = (f) => asc.reduce((n, d) => n + (f(d) || 0), 0);
+  const stepGoal = 10000;
+  const stepPct = last.steps ? Math.min(100, Math.round(last.steps / stepGoal * 100)) : 0;
+
+  // Vòng bước chân + hai ô calo
+  let html = '<header class="rc-head"><h1 class="rc-title">Hoạt động</h1>'
+    + '<div class="rc-head-meta"><span>' + _rcDate(last.date) + '</span>'
+    + '<span class="rc-sep"></span><span>Nguồn: Polar</span></div></header>';
+
+  const C = 2 * Math.PI * 52;
+  html += '<section class="ac-hero">'
+    + '<div class="ac-ring"><svg viewBox="0 0 120 120" aria-hidden="true">'
+      + '<circle cx="60" cy="60" r="52" fill="none" stroke="rgba(255,255,255,.09)" stroke-width="10"/>'
+      + '<circle cx="60" cy="60" r="52" fill="none" stroke="#B9AAFF" stroke-width="10" stroke-linecap="round"'
+      + ' stroke-dasharray="' + C.toFixed(1) + '" stroke-dashoffset="' + (C * (1 - stepPct / 100)).toFixed(1) + '"/></svg>'
+      + '<div class="ac-ring-in"><span class="ac-ring-v rc-num">' + _acNum(last.steps) + '</span>'
+      + '<span class="rc-micro">bước</span></div></div>'
+    + '<div class="ac-side">'
+      + '<div class="ac-kpi"><span class="ac-kpi-v rc-num">' + _acNum(last.workoutCalories) + '</span>'
+        + '<span class="rc-micro">kcal buổi tập</span>'
+        + '<span class="ac-kpi-s">' + (last.workouts || []).length + ' buổi</span></div>'
+      + '<div class="ac-kpi"><span class="ac-kpi-v rc-num">' + _acNum(last.activeCalories) + '</span>'
+        + '<span class="rc-micro">kcal vận động</span>'
+        + '<span class="ac-kpi-s">tổng ngày ' + _acNum(last.calories) + '</span></div>'
+    + '</div></section>';
+
+  // Tổng cộng cả kỳ
+  html += '<section class="rc-sec"><div class="rc-sec-head"><h2 class="rc-h2">Tổng ' + asc.length + ' ngày</h2></div>'
+    + '<div class="ac-tot">'
+      + '<div><span class="ac-tot-v rc-num">' + _acNum(sum(d => d.steps)) + '</span><span class="rc-micro">bước</span></div>'
+      + '<div><span class="ac-tot-v rc-num">' + _acNum(sum(d => d.workoutCalories)) + '</span><span class="rc-micro">kcal tập</span></div>'
+      + '<div><span class="ac-tot-v rc-num">' + _acNum(sum(d => (d.workouts || []).length)) + '</span><span class="rc-micro">buổi tập</span></div>'
+      + '<div><span class="ac-tot-v rc-num">' + _rcHM(sum(d => d.workoutSec)) + '</span><span class="rc-micro">thời lượng</span></div>'
+    + '</div></section>';
+
+  // Cột bước chân theo ngày
+  const maxStep = Math.max(stepGoal, ...asc.map(d => d.steps || 0));
+  const nCols = ((typeof window !== 'undefined' && window.innerWidth) || 1024) < 560 ? 7 : 14;
+  const shown = asc.slice(-nCols);
+  const cols = shown.map(d => {
+    const h = d.steps ? Math.max(4, d.steps / maxStep * 100) : 3;
+    const col = !d.steps ? 'rgba(255,255,255,.15)' : d.steps >= stepGoal ? '#7ED9A0' : '#B9AAFF';
+    return '<div class="rc-w-col"><span class="rc-w-num">' + (d.steps ? Math.round(d.steps / 1000) + 'k' : '—') + '</span>'
+      + '<span class="rc-w-bar" style="height:' + h.toFixed(1) + '%;background:' + col + '"></span>'
+      + '<span class="rc-w-day">' + _rcDate(d.date) + '</span></div>';
+  }).join('');
+  html += '<section class="rc-sec"><div class="rc-sec-head"><h2 class="rc-h2">Bước chân</h2>'
+    + '<span class="rc-micro">mục tiêu ' + _acNum(stepGoal) + '</span></div>'
+    + '<div class="ac-chart" style="grid-template-columns:repeat(' + shown.length
+    + ',minmax(0,1fr))">' + cols + '</div></section>';
+
+  // Danh sách buổi tập
+  const rows = [];
+  _activity.forEach(d => (d.workouts || []).forEach(w => rows.push({ d: d.date, w })));
+  html += '<section class="rc-sec"><div class="rc-sec-head"><h2 class="rc-h2">Buổi tập</h2>'
+    + '<span class="rc-micro">' + rows.length + ' buổi</span></div>';
+  html += rows.length
+    ? '<div class="ac-w-list">' + rows.map(r => {
+        const hr = (r.w.hrAvg != null || r.w.hrMax != null)
+          ? ' · HR ' + (r.w.hrAvg ?? '—') + '/' + (r.w.hrMax ?? '—') : '';
+        return '<div class="ac-w-row">'
+          + '<div class="ac-w-main"><span class="ac-w-sport">'
+            + escHtml(AC_SPORT[r.w.sport] || r.w.sport) + '</span>'
+            + '<span class="ac-w-sub">' + _rcDate(r.d) + ' · ' + _rcHM(r.w.sec) + hr + '</span></div>'
+          + '<span class="ac-w-cal rc-num">' + _acNum(r.w.calories) + '<i>kcal</i></span>'
+          + '</div>';
+      }).join('') + '</div>'
+    : '<div class="rc-note">Chưa có buổi tập nào được ghi trên Polar trong kỳ này.</div>';
+  html += '</section>';
+
+  html += '<div class="rc-note">Chỉ tính buổi tập có dữ liệu nhịp tim. Polar ghi mỗi buổi thành '
+    + 'nhiều bản, chỉ bản có nhịp tim mới có calo — lọc theo calo là tự loại trùng.</div>';
+
+  wrap.innerHTML = html;
+}
+
 // ── RECOVERY — dữ liệu ngủ / HRV / nhịp tim nghỉ kéo từ Polar AccessLink ──
 // Doc nằm ở clients/{id}/recovery/{YYYY-MM-DD}, mỗi ngày một bản tóm tắt.
 // Tab chỉ hiện khi khách đó THỰC SỰ có dữ liệu — không hard-code theo tên
@@ -5574,6 +5700,7 @@ async function polarSyncNow() {
     const r = (res.data && res.data.results && res.data.results[0]) || {};
     if (r.error) throw new Error(r.error);
     await loadRecovery();                  // đọc lại Firestore rồi vẽ lại — nút được gắn mới
+    checkActiveTab();                      // lần sync đầu mới tạo activity/ → hiện tab Active
     set('Đã cập nhật ' + (r.written || 0) + ' ngày', true);
   } catch (e) {
     console.warn('[polarSyncNow]', e);
@@ -5809,6 +5936,7 @@ function showPage(page) {
   document.getElementById('billing-page').classList.toggle('active', page === 'billing');
   document.getElementById('dash-page').classList.toggle('active', page === 'dash');
   document.getElementById('recovery-page').classList.toggle('active', page === 'recovery');
+  document.getElementById('active-page').classList.toggle('active', page === 'active');
   document.getElementById('cdash-page').classList.toggle('active', page === 'cdash');
   if (page === 'dash') renderDashboard();
   if (page === 'cdash') renderClientDash();
@@ -5832,6 +5960,9 @@ function showPage(page) {
   }
   if (page === 'recovery') {
     loadRecovery();
+  }
+  if (page === 'active') {
+    loadActive();
   }
   renderAccessAlert();
   if (page === 'log') {
@@ -11066,6 +11197,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <div class="nav-tab active" data-page="workout" onclick="showPage('workout')">Workout</div>
     <div class="nav-tab" data-page="progress" onclick="showPage('progress')">Progress</div>
     <div class="nav-tab" id="recovery-nav-tab" data-page="recovery" style="display:none" onclick="showPage('recovery')">Recovery</div>
+    <div class="nav-tab" id="active-nav-tab" data-page="active" style="display:none" onclick="showPage('active')">Active</div>
     <div class="nav-tab" data-page="nutrition" onclick="showPage('nutrition')">Nutrition</div>
     <div class="nav-tab" data-page="youth" onclick="showPage('youth')">Youth</div>
     <div class="nav-tab" data-page="billing" onclick="showPage('billing')">Billing</div>
@@ -11188,6 +11320,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   <div id="cdash-page"><div id="cdash-body"></div></div>
   <div id="billing-page"><div id="billing-body"></div></div>
   <div id="recovery-page"><div id="recovery-body"></div></div>
+  <div id="active-page"><div id="active-body"></div></div>
 
   <!-- ── YOUTH DEVELOPMENT TEST BATTERY ───────────────────────────────── -->
   <div id="youth-page">
@@ -13267,6 +13400,42 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .rc-empty-ring{width:120px;height:120px;border-radius:50%;border:10px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:center;font-size:32px;font-weight:700;color:var(--rc-muted);}
 .rc-empty-t{margin:8px 0 0;font-size:18px;font-weight:600;}
 .rc-empty-s{margin:0;max-width:300px;font-size:14px;line-height:1.55;color:var(--rc-muted);}
+
+/* ── ACTIVE — bước chân + calo ───────────────────────────── */
+#active-page{display:none;padding:0 16px 120px;}
+#active-page.active{display:block;}
+.ac-hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);gap:18px;
+  align-items:center;padding:22px 0 26px;}
+.ac-ring{position:relative;width:100%;max-width:168px;margin:0 auto;aspect-ratio:1;}
+.ac-ring svg{width:100%;height:100%;transform:rotate(-90deg);}
+.ac-ring-in{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:3px;text-align:center;}
+.ac-ring-v{font-size:30px;font-weight:700;letter-spacing:-.03em;line-height:1;color:var(--rc-txt);}
+.ac-side{display:flex;flex-direction:column;gap:12px;min-width:0;}
+.ac-kpi{display:flex;flex-direction:column;gap:3px;padding:14px;border-radius:14px;
+  background:var(--rc-surface);border:1px solid var(--rc-line);}
+.ac-kpi-v{font-size:24px;font-weight:700;letter-spacing:-.03em;line-height:1;color:var(--rc-txt);}
+.ac-kpi-s{font-size:11.5px;color:var(--rc-muted);}
+.ac-tot{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;}
+.ac-tot>div{display:flex;flex-direction:column;gap:3px;min-width:0;}
+.ac-tot-v{font-size:20px;font-weight:700;letter-spacing:-.02em;line-height:1;color:var(--rc-txt);}
+.ac-chart{display:grid;grid-template-columns:repeat(14,minmax(0,1fr));gap:5px;align-items:end;height:150px;}
+.ac-w-list{border-top:1px solid var(--rc-line);}
+.ac-w-row{display:flex;align-items:center;justify-content:space-between;gap:14px;
+  padding:13px 0;border-bottom:1px solid var(--rc-line);}
+.ac-w-main{display:flex;flex-direction:column;gap:3px;min-width:0;}
+.ac-w-sport{font-size:14.5px;font-weight:600;color:var(--rc-txt);}
+.ac-w-sub{font-size:11.5px;color:var(--rc-muted);font-variant-numeric:tabular-nums;}
+.ac-w-cal{flex:none;font-size:19px;font-weight:700;letter-spacing:-.02em;color:var(--rc-txt);}
+.ac-w-cal i{font-style:normal;font-size:11px;font-weight:600;color:var(--rc-muted);margin-left:4px;}
+@media(max-width:560px){
+  .ac-hero{grid-template-columns:minmax(0,1fr);gap:14px;}
+  .ac-ring{max-width:150px;}
+  .ac-side{flex-direction:row;}
+  .ac-side .ac-kpi{flex:1 1 0;min-width:0;}
+  .ac-tot{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 10px;}
+  .ac-chart{gap:7px;}
+}
 .cd-empty{grid-column:1/-1;text-align:center;font-size:13px;color:#9B8DFF;background:#15102B;
   border:1px dashed #2A2A4E;border-radius:14px;padding:30px;}
 .cd-empty b{color:#7665FF;}

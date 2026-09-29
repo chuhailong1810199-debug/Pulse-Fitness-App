@@ -2295,6 +2295,69 @@ function _secOfDay(t) {
   return m ? (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) : null;
 }
 
+/** ISO 8601 duration → giây. Polar trả cả "PT2H44M" lẫn "PT2792.985S". */
+function _isoDur(v) {
+  const m = /^PT(?:([\d.]+)H)?(?:([\d.]+)M)?(?:([\d.]+)S)?$/.exec(String(v || ""));
+  if (!m) return null;
+  return Math.round((+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0));
+}
+
+/**
+ * Hoạt động ban ngày: bước chân, calo, và các buổi tập.
+ *
+ * Polar trả NHIỀU bản ghi cho cùng một buổi — bản có tuyến đường và bản có
+ * nhịp tim là hai entry riêng, và chỉ bản nào có nhịp tim mới có calories.
+ * Nên chỉ tính buổi CÓ calo; làm vậy là tự loại trùng, không cần khử tay.
+ */
+async function buildActivityDocs(token) {
+  const [acts, exes] = await Promise.all([
+    polarGet("/v3/users/activities", token).catch((e) => {
+      console.warn("[polar] activities lỗi:", e.message); return null;
+    }),
+    polarGet("/v3/exercises", token).catch((e) => {
+      console.warn("[polar] exercises lỗi:", e.message); return null;
+    }),
+  ]);
+
+  const days = {};
+  const seed = (d) => (days[d] = days[d] || { date: d, source: "polar", workouts: [] });
+
+  for (const a of polarArray(acts, "activities", "data")) {
+    if (!a || !a.start_time) continue;
+    const d = String(a.start_time).slice(0, 10);
+    Object.assign(seed(d), {
+      steps: a.steps ?? null,
+      calories: a.calories ?? null,
+      activeCalories: a.active_calories ?? null,
+      activeSec: _isoDur(a.active_duration),
+      distanceM: a.distance_from_steps ?? null,
+      activityScore: a.daily_activity ?? null,
+    });
+  }
+
+  for (const x of polarArray(exes, "exercises", "data")) {
+    if (!x || !x.start_time) continue;
+    if (x.calories == null) continue;          // bản trùng, không có nhịp tim
+    const d = String(x.start_time).slice(0, 10);
+    seed(d).workouts.push({
+      at: x.start_time,
+      sport: x.detailed_sport_info || x.sport || "OTHER",
+      sec: _isoDur(x.duration),
+      calories: x.calories,
+      hrAvg: (x.heart_rate || {}).average ?? null,
+      hrMax: (x.heart_rate || {}).maximum ?? null,
+    });
+  }
+
+  for (const d of Object.keys(days)) {
+    const w = days[d].workouts;
+    days[d].workoutCalories = w.reduce((n, x) => n + (x.calories || 0), 0);
+    days[d].workoutSec = w.reduce((n, x) => n + (x.sec || 0), 0);
+    w.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  }
+  return Object.keys(days).sort().map((k) => days[k]);
+}
+
 async function syncPolarFor(clientId, token) {
   const [nightly, sleep] = await Promise.all([
     polarGet("/v3/users/nightly-recharge", token),
@@ -2335,7 +2398,23 @@ async function syncPolarFor(clientId, token) {
   for (const d of docs) batch.set(col.doc(d.date), { ...d, updatedAt: now }, { merge: true });
   await batch.commit();
 
-  return { clientId, written: docs.length, dates: docs.map((d) => d.date) };
+  // ── Hoạt động ban ngày, ghi vào subcollection riêng ────────────────────
+  let actWritten = 0;
+  try {
+    const aDocs = await buildActivityDocs(token);
+    if (aDocs.length) {
+      const aCol = db.collection("clients").doc(clientId).collection("activity");
+      const aBatch = db.batch();
+      for (const d of aDocs) aBatch.set(aCol.doc(d.date), { ...d, updatedAt: now }, { merge: true });
+      await aBatch.commit();
+      actWritten = aDocs.length;
+    }
+  } catch (e) {
+    // Hoạt động hỏng thì vẫn giữ phần giấc ngủ đã ghi được ở trên.
+    console.warn(`[polar] ${clientId}: bỏ qua hoạt động — ${e.message}`);
+  }
+
+  return { clientId, written: docs.length, dates: docs.map((d) => d.date), activity: actWritten };
 }
 
 async function syncAllPolar() {
@@ -2343,7 +2422,7 @@ async function syncAllPolar() {
   for (const c of POLAR_CLIENTS) {
     try {
       const r = await syncPolarFor(c.clientId, c.secret());
-      console.log(`[polar] ${r.clientId}: ghi ${r.written} ngày (${r.dates.join(", ")})`);
+      console.log(`[polar] ${r.clientId}: ghi ${r.written} đêm, ${r.activity || 0} ngày hoạt động`);
       out.push(r);
     } catch (e) {
       // Một khách lỗi không được làm chết cả lượt chạy của những người còn lại.
