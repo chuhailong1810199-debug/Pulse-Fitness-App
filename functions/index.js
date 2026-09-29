@@ -2247,6 +2247,54 @@ function buildRecoveryDocs(nightly, sleep) {
 }
 
 /** Lõi dùng chung cho cả lịch lẫn nút đồng bộ tay. */
+/**
+ * Tải ngày từ nhịp tim liên tục. Polar lấy mẫu ~5 phút/lần, đủ để ước lượng
+ * tải cả ngày nhưng KHÔNG đủ mịn cho những đợt gắng sức ngắn — nên đây là ước
+ * lượng, không phải đo. Dùng công thức Karvonen (%dự trữ nhịp tim) rồi cộng
+ * dồn kiểu TRIMP, cuối cùng ép về thang 0-21 bằng hàm bão hoà: càng lên cao
+ * càng khó tăng thêm, giống cách thang này vẫn được dùng.
+ */
+function computeDayLoad(samples, rhr, hrMax) {
+  if (!Array.isArray(samples) || samples.length < 4) return null;
+  const RHR = rhr || 50;
+  const MAX = hrMax || 190;
+  const span = Math.max(1, MAX - RHR);
+  // khoảng cách trung bình giữa hai mẫu, chặn ở 10 phút để một khoảng trống
+  // dài (tháo vòng ra) không bị tính thành tải
+  const mins = [];
+  for (let i = 1; i < samples.length; i++) {
+    const a = _secOfDay(samples[i - 1].sample_time), b = _secOfDay(samples[i].sample_time);
+    if (a != null && b != null && b > a) mins.push(Math.min((b - a) / 60, 10));
+  }
+  const step = mins.length ? mins.reduce((x, y) => x + y, 0) / mins.length : 5;
+
+  const zoneMin = [0, 0, 0, 0, 0];   // z1..z5
+  let trimp = 0, peak = 0, sum = 0, n = 0;
+  for (const s of samples) {
+    const hr = Number(s.heart_rate);
+    if (!isFinite(hr) || hr <= 0) continue;
+    sum += hr; n++; if (hr > peak) peak = hr;
+    const i = (hr - RHR) / span;
+    let z = 0;
+    if (i >= 0.9) z = 5; else if (i >= 0.8) z = 4; else if (i >= 0.7) z = 3;
+    else if (i >= 0.6) z = 2; else if (i >= 0.5) z = 1;
+    if (z > 0) { zoneMin[z - 1] += step; trimp += step * z; }
+  }
+  const strain = Math.round(21 * (1 - Math.exp(-trimp / 120)) * 10) / 10;
+  return {
+    strain,
+    trimp: Math.round(trimp),
+    zoneMin: zoneMin.map((m) => Math.round(m)),
+    hrAvg: n ? Math.round(sum / n) : null,
+    hrMax: peak || null,
+    samples: n,
+  };
+}
+function _secOfDay(t) {
+  const m = /^(\d{2}):(\d{2}):(\d{2})/.exec(String(t || ""));
+  return m ? (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) : null;
+}
+
 async function syncPolarFor(clientId, token) {
   const [nightly, sleep] = await Promise.all([
     polarGet("/v3/users/nightly-recharge", token),
@@ -2254,6 +2302,31 @@ async function syncPolarFor(clientId, token) {
   ]);
   const docs = buildRecoveryDocs(nightly, sleep);
   if (!docs.length) return { clientId, written: 0, dates: [] };
+
+  // Nhịp tim liên tục → tải ngày. Lấy mẫu thô về để TÍNH, nhưng chỉ lưu con số
+  // tổng hợp: mỗi ngày hàng trăm điểm, phình doc cho thứ màn hình không đọc tới.
+  try {
+    const from = docs[0].date, to = docs[docs.length - 1].date;
+    const chr = await polarGet(`/v3/users/continuous-heart-rate?from=${from}&to=${to}`, token);
+    const byDate = {};
+    for (const d of polarArray(chr, "heart_rates", "data")) {
+      if (d && d.date) byDate[d.date] = d.heart_rate_samples || [];
+    }
+    // Nhịp tim tối đa quan sát được trong cả kỳ — cá nhân hơn công thức 220 trừ tuổi.
+    let seenMax = 0;
+    for (const k of Object.keys(byDate)) {
+      for (const s of byDate[k]) { const v = Number(s.heart_rate); if (v > seenMax) seenMax = v; }
+    }
+    const hrMax = Math.max(seenMax, 185);
+    for (const doc of docs) {
+      const load = computeDayLoad(byDate[doc.date], (doc.recharge || {}).rhr, hrMax);
+      if (load) doc.load = load;
+    }
+  } catch (e) {
+    // Không có nhịp tim liên tục thì vẫn ghi phần giấc ngủ — đừng để một
+    // endpoint hỏng làm mất luôn dữ liệu đã lấy được.
+    console.warn(`[polar] ${clientId}: bỏ qua tải ngày — ${e.message}`);
+  }
 
   const db = getFirestore();
   const col = db.collection("clients").doc(clientId).collection("recovery");
