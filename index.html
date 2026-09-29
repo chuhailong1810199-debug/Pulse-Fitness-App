@@ -5194,6 +5194,12 @@ async function saveMacroTargets() {
 let _activity = [];
 const AC_DAYS = 28;
 
+/**
+ * Ẩn tab chỉ khi đọc được và thật sự rỗng. Bản đầu nuốt mọi lỗi rồi ẩn tab —
+ * quyền bị chặn, mạng rớt hay khách chưa có dữ liệu đều ra cùng một kết quả là
+ * tab biến mất, không ai biết vì sao. Đọc lỗi thì để tab hiện, cho loadActive()
+ * nói ra lỗi thật.
+ */
 async function checkActiveTab() {
   const tab = document.getElementById('active-nav-tab');
   if (!tab) return;
@@ -5202,7 +5208,10 @@ async function checkActiveTab() {
     const snap = await getDocs(query(
       collection(db, 'clients', activeClient.id, 'activity'), limit(1)));
     tab.style.display = snap.empty ? 'none' : '';
-  } catch (_e) { tab.style.display = 'none'; }
+  } catch (e) {
+    console.warn('[checkActiveTab]', activeClient.id, e.code || '', e.message || e);
+    tab.style.display = '';
+  }
 }
 
 async function loadActive() {
@@ -5216,7 +5225,10 @@ async function loadActive() {
     _activity = [];
     snap.forEach(d => _activity.push(d.data()));
   } catch (e) {
-    wrap.innerHTML = '<div class="rc-empty">Không đọc được: ' + escHtml(e.message || '') + '</div>';
+    console.warn('[loadActive]', activeClient.id, e.code || '', e.message || e);
+    wrap.innerHTML = '<div class="rc-empty">Không đọc được dữ liệu hoạt động của '
+      + escHtml(activeClient.name || activeClient.id) + '.<br>'
+      + escHtml((e.code ? e.code + ' — ' : '') + (e.message || '')) + '</div>';
     return;
   }
   renderActive();
@@ -5704,14 +5716,32 @@ async function polarSyncNow() {
     const res = await fn({});
     const r = (res.data && res.data.results && res.data.results[0]) || {};
     if (r.error) throw new Error(r.error);
+
+    // Polar chỉ gắn với một hồ sơ (POLAR_CLIENTS). Nếu đang mở hồ sơ khách
+    // khác thì sync chạy đúng nhưng màn hình này không đổi gì — nói thẳng ra
+    // thay vì để nút báo thành công rồi không có gì thay đổi.
+    if (r.clientId && activeClient && r.clientId !== activeClient.id) {
+      set('Đã kéo về hồ sơ ' + r.clientId + ', không phải hồ sơ đang mở', true);
+      return;
+    }
+
     await loadRecovery();                  // đọc lại Firestore rồi vẽ lại — nút được gắn mới
-    checkActiveTab();                      // lần sync đầu mới tạo activity/ → hiện tab Active
-    set('Đã cập nhật ' + (r.written || 0) + ' ngày', true);
+    await checkActiveTab();                // lần sync đầu mới tạo activity/ → hiện tab Active
+    if (document.getElementById('active-page').classList.contains('active')) {
+      await loadActive();                  // đang đứng ở tab Active thì vẽ lại luôn
+    } else {
+      _activity = [];                      // buộc đọc lại khi mở tab
+    }
+    set('Đã cập nhật ' + (r.written || 0) + ' đêm · '
+        + (r.activity || 0) + ' ngày hoạt động', true);
   } catch (e) {
     console.warn('[polarSyncNow]', e);
     set('Lỗi: ' + String(e.message || e).slice(0, 36), true);
+  } finally {
+    // finally, không phải cuối hàm: nhánh "hồ sơ khác" thoát sớm, và nếu để
+    // ngoài thì nút kẹt disabled vĩnh viễn.
+    setTimeout(() => set('Đồng bộ ngay', false), 4500);
   }
-  setTimeout(() => set('Đồng bộ ngay', false), 3500);
 }
 
 (function(){
