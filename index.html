@@ -12645,6 +12645,11 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   .dsh-row{grid-template-columns:22px minmax(0,1fr) auto;row-gap:6px;}
   .dsh-reason{grid-column:2/4;}
   .dsh-mag{display:none;}
+  /* Trên desktop hàng có 5 cột và nút nằm ở cột cuối. Ở đây còn 3 cột,
+     .dsh-reason đã chiếm 2/4 và .dsh-mag bị ẩn, nên nút bị tự động xếp
+     vào cột 1 — rộng đúng 22px. Chữ để nowrap nên nó tràn hẳn ra ngoài
+     khung nút. Đặt chỗ tường minh thay vì để lưới tự đoán. */
+  .dsh-open{grid-column:2/4;justify-self:start;min-width:max-content;}
 }
 /* trạng thái rỗng */
 .dsh-empty{text-align:center;background:#15102B;border:1px solid #1C1338;border-radius:14px;padding:34px 20px;}
