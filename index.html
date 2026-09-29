@@ -10143,6 +10143,35 @@ h1 span,.login-logo span,.cp-header-title span,.empty-sub strong,.client-badge,.
 @media (max-width: 700px){
   .client-select{min-width:170px;max-width:58vw;}
 }
+/* ── Nav cuộn ngang trên điện thoại ──────────────────────────────
+   Chín tab không vừa màn hình điện thoại, mà #app-screen .nav-tab đặt
+   flex:1 nên chúng bị chia đều và bóp lại thay vì tràn ra. Ở đây huỷ
+   flex:1, cho tab giữ bề rộng tự nhiên rồi để thanh nav cuộn ngang.
+   centerActiveNavTab() đã gọi scrollIntoView sẵn — giờ mới có chỗ để cuộn.
+   Cùng khuôn với .client-bar vốn đã cuộn ngang theo cách này. */
+@media (max-width: 700px){
+  .nav{
+    justify-content:flex-start;
+    flex-wrap:nowrap;
+    overflow-x:auto;
+    overflow-y:hidden;              /* khỏi bẫy cuộn dọc trên iOS */
+    -webkit-overflow-scrolling:touch;
+    scroll-snap-type:x proximity;
+    scrollbar-width:none;           /* Firefox */
+    overscroll-behavior-x:contain;  /* không kéo theo cả trang */
+    /* mờ dần hai mép để thấy là còn tab phía ngoài */
+    -webkit-mask-image:linear-gradient(90deg,transparent 0,#000 14px,#000 calc(100% - 14px),transparent 100%);
+    mask-image:linear-gradient(90deg,transparent 0,#000 14px,#000 calc(100% - 14px),transparent 100%);
+  }
+  .nav::-webkit-scrollbar{display:none;}
+  /* #app-screen .nav-tab đặt flex:1 — phải cùng độ đặc hiệu mới ghi đè được */
+  .nav-tab,
+  #app-screen .nav-tab{
+    flex:0 0 auto !important;
+    white-space:nowrap;
+    scroll-snap-align:center;
+  }
+}
 @media (max-width: 520px){
   .stat{flex:0 0 100%;}
   .nav-tab{font-size:12px;letter-spacing:1px;padding:10px 12px;}
