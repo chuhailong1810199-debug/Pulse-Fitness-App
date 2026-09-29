@@ -2303,3 +2303,171 @@ exports.syncPolarNow = onCall(
     return { results: await syncAllPolar() };
   },
 );
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RECOVERY BRIEF — đọc giấc ngủ đêm qua, nói hôm nay nên tập gì
+//
+// Kết quả được CACHE vào chính doc recovery của ngày đó. Mở lại tab không gọi
+// model lần nữa; chỉ sinh mới khi chưa có, hoặc khi bấm làm mới (force).
+// ═══════════════════════════════════════════════════════════════════════════
+
+const BRIEF_SCHEMA = {
+  type: "object",
+  properties: {
+    status:     { type: "string", enum: ["tot", "kha", "than_trong", "nghi"] },
+    headline:   { type: "string" },
+    sleep:      { type: "string" },
+    today:      { type: "string" },
+    sessionKey: { type: "string" },
+    sessionWhy: { type: "string" },
+    advice:     { type: "array", items: { type: "string" } },
+    caveat:     { type: "string" },
+  },
+  required: ["status", "headline", "sleep", "today", "sessionKey", "sessionWhy", "advice", "caveat"],
+};
+
+const _hm = (sec) => (sec == null ? "—"
+  : Math.floor(sec / 3600) + "h" + String(Math.round((sec % 3600) / 60)).padStart(2, "0"));
+
+function buildBriefPrompt(ctx) {
+  const { client, nights, program, workouts } = ctx;
+  const last = nights[0];
+  const prev = nights.slice(1);
+  const avg = (f) => {
+    const v = prev.map(f).filter((x) => typeof x === "number" && isFinite(x));
+    return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length) : null;
+  };
+
+  const rows = nights.map((n) => {
+    const s = n.sleep || {}, r = n.recharge || {};
+    return `${n.date} | ngủ ${_hm(s.total)} | sâu ${_hm(s.deep)} | REM ${_hm(s.rem)} | thức ${_hm(s.interruptions)}`
+      + ` | score ${s.score ?? "—"} | liên tục ${s.continuity ?? "—"}/5 | HRV ${r.hrv ?? "—"} | RHR ${r.rhr ?? "—"}`
+      + ` | nhịp thở ${r.breathing ?? "—"} | lên giường ${(s.start || "").slice(11, 16) || "—"}`;
+  }).join("\n");
+
+  const days = Object.keys(program || {}).sort();
+  const progTxt = days.length
+    ? days.map((d) => {
+        const ph = (program[d].phases || [])
+          .map((p) => `${p.name} (${(p.exercises || []).length} bài)`).join(", ");
+        return `${d} — ${program[d].label || ""} :: ${ph}`;
+      }).join("\n")
+    : "(khách chưa có giáo án)";
+
+  const wkTxt = workouts.length
+    ? workouts.map((w) => `${w.date} — ${w.day || "?"} — ${w.done ?? "?"}/${w.total ?? "?"} bài`
+        + (w.totalVolume ? ` — ${Math.round(w.totalVolume)} kg` : "")).join("\n")
+    : "(không có buổi tập nào được ghi lại)";
+
+  return `Bạn là huấn luyện viên thể hình đọc dữ liệu hồi phục từ vòng đeo tay Polar.
+Viết một bản tóm tắt ngắn cho HLV về đêm gần nhất và hôm nay nên làm gì.
+
+KHÁCH
+tên: ${client.name || "?"} | trình độ: ${client.level || "?"} | ${client.sessionsPerWeek || "?"} buổi/tuần
+mục tiêu: ${client.goal || "(chưa đặt)"}
+
+DỮ LIỆU GIẤC NGỦ — mới nhất trước, ${nights.length} đêm
+${rows}
+
+TRUNG BÌNH ${prev.length} ĐÊM TRƯỚC ĐÓ (không tính đêm gần nhất)
+ngủ ${_hm(avg((n) => (n.sleep || {}).total))} | score ${avg((n) => (n.sleep || {}).score) ?? "—"} | HRV ${avg((n) => (n.recharge || {}).hrv) ?? "—"} | RHR ${avg((n) => (n.recharge || {}).rhr) ?? "—"}
+mục tiêu ngủ khách tự đặt: ${_hm((last.sleep || {}).goal)}
+
+GIÁO ÁN HIỆN TẠI
+${progTxt}
+
+BUỔI TẬP ĐÃ GHI GẦN ĐÂY
+${wkTxt}
+
+QUY TẮC — bắt buộc tuân thủ
+1. CHỈ dùng những con số ở trên. Tuyệt đối không bịa thêm số liệu, không suy ra
+   cân nặng, calo, hay bất cứ chỉ số nào không có trong dữ liệu.
+2. Phân biệt rõ THỜI LƯỢNG ngủ với CHẤT LƯỢNG ngủ. Một đêm ngủ đủ giờ nhưng
+   thức giấc nhiều và độ liên tục thấp là vấn đề chất lượng — phải nói đúng như vậy.
+3. sessionKey PHẢI là một trong các key giáo án ở trên (ví dụ "SessionA"), hoặc
+   chuỗi rỗng "" nếu khuyến nghị nghỉ. Không được bịa key không tồn tại.
+4. Nếu có dưới 14 đêm dữ liệu, nêu rõ trong "caveat" rằng đường nền HRV chưa đủ
+   chắc để kết luận, vì HRV dao động mạnh giữa các đêm.
+5. Dữ liệu chỉ cho biết ĐIỀU GÌ xảy ra, không cho biết VÌ SAO. Nếu các chỉ số
+   xấu đi, nêu vài khả năng (tải tập, rượu, ăn muộn, căng thẳng, chớm ốm, phòng
+   nóng) và nói rõ là dữ liệu không phân biệt được — đừng khẳng định một nguyên nhân.
+6. KHÔNG chẩn đoán y khoa, không kê thuốc. Nếu số liệu bất thường kéo dài thì
+   khuyên đi khám.
+7. Toàn bộ trả lời bằng TIẾNG VIỆT, giọng trực tiếp, không hoa mỹ. Không dùng
+   dấu gạch ngang dài.
+
+Ý NGHĨA status
+"tot"        = hồi phục tốt, tập theo kế hoạch
+"kha"        = ổn, tập được nhưng để ý cảm giác
+"than_trong" = hồi phục kém, giảm cường độ hoặc đổi sang buổi nhẹ
+"nghi"       = nên nghỉ hoặc chỉ vận động nhẹ
+
+ĐỘ DÀI
+headline: một câu, tối đa 90 ký tự
+sleep: 2 tới 3 câu
+today: 1 tới 2 câu
+sessionWhy: 1 câu
+advice: 2 tới 4 mục, mỗi mục một câu ngắn và làm được ngay
+caveat: 1 tới 2 câu`;
+}
+
+exports.recoveryBrief = onCall(
+  { secrets: [GEMINI_API_KEY], region: "asia-southeast1", timeoutSeconds: 120, memory: "256MiB" },
+  async (request) => {
+    const { clientId, force } = request.data || {};
+    if (!clientId) throw new HttpsError("invalid-argument", "clientId is required");
+
+    const email = request.auth && request.auth.token && request.auth.token.email;
+    if (!email) throw new HttpsError("unauthenticated", "Cần đăng nhập.");
+
+    const db = getFirestore();
+    const cRef = db.collection("clients").doc(clientId);
+    const cDoc = await cRef.get();
+    if (!cDoc.exists) throw new HttpsError("not-found", "Không tìm thấy khách: " + clientId);
+    const client = cDoc.data();
+
+    // Coach xem được tất cả; khách chỉ xem của chính mình.
+    if (email !== COACH_EMAIL && String(client.email || "") !== email) {
+      throw new HttpsError("permission-denied", "Không có quyền xem dữ liệu này.");
+    }
+
+    const recSnap = await cRef.collection("recovery").orderBy("date", "desc").limit(21).get();
+    const nights = recSnap.docs.map((d) => d.data());
+    if (!nights.length) {
+      throw new HttpsError("failed-precondition",
+        "Chưa có dữ liệu hồi phục nào. Đeo Polar khi ngủ và đồng bộ Polar Flow trước.");
+    }
+
+    const latest = nights[0];
+    if (!force && latest.brief && latest.brief.text) {
+      return { cached: true, date: latest.date, brief: latest.brief.text, at: latest.brief.at };
+    }
+
+    const wSnap = await cRef.collection("workoutHistory").orderBy("date", "desc").limit(6).get();
+    const workouts = wSnap.docs.map((d) => {
+      const v = d.data();
+      const dt = v.date && v.date.toDate ? v.date.toDate().toISOString().slice(0, 10) : "?";
+      return { date: dt, day: v.day, done: v.done, total: v.total, totalVolume: v.totalVolume };
+    });
+
+    const prompt = buildBriefPrompt({ client, nights, program: client.program || {}, workouts });
+    const raw = await callGemini(GEMINI_API_KEY.value(), [{ type: "text", text: prompt }],
+      BRIEF_SCHEMA, "recoveryBrief", "low");
+
+    let brief;
+    try { brief = JSON.parse(raw); } catch (e) {
+      console.error("[recoveryBrief] JSON parse failed:", String(raw).slice(0, 300));
+      throw new HttpsError("internal", "Model trả về dữ liệu không đọc được. Thử lại.");
+    }
+    // Không để model bịa ra buổi tập không tồn tại.
+    const keys = Object.keys(client.program || {});
+    if (brief.sessionKey && !keys.includes(brief.sessionKey)) brief.sessionKey = "";
+
+    const at = new Date().toISOString();
+    await cRef.collection("recovery").doc(latest.date)
+      .set({ brief: { text: brief, at, model: GEMINI_MODEL } }, { merge: true });
+
+    return { cached: false, date: latest.date, brief, at };
+  },
+);

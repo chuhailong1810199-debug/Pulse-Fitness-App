@@ -5237,6 +5237,94 @@ function renderRecovery() {
   wrap.classList.add('rc-root');
   if (typeof window.rcRender === 'function') window.rcRender(_recovery);
   _rcMountSync(wrap);
+  _rcMountBrief(wrap);
+}
+
+/** Mở tab Workout rồi chuyển sang đúng buổi mà bản tóm tắt đề xuất. */
+async function rcOpenSession(key) {
+  const sp = window._showPage || showPage;
+  sp('workout');
+  try { if (key && getProgram()[key]) await setDay(key); }
+  catch (e) { console.warn('[rcOpenSession]', e.message); }
+}
+
+// ── Bản tóm tắt AI: đêm qua thế nào, hôm nay nên tập gì ──────────────────
+const RC_STATUS = {
+  tot:        { label: 'Hồi phục tốt',  cls: 'rc-b-good' },
+  kha:        { label: 'Khá',           cls: 'rc-b-mid'  },
+  than_trong: { label: 'Nên thận trọng', cls: 'rc-b-warn' },
+  nghi:       { label: 'Nên nghỉ',      cls: 'rc-b-bad'  },
+};
+
+/** Gắn khung tóm tắt ngay dưới header, trước vòng tròn sleep score. */
+function _rcMountBrief(wrap) {
+  if (wrap.querySelector('#rc-brief')) return;
+  const head = wrap.querySelector('.rc-head');
+  if (!head) return;
+  const box = document.createElement('section');
+  box.id = 'rc-brief';
+  box.className = 'rc-brief';
+  box.innerHTML = '<button class="rc-brief-go" onclick="recoveryBrief(false)">Phân tích đêm qua</button>';
+  head.insertAdjacentElement('afterend', box);
+  // Có sẵn bản đã lưu thì hiện luôn, không gọi model.
+  if (_rcBriefCache) _rcBriefPaint(_rcBriefCache, _rcBriefAt);
+}
+
+let _rcBriefCache = null, _rcBriefAt = null;
+
+async function recoveryBrief(force) {
+  const box = document.getElementById('rc-brief');
+  if (!box || !activeClient) return;
+  box.innerHTML = '<div class="rc-brief-wait">Đang đọc dữ liệu…</div>';
+  try {
+    const fn = firebase.app().functions('asia-southeast1')
+      .httpsCallable('recoveryBrief', { timeout: 120000 });
+    const res = await fn({ clientId: activeClient.id, force: !!force });
+    _rcBriefCache = res.data.brief;
+    _rcBriefAt    = res.data.at;
+    _rcBriefPaint(_rcBriefCache, _rcBriefAt);
+  } catch (e) {
+    console.warn('[recoveryBrief]', e);
+    // 429 của Gemini là hạn mức 5 lượt/phút ở gói free — nói thẳng thay vì
+    // để khách nhìn một lỗi chung chung rồi bấm lại liên tục cho tệ hơn.
+    const msg = e.code === 'functions/resource-exhausted'
+      ? 'Gemini đang quá hạn mức (5 lượt/phút ở gói free). Đợi một phút rồi thử lại.'
+      : (e.message || 'Không phân tích được.');
+    box.innerHTML = '<div class="rc-brief-err">' + escHtml(msg)
+      + ' <button class="rc-brief-retry" onclick="recoveryBrief(true)">Thử lại</button></div>';
+  }
+}
+
+function _rcBriefPaint(b, at) {
+  const box = document.getElementById('rc-brief');
+  if (!box || !b) return;
+  const st = RC_STATUS[b.status] || RC_STATUS.kha;
+  const adv = Array.isArray(b.advice) ? b.advice : [];
+  const keys = Object.keys((activeClient || {}).program || {});
+  const canOpen = b.sessionKey && keys.includes(b.sessionKey);
+
+  box.innerHTML =
+    '<div class="rc-brief-top">'
+      + '<span class="rc-brief-chip ' + st.cls + '">' + st.label + '</span>'
+      + '<button class="rc-brief-again" onclick="recoveryBrief(true)" title="Phân tích lại">↻</button>'
+    + '</div>'
+    + '<p class="rc-brief-head">' + escHtml(b.headline || '') + '</p>'
+    + (b.sleep ? '<p class="rc-brief-p">' + escHtml(b.sleep) + '</p>' : '')
+    + '<div class="rc-brief-sec"><span class="rc-micro">Hôm nay</span>'
+      + '<p class="rc-brief-p">' + escHtml(b.today || '') + '</p>'
+      + (canOpen
+          ? '<button class="rc-brief-sess" onclick="rcOpenSession(\''
+            + b.sessionKey + '\')">Mở ' + escHtml(b.sessionKey.replace('Session', 'Session '))
+            + ' →</button><span class="rc-brief-why">' + escHtml(b.sessionWhy || '') + '</span>'
+          : (b.sessionWhy ? '<span class="rc-brief-why">' + escHtml(b.sessionWhy) + '</span>' : ''))
+    + '</div>'
+    + (adv.length
+        ? '<div class="rc-brief-sec"><span class="rc-micro">Nên làm</span><ul class="rc-brief-ul">'
+          + adv.map(x => '<li>' + escHtml(x) + '</li>').join('') + '</ul></div>'
+        : '')
+    + (b.caveat ? '<p class="rc-brief-cav">' + escHtml(b.caveat) + '</p>' : '')
+    + (at ? '<div class="rc-brief-at">phân tích lúc ' + escHtml(String(at).slice(11, 16))
+            + ' · ' + escHtml(String(at).slice(0, 10)) + '</div>' : '');
 }
 
 /**
@@ -12793,6 +12881,37 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 /* header */
 .rc-head{display:flex;flex-direction:column;gap:6px;padding-bottom:6px;position:relative;}
 /* Đặt tuyệt đối để không phá bố cục cột của header bản thiết kế. */
+/* khung tóm tắt AI trong tab Recovery */
+.rc-brief{border:1px solid var(--rc-line);border-radius:18px;background:var(--rc-surface);
+  -webkit-backdrop-filter:blur(20px) saturate(180%);backdrop-filter:blur(20px) saturate(180%);
+  padding:16px 16px 14px;margin:14px 0 4px;}
+.rc-brief-top{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+.rc-brief-chip{font-size:10.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;
+  padding:5px 11px;border-radius:999px;border:1px solid currentColor;}
+.rc-b-good{color:var(--rc-green);} .rc-b-mid{color:var(--rc-amber);}
+.rc-b-warn{color:#B9AAFF;}         .rc-b-bad{color:var(--rc-red);}
+.rc-brief-again{background:none;border:1px solid var(--rc-line);color:var(--rc-muted);
+  width:28px;height:28px;border-radius:999px;cursor:pointer;font-size:14px;line-height:1;}
+.rc-brief-again:hover{color:var(--rc-txt);}
+.rc-brief-head{margin:12px 0 0;font-size:16px;font-weight:700;letter-spacing:-.01em;line-height:1.35;}
+.rc-brief-p{margin:8px 0 0;font-size:13.5px;line-height:1.6;color:var(--rc-txt);}
+.rc-brief-sec{margin-top:14px;padding-top:12px;border-top:1px solid var(--rc-line);}
+.rc-brief-ul{margin:8px 0 0;padding-left:18px;}
+.rc-brief-ul li{font-size:13.5px;line-height:1.6;margin-bottom:5px;}
+.rc-brief-sess{margin-top:10px;border:1px solid rgba(118,101,255,.55);background:rgba(118,101,255,.16);
+  color:#E7E2FA;font:inherit;font-size:12.5px;font-weight:700;padding:8px 14px;border-radius:999px;
+  cursor:pointer;white-space:nowrap;}
+.rc-brief-sess:hover{background:rgba(118,101,255,.3);}
+.rc-brief-why{display:block;margin-top:8px;font-size:12.5px;color:var(--rc-muted);line-height:1.55;}
+.rc-brief-cav{margin:14px 0 0;font-size:12px;line-height:1.55;color:var(--rc-muted);}
+.rc-brief-at{margin-top:10px;font-size:11px;color:rgba(255,255,255,.3);}
+.rc-brief-go{width:100%;border:1px dashed rgba(118,101,255,.5);background:rgba(118,101,255,.08);
+  color:#E7E2FA;font:inherit;font-size:13px;font-weight:700;padding:12px;border-radius:12px;cursor:pointer;}
+.rc-brief-go:hover{background:rgba(118,101,255,.18);}
+.rc-brief-wait{font-size:13px;color:var(--rc-muted);padding:6px 0;}
+.rc-brief-err{font-size:13px;line-height:1.6;color:#F2A9A3;}
+.rc-brief-retry{margin-left:6px;border:1px solid rgba(238,90,79,.5);background:transparent;
+  color:#F2A9A3;font:inherit;font-size:12px;padding:5px 11px;border-radius:999px;cursor:pointer;}
 .rc-sync{position:absolute;top:2px;right:0;border:1px solid var(--rc-line);
   background:var(--rc-surface);color:var(--rc-txt);font:inherit;font-size:12px;
   font-weight:600;letter-spacing:.03em;padding:7px 13px;border-radius:999px;
