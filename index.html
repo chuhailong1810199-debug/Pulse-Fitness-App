@@ -13722,6 +13722,508 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .bs-i{width:100%;background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.16);border-radius:9px;color:#fff;font-size:14px;padding:9px 11px;}
 .bs-i:focus{outline:none;border-color:#7665FF;}
 .bs-note{margin-top:13px;font-size:11px;line-height:1.5;color:rgba(255,255,255,.42);background:rgba(255,255,255,.04);border-radius:9px;padding:9px 11px;}
+
+/* ── Nút gạt ngôn ngữ ───────────────────────────────────────── */
+.lang-switch{display:inline-flex;align-items:center;gap:0;margin-left:auto;padding:2px;
+  background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.16);border-radius:9px;
+  cursor:pointer;font:inherit;line-height:1;flex:0 0 auto !important;align-self:center;}
+.lang-switch span{font-size:10.5px;font-weight:800;letter-spacing:.06em;padding:4px 7px;
+  border-radius:7px;color:rgba(255,255,255,.45);transition:background .15s,color .15s;}
+.lang-switch span.on{background:#7665FF;color:#0A0A14;}
+.lang-switch:hover{border-color:rgba(255,255,255,.3);}
+@media(max-width:700px){ .lang-switch{margin-left:6px;} .lang-switch span{padding:4px 6px;font-size:10px;} }
 </style>
+
+<script>
+// ── TỪ ĐIỂN Việt → Anh ────────────────────────────────────────────────────
+// Khoá là câu tiếng Việt y như trong mã nguồn. Thiếu khoá nào thì câu đó giữ
+// nguyên tiếng Việt — hỏng theo hướng an toàn, không bao giờ ra chuỗi rỗng.
+//
+// KHÔNG dịch: tên khách (Anh Ân, Thái Sơn, Anh Đao, Anh Tiến, Anh Nhân) và tên
+// chỉ số (Sleep, Recovery, Strain, HRV, ANS charge, Nightly Recharge, kcal,
+// bpm, RPE, InBody, HYROX, Polar) — chỉ số giữ tiếng Anh ở cả hai chế độ.
+
+const I18N_VI_EN = {
+  // ── Điều hướng, nút chung ───────────────────────────────────────────────
+  'Dinh dưỡng': 'Nutrition', 'Hoạt động': 'Activity', 'Buổi tập': 'Workouts',
+  'Giấc ngủ': 'Sleep', 'Hồi phục': 'Recovery', 'Theo dõi': 'Tracking',
+  'Theo ngày': 'By day', 'Xu hướng': 'Trend', 'Bước chân': 'Steps',
+  'Lưu': 'Save', 'Huỷ': 'Cancel', 'Thử lại': 'Retry', 'Thử lại…': 'Retrying…',
+  'Bắt đầu': 'Start', 'BẮT ĐẦU': 'START', 'Để sau': 'Later', 'Bỏ qua →': 'Skip →',
+  'Chia sẻ': 'Share', 'Chia sẻ ↑': 'Share ↑', 'Đã chép': 'Copied',
+  'Chọn': 'Select', '— Chọn —': '— Select —', 'Khác': 'Other',
+  'Tính lại': 'Recalculate', 'tính lại': 'recalculate', 'Đang tính lại…': 'Recalculating…',
+  'Mở hồ sơ': 'Open profile', 'Mở Billing': 'Open Billing',
+  'Thêm ngay': 'Add now', 'THÊM NGAY →': 'ADD NOW →', 'THÊM VÀO': 'ADD TO',
+  'Kéo để đổi thứ tự': 'Drag to reorder', 'Ẩn hôm nay': 'Hide today',
+  'Đang tải...': 'Loading...', 'Đang nạp…': 'Loading…', 'Đang đọc dữ liệu…': 'Reading data…',
+  'Đang kéo…': 'Syncing…', 'vừa xong': 'just now',
+
+  // ── Thời gian ───────────────────────────────────────────────────────────
+  'hôm nay': 'today', 'hôm qua': 'yesterday', 'gần đây': 'recently',
+  'ngày trước': 'days ago', 'giờ trước': 'hours ago', 'phút trước': 'minutes ago',
+  '3 ngày trước': '3 days ago', 'ngày': 'day', 'tuần': 'week', 'tháng': 'month',
+  'đêm': 'night', 'đêm ·': 'nights ·', '14 đêm': '14 nights',
+  'Ngày': 'Date', 'Tổng': 'Total', 'buổi': 'sessions', 'bài': 'exercises', 'bài ·': 'exercises ·',
+  'Thứ Hai': 'Monday', 'Thứ Ba': 'Tuesday', 'Thứ Tư': 'Wednesday', 'Thứ Năm': 'Thursday',
+  'Thứ Sáu': 'Friday', 'Thứ Bảy': 'Saturday', 'Chủ Nhật': 'Sunday',
+  'Tháng 1': 'January', 'Tháng 2': 'February', 'Tháng 3': 'March', 'Tháng 4': 'April',
+  'Tháng 5': 'May', 'Tháng 6': 'June', 'Tháng 7': 'July', 'Tháng 8': 'August',
+  'Tháng 9': 'September', 'Tháng 10': 'October', 'Tháng 11': 'November', 'Tháng 12': 'December',
+  '1 tháng': '1 month', '3 tháng': '3 months', '6 tháng': '6 months', '/tháng': '/month',
+  '/ tháng': '/ month', '60 phút': '60 min', '90 phút': '90 min',
+  '2 buổi': '2 sessions', '3 buổi': '3 sessions', '4 buổi': '4 sessions',
+  '5 buổi': '5 sessions', '6 buổi': '6 sessions',
+
+  // ── Recovery / giấc ngủ ─────────────────────────────────────────────────
+  'Thời lượng': 'Duration', 'thời lượng': 'duration', 'Bền giấc': 'Solidity',
+  'Tái tạo': 'Regeneration', 'Đều giờ': 'Consistency', 'Sẵn sàng': 'Readiness',
+  'Tải': 'Load', 'Liên tục': 'Continuity', 'Nhịp thở': 'Breathing rate',
+  'Nhịp tim ngủ (TB)': 'Sleeping HR (avg)', 'Hiệu suất ngủ': 'Sleep efficiency',
+  'Lên giường → dậy': 'Bedtime → wake', 'thức giấc': 'awake', 'chu kỳ': 'cycles',
+  'Sâu': 'Deep', 'Ngủ': 'Sleep', 'ngủ': 'sleep', 'Thức': 'Awake',
+  'mục tiêu': 'goal', '% mục tiêu': '% of goal', '/ mục tiêu': '/ goal',
+  'so với mục tiêu.': 'against goal.', 'đêm dưới mục tiêu': 'nights below goal',
+  'Đêm qua đạt mục tiêu.': 'Last night hit the goal.',
+  'Thiếu ngủ kéo dài': 'Ongoing sleep loss',
+  'Vẫn tập bình thường, chưa ảnh hưởng gì.': 'Train as planned, no impact yet.',
+  'cần ít nhất 3 đêm': 'needs at least 3 nights',
+  'phần hệ thần kinh nghỉ được': 'how much the nervous system rested',
+  'Chiều cao = giờ ngủ · màu = Sleep score': 'Height = hours slept · colour = Sleep score',
+  'Phân tích đêm qua': 'Analyse last night', 'phân tích lúc': 'analysed at',
+  'Polar chưa chấm': 'Polar has not scored',
+  'Chưa có dữ liệu giấc ngủ': 'No sleep data yet',
+  'Đang đọc dữ liệu hồi phục…': 'Reading recovery data…',
+  'Nguồn: Polar': 'Source: Polar', 'Nguồn:': 'Source:',
+  'rất kém': 'very poor', 'kém': 'poor', 'suy giảm': 'compromised',
+  'ổn': 'ok', 'tốt': 'good', 'rất tốt': 'very good', 'Tốt': 'Good',
+  'như thường ngày': 'usual', 'dưới mức thường': 'below usual',
+  'trên mức thường': 'above usual', 'rất dưới mức thường': 'much below usual',
+  'rất trên mức thường': 'much above usual',
+  'Đẩy nặng được': 'Train hard', 'Tập vừa': 'Moderate', 'Tập nhẹ': 'Easy',
+  'Chỉ phục hồi': 'Recovery only', 'Nghỉ hẳn': 'Rest', 'Phục hồi': 'Recovery',
+  'Buổi tiếp theo': 'Next session', 'Theo dõi:': 'Watch:',
+  'thấp': 'low', 'Thấp': 'Low', 'vừa': 'moderate', 'khá cao': 'fairly high',
+  'rất cao': 'very high', 'Khá': 'Fair', 'Nhẹ': 'Light',
+  'app tính': 'app-computed',
+  'Ba dòng đầu là điểm thành phần Polar dùng để ra sleep score, thang 0-100 — app không đặt thêm ngưỡng nào lên chúng.':
+    'The first three are the components Polar uses for its sleep score, on a 0-100 scale. The app adds no thresholds of its own.',
+  'Polar chưa chấm Nightly Recharge cho đêm này. Nó cần vài đêm đeo liên tục để dựng nền riêng của bạn, và bỏ đêm nào thì đêm đó trống. App không chấm thay.':
+    'Polar has not scored Nightly Recharge for this night. It needs several nights worn in a row to build your own baseline, and a night skipped is a night left blank. The app does not score it for you.',
+  'Đeo Polar khi ngủ và đồng bộ vào buổi sáng. Sleep score, HRV và nhịp tim khi ngủ sẽ hiện ở đây sau đêm đầu tiên.':
+    'Wear the Polar overnight and sync in the morning. Sleep score, HRV and sleeping heart rate appear here after the first night.',
+
+  // ── Active / hoạt động ──────────────────────────────────────────────────
+  'kcal buổi tập': 'kcal from sessions', 'kcal vận động': 'kcal active',
+  'kcal hôm nay': 'kcal today', 'kcal tập': 'kcal training', 'kcal · tổng': 'kcal · total',
+  'tổng ngày': 'day total', 'ngày hoạt động': 'activity days',
+  'Chưa có dữ liệu hoạt động.': 'No activity data yet.',
+  'Đang đọc dữ liệu hoạt động…': 'Reading activity data…',
+  'Đeo Polar và đồng bộ Polar Flow để thấy bước chân và calo.':
+    'Wear the Polar and sync Polar Flow to see steps and calories.',
+  'Chưa có buổi tập nào được ghi trên Polar trong kỳ này.':
+    'No sessions recorded on Polar in this period.',
+  'Chỉ tính buổi tập có dữ liệu nhịp tim. Polar ghi mỗi buổi thành nhiều bản, chỉ bản có nhịp tim mới có calo — lọc theo calo là tự loại trùng.':
+    'Only sessions with heart rate are counted. Polar files each session under several records and only the one with heart rate carries calories, so filtering on calories removes the duplicates by itself.',
+  'Chạy': 'Running', 'Đạp xe': 'Cycling', 'Bơi': 'Swimming', 'Đi bộ': 'Walking',
+  'Tạ': 'Strength', 'Trong nhà': 'Indoor', 'Ngoài trời': 'Outdoor',
+  'Trung bình': 'Average', 'Giai đoạn': 'Phase',
+  '· chưa tập': '· no training', '· không tập': '· no training',
+  'chưa tập': 'no training', 'Chưa tập': 'No training',
+  '· tập gần nhất': '· last session', '· không đọc được nhịp tim': '· heart rate unreadable',
+  '· nằm giường': '· in bed', 'lần/phút': '/min',
+
+  // ── Khách, hồ sơ, giáo án ───────────────────────────────────────────────
+  'Mục tiêu *': 'Goal *', 'Trình độ *': 'Level *', 'Buổi / tuần *': 'Sessions / week *',
+  'buổi/tuần': 'sessions/week', 'buổi/tuần)': 'sessions/week)',
+  'Giới tính': 'Gender', 'Tuổi': 'Age', 'Nữ': 'Female', 'Cả': 'All',
+  'Chiều cao (cm)': 'Height (cm)', 'Cân nặng (kg)': 'Weight (kg)', '% mỡ': '% fat',
+  'Chấn thương / Hạn chế': 'Injury / Limitation',
+  'Đau gối, cột sống thắt lưng… (để trống nếu không có)':
+    'Knee pain, lower back… (leave blank if none)',
+  'Đau vai': 'Shoulder pain',
+  'Beginner (mới bắt đầu)': 'Beginner (just starting)',
+  'Intermediate (đã tập 1–2 năm)': 'Intermediate (1–2 years training)',
+  'Advanced (3+ năm)': 'Advanced (3+ years)',
+  'Fat loss, tăng cơ, HYROX, sức mạnh…': 'Fat loss, muscle gain, HYROX, strength…',
+  'Vui lòng điền mục tiêu, trình độ và số buổi/tuần.':
+    'Please fill in goal, level and sessions per week.',
+  'Chưa có giáo án': 'No program yet', 'chưa có giáo án': 'no program yet',
+  'Khách này chưa có giáo án. Dùng': 'This client has no program yet. Use',
+  'Chưa nhận ra khách nào': 'No client recognised',
+  'Không liên kết được khách. Thử lại nhé.': 'Could not link the client. Try again.',
+  'Liên kết khách…': 'Linking client…',
+  'Xuất giáo án ra file Excel': 'Export the program to Excel',
+  'Xuất báo cáo Excel': 'Export Excel report',
+  'Xuất Excel thất bại:': 'Excel export failed:',
+  'Không tìm thấy report-template.xlsx trên server':
+    'report-template.xlsx not found on the server',
+  'Không tải được thư viện nén': 'Could not load the compression library',
+  'Không lưu được bài tập. Vui lòng thử lại.': 'Could not save the exercise. Please try again.',
+  'Không lưu được. Thử lại nhé.': 'Could not save. Try again.',
+  'Không lưu được:': 'Could not save:',
+  'Không dời được buổi này. Thử lại nhé.': 'Could not move this session. Try again.',
+  'Đã đổi thứ tự trên máy nhưng lưu lên server thất bại. Tải lại trang để xem thứ tự thật.':
+    'The order changed on screen but saving to the server failed. Reload to see the real order.',
+  'Xoá session này': 'Delete this session',
+  'Xoá session này khỏi lịch sử?': 'Delete this session from history?',
+  'Đang đọc lịch sử tập…': 'Reading training history…',
+  'Ghi tạ và theo dõi tiến trình': 'Log weights and track progress',
+  'Ghi tạ từng set — lịch sử sức mạnh theo tên bài':
+    'Log every set — strength history by exercise',
+  'Lịch tập và theo dõi buổi đã tập': 'Schedule and completed-session tracking',
+  'Lịch tập chia theo số ngày bạn có': 'A split built around the days you have',
+  'Giáo án riêng, chia sẵn theo từng buổi': 'Your own program, already split by session',
+  'Giáo án riêng theo mục tiêu': 'A program built for your goal',
+  'Giáo án chuẩn bị HYROX / chạy bộ': 'HYROX / running preparation program',
+  'Giáo án, log kg và tiến độ ở một chỗ': 'Program, weight log and progress in one place',
+  'Chi tiết, tempo, video': 'Detail, tempo, video',
+  'Chu kỳ sức mạnh và thể lực được periodize':
+    'Strength and conditioning cycles are periodised',
+  'Feedback về pace, kỹ thuật và chiến thuật': 'Feedback on pace, technique and tactics',
+  'Gửi clip, coach sửa kỹ thuật': 'Send a clip, the coach fixes your technique',
+  'Ảnh và video tiến trình': 'Progress photos and video',
+  'Ảnh tiến trình': 'Progress photos', 'lưu ảnh và video': 'store photos and video',
+  'Bộ test thể chất cho trẻ + báo cáo phụ huynh':
+    'Youth fitness test battery + parent report',
+
+  // ── InBody, checkpoint ──────────────────────────────────────────────────
+  'InBody mỗi 4 tuần': 'InBody every 4 weeks',
+  'Đo InBody và so sánh mỗi 4 tuần': 'Measure InBody and compare every 4 weeks',
+  'Checkpoint InBody định kỳ, biểu đồ thay đổi':
+    'Regular InBody checkpoints with change charts',
+  'So sánh cân nặng, mỡ và cơ nạc': 'Compare weight, fat and lean mass',
+  'Quá hạn đo InBody': 'InBody measurement overdue',
+  'Đo lường từ ngày đầu. Checkpoint mỗi 4 tuần. Biểu đồ tiến độ rõ ràng từng giai đoạn.':
+    'Measured from day one. Checkpoints every 4 weeks. A clear progress chart for each phase.',
+
+  // ── Dinh dưỡng ──────────────────────────────────────────────────────────
+  'Bữa ăn': 'Meal', 'Pulse nhận sai món?': 'Pulse got the food wrong?',
+  'e.g. Cơm bò, Salad, Protein shake…': 'e.g. beef rice, salad, protein shake…',
+  'VD: Miến vịt, khoảng 1 tô lớn, có 5 miếng thịt vịt và nhiều mỡ hành':
+    'e.g. duck noodle soup, about one large bowl, 5 pieces of duck and plenty of scallion oil',
+  'Ghi rõ món gì, bao nhiêu, có nhiều dầu mỡ hay nước dùng không.':
+    'Say what it was, how much, and whether it was oily or had broth.',
+  'Không phân tích được ảnh.': 'Could not analyse the photo.',
+  'Không phân tích được.': 'Could not analyse.',
+  'Phân tích lâu quá. Thử lại, hoặc nhập tay bằng nút Manual.':
+    'Analysis took too long. Try again, or enter it by hand with Manual.',
+  'Ảnh không còn — chụp lại giúp mình nhé.': 'The photo is gone — please take it again.',
+  'Mất kết nối giữa chừng. Kiểm tra mạng rồi bấm chụp lại — ảnh vẫn còn.':
+    'The connection dropped. Check your network and shoot again — the photo is still here.',
+  'Server vừa khởi động lại. Đợi khoảng 30 giây rồi chụp lại giúp mình nhé.':
+    'The server just restarted. Wait about 30 seconds and shoot again.',
+  'Thường mất 10–20 giây': 'Usually takes 10–20 seconds',
+  'Mục tiêu calo / đạm tính riêng theo chỉ số InBody':
+    'Calorie and protein targets computed from your InBody numbers',
+  'Mục tiêu dinh dưỡng đơn giản, điều chỉnh liên tục':
+    'Simple nutrition targets, adjusted as you go',
+  'Chụp ảnh bữa ăn — tự nhận diện món và macro':
+    'Photograph a meal — the food and its macros are recognised',
+
+  // ── Thanh toán, gói ─────────────────────────────────────────────────────
+  'Gói đang dùng': 'Current plan', 'ĐANG DÙNG': 'ACTIVE', 'Đang dùng': 'Active',
+  'Đang hoạt động': 'Active', 'Chưa kích hoạt': 'Not activated',
+  'Chưa có gói': 'No plan', 'Gói sắp hết hạn': 'Plan expiring soon',
+  'Sắp hết hạn': 'Expiring soon', 'Gói đã hết hạn': 'Plan expired',
+  'Đã hết hạn': 'Expired', 'Quá hạn — đang trong thời gian ân hạn': 'Overdue — in grace period',
+  'Đang trong ân hạn': 'In grace period', 'Gia hạn': 'Renew',
+  'Gia hạn gói này': 'Renew this plan', 'Nhắc khách gia hạn.': 'Remind the client to renew.',
+  '· gia hạn đến': '· renewed until', 'Chọn gói này': 'Choose this plan',
+  'Chọn gói cho khách': 'Choose a plan for the client',
+  'Chọn gói trước đã.': 'Choose a plan first.',
+  'Chọn gói và kỳ hạn trước đã.': 'Choose a plan and term first.',
+  'Chọn ngân hàng đã.': 'Choose a bank first.',
+  'Chưa thanh toán': 'Unpaid', 'Đã trả': 'Paid', 'Đã huỷ': 'Cancelled',
+  'Huỷ hoá đơn': 'Cancel invoice', 'Chưa có hoá đơn nào.': 'No invoices yet.',
+  'Hôm nay đã tạo hoá đơn gói này rồi.': 'An invoice for this plan was already created today.',
+  'Không tạo được hoá đơn:': 'Could not create the invoice:',
+  'Không huỷ được:': 'Could not cancel:', 'Không đổi được gói:': 'Could not change plan:',
+  'Không xác nhận được:': 'Could not confirm:',
+  'Ngân hàng': 'Bank', 'Số tài khoản': 'Account number', 'số tài khoản': 'account number',
+  'Chủ tài khoản': 'Account holder', 'Tài khoản nhận tiền': 'Receiving account',
+  'Chưa có tài khoản nhận tiền': 'No receiving account set',
+  'Số tài khoản chỉ gồm chữ số.': 'The account number must be digits only.',
+  'Nội dung': 'Reference', 'chuyển khoản': 'bank transfer',
+  'thu hàng tháng': 'billed monthly', 'thu hàng năm': 'billed yearly',
+  'thu mỗi quý': 'billed quarterly', 'thu mỗi nửa năm': 'billed half-yearly',
+  'thu mỗi': 'billed every', 'tháng ·': 'months ·', '— gói': '— plan',
+  'Không tải được thư viện QR — dùng thông tin bên dưới':
+    'Could not load the QR library — use the details below',
+  'Không vẽ được mã — dùng thông tin bên dưới':
+    'Could not draw the code — use the details below',
+  'Chọn gói phù hợp rồi quét mã QR để chuyển khoản. Coach xác nhận là mở khoá ngay, không mất ngày còn dư.':
+    'Pick a plan and scan the QR code to transfer. The coach confirms and it unlocks immediately, with no loss of remaining days.',
+  'Chọn gói rồi lập hoá đơn — mã QR sinh ra kèm sẵn số tiền và nội dung chuyển khoản. Khách cũng tự chọn và tự tạo được.':
+    'Pick a plan and raise an invoice — the QR code carries the amount and the transfer reference. Clients can also pick and raise one themselves.',
+  'Chỉ huỷ khi bạn CHƯA chuyển khoản. Nếu đã chuyển rồi thì nhắn coach, đừng huỷ.':
+    'Only cancel if you have NOT transferred yet. If you already have, message the coach instead.',
+  'Mở khoá toàn bộ Pulse': 'Unlock all of Pulse',
+  'Mọi thứ ở gói Basic': 'Everything in Basic', 'Mọi thứ ở gói Plus': 'Everything in Plus',
+  'Toàn bộ quyền lợi của gói Body Recomposition': 'Everything in the Body Recomposition plan',
+  '★ Phổ biến nhất': '★ Most popular',
+  'Cho khách không tập cùng bạn — chỉ trả tiền dùng app.':
+    'For clients who do not train with you — app access only.',
+  'Nếu bạn chỉ muốn dùng app mà không cần coaching.':
+    'If you only want the app without coaching.',
+  'Dành cho người đi làm bận rộn muốn thay đổi ngoại hình rõ rệt mà vẫn giữ sức và năng lượng.':
+    'For busy professionals who want a visible change in shape while keeping their strength and energy.',
+  'Cho người tập cân bằng giữa sức mạnh và thể lực thi đấu, điều chỉnh theo khả năng hồi phục.':
+    'For athletes balancing strength and competitive conditioning, adjusted to how well they recover.',
+  'Hỗ trợ trực tiếp': 'Direct support',
+  'Coach phản hồi ưu tiên': 'Priority coach replies',
+  'Chat trực tiếp với coach qua Pulse': 'Message the coach directly in Pulse',
+  'Nhắn coach bất cứ lúc nào bạn cần': 'Message the coach whenever you need',
+  'Review tiến độ mỗi tuần kèm việc cần làm': 'Weekly progress review with action points',
+  'Lớp coaching giữ bạn đi đúng lộ trình: thói quen, nếp sinh hoạt và tính kỷ luật.':
+    'A coaching layer that keeps you on track: habits, routine and discipline.',
+  'Tính điểm thói quen và nhắc hằng ngày': 'Habit scoring and daily reminders',
+  'Điều chỉnh kế hoạch theo tuần công tác hoặc đi xa':
+    'Adjust the plan around work trips and travel',
+  'Theo dõi trong Pulse': 'Tracked in Pulse',
+
+  // ── Onboarding, PWA ─────────────────────────────────────────────────────
+  'Chào mừng! 👋': 'Welcome! 👋', 'Gần xong rồi! ✨': 'Almost there! ✨',
+  'Chương trình đã sẵn sàng! 🎉': 'Your program is ready! 🎉',
+  '⚡ Tạo chương trình của tôi': '⚡ Build my program',
+  'Cho Pulse biết thêm về bạn để tạo chương trình tập luyện cá nhân hóa.':
+    'Tell Pulse a bit about you so it can build a personalised training program.',
+  'Chương trình cá nhân hoá. Theo dõi tiến độ theo thời gian thực cùng coach của bạn.':
+    'A personalised program. Track progress in real time with your coach.',
+  'Coach Long Chu sẽ đồng hành cùng bạn từng bước. Chương trình của bạn đang chờ.':
+    'Coach Long Chu will be with you every step. Your program is waiting.',
+  'Pulse đang phân tích mục tiêu của bạn…': 'Pulse is analysing your goal…',
+  'Đang xây dựng cấu trúc chương trình…': 'Building the program structure…',
+  'Cá nhân hóa từng bài tập…': 'Personalising each exercise…',
+  '📲 Cài đặt app': '📲 Install the app',
+  'Thêm Pulse vào màn hình chính': 'Add Pulse to your home screen',
+  'Mở nhanh hơn · Không cần App Store · Như app thật':
+    'Opens faster · No App Store · Feels like a real app',
+  'Chỉ hiện 1 lần · Không cần cài từ App Store':
+    'Shown once only · No App Store install needed',
+  '1. Bấm nút': '1. Tap', 'Bấm nút': 'Tap', 'Bấm': 'Tap',
+  '2. Cuộn xuống chọn': '2. Scroll down and choose',
+  '3. Bấm': '3. Tap', 'ở thanh Safari bên dưới': 'in the Safari bar below',
+  'ở góc trên phải — xong!': 'in the top right — done!',
+  'ở góc trên bên phải': 'in the top right',
+  'màn hình chính!': 'home screen!', 'Đã thêm vào': 'Added to',
+
+  // ── Lỗi, trạng thái chung ───────────────────────────────────────────────
+  'Có lỗi xảy ra:': 'Something went wrong:', '. Thử lại nhé!': '. Please try again.',
+  'Lỗi:': 'Error:', 'lỗi không rõ': 'unknown error', 'Nạp lại lỗi:': 'Reload failed:',
+  'Nạp lại dữ liệu cũ': 'Reload old data', 'Chưa có dữ liệu': 'No data yet',
+  'chưa có': 'none yet', 'không kéo được': 'could not sync',
+  'Mạng chập chờn — đang thử lại…': 'Flaky connection — retrying…',
+  'Server đang khởi động — đang thử lại…': 'The server is starting up — retrying…',
+  'Phiên đăng nhập hết hạn — đăng nhập lại giúp mình nhé.':
+    'Your session expired — please sign in again.',
+  'Bạn đã nộp bài hôm nay rồi ✓': 'You have already submitted today ✓',
+  'Cần chú ý': 'Needs attention', 'cần chú ý': 'needs attention',
+  'người cần chú ý': 'need attention', 'không ai cần chú ý': 'nobody needs attention',
+  'hôm nay ai cần nhắn': 'who to message today',
+  'NGAY HÔM NAY.': 'TODAY.', '🏁 Sẵn sàng': '🏁 Ready',
+  'Nhận qua đâu?': 'Where to receive it?', 'kéo chậm': 'slow sync',
+  'để tạo.': 'to create.', 'khách.': 'clients.', 'chuẩn': 'standard',
+  'khách': 'clients', 'bước': 'steps',
+  'MÀN HÌNH.': 'HOME SCREEN.', 'VÀO APP →': 'ENTER APP →',
+};
+
+// Mẫu có biến chen giữa. {0} là phần thay đổi, giữ nguyên khi dịch.
+const I18N_PAT = {
+  'Đã cập nhật {0} đêm ·': 'Updated {0} nights ·',
+  'Đã kéo về hồ sơ {0}, không phải hồ sơ đang mở':
+    'Synced into profile {0}, not the one open',
+  'Không đọc được dữ liệu hoạt động của {0}.': 'Could not read activity data for {0}.',
+  'Không đọc được dữ liệu hồi phục: {0}': 'Could not read recovery data: {0}',
+  'Đêm qua thiếu {0} so với mục tiêu.': 'Last night was {0} short of the goal.',
+  'Cả {0} đêm đều dưới mục tiêu. Tổng thiếu': 'All {0} nights were below goal. Short by',
+  '. Tổng thiếu {0}.': '. Short by {0} in total.',
+  '/{0} đêm dưới mục tiêu': '/{0} nights below goal',
+  'mỗi đêm so với mục tiêu {0}': 'per night against a {0} goal',
+  ', {0} đêm liên tiếp gần nhất': ', {0} nights in a row',
+  'Ngưỡng của khách này là {0} ngày (': 'This client\'s threshold is {0} days (',
+  'Là con số tối thiểu — mỗi khách chỉ lưu {0} sự kiện gần nhất.':
+    'This is the floor — each client keeps only the {0} most recent events.',
+  'Đã nạp lại dữ liệu cho {0}/': 'Reloaded data for {0}/',
+  'Có lỗi xảy ra: {0}. Thử lại nhé!': 'Something went wrong: {0}. Please try again.',
+  'Đo InBody · {0} kg': 'InBody · {0} kg',
+  'phân tích lúc {0} ·': 'analysed at {0} ·',
+};
+
+// ── I18N — chuyển toàn app giữa tiếng Việt và tiếng Anh ───────────────────
+//
+// Cách làm: KHÔNG bọc từng chuỗi trong mã nguồn. File này 13.700 dòng, chuỗi
+// tiếng Việt nằm lẫn trong mảnh HTML ghép bằng dấu +, nên sửa tận gốc là đụng
+// vào hàng trăm chỗ và mỗi chỗ là một cơ hội làm hỏng.
+//
+// Thay vào đó dịch ở tầng DOM: sau khi màn hình vẽ xong, quét các text node và
+// thay cụm tiếng Việt bằng tiếng Anh. Khoá từ điển CHÍNH LÀ câu tiếng Việt,
+// nên không phải đặt tên khoá, và thiếu bản dịch thì tự rơi về tiếng Việt —
+// hỏng thầm lặng theo hướng an toàn.
+//
+// Chiều dịch chỉ có Việt → Anh. Chế độ tiếng Việt là mã nguồn gốc, không đụng
+// gì. Nhờ vậy tên chỉ số (Sleep, Recovery, Strain, HRV, ANS charge, kcal, bpm)
+// luôn giữ tiếng Anh ở CẢ HAI chế độ, đúng yêu cầu của coach.
+
+const I18N_LANG_KEY = 'pulse_lang';
+let _lang = 'vi';
+try { _lang = localStorage.getItem(I18N_LANG_KEY) === 'en' ? 'en' : 'vi'; } catch (_e) {}
+
+/** Thẻ không được đụng tới: nội dung do người dùng nhập hoặc mã máy. */
+const I18N_SKIP_TAG = { SCRIPT: 1, STYLE: 1, TEXTAREA: 1, INPUT: 1, CODE: 1, PRE: 1 };
+
+/**
+ * Dữ liệu của khách — tên người, tên bài tập, ghi chú — tuyệt đối không dịch.
+ * Đánh dấu bằng data-i18n-skip trên thẻ bao ngoài là cả nhánh được bỏ qua.
+ */
+function _i18nSkip(node) {
+  for (let el = node.parentElement; el; el = el.parentElement) {
+    if (I18N_SKIP_TAG[el.tagName]) return true;
+    if (el.hasAttribute && el.hasAttribute('data-i18n-skip')) return true;
+  }
+  return false;
+}
+
+const _i18nNorm = (s) => s.replace(/\s+/g, ' ').trim();
+
+// Dựng sẵn hai bảng tra lúc nạp: khớp nguyên câu (nhanh, an toàn nhất) và
+// khớp một phần (cho câu bị ghép từ nhiều mảnh có biến chen giữa).
+let _i18nExact = null, _i18nSub = null, _i18nPat = null;
+
+function _i18nBuild() {
+  if (_i18nExact) return;
+  _i18nExact = new Map();
+  for (const k in I18N_VI_EN) _i18nExact.set(_i18nNorm(k), I18N_VI_EN[k]);
+
+  // Khớp một phần chỉ dùng cho cụm đủ dài. Cụm ngắn như "Tải" hay "ổn" mà thay
+  // theo kiểu tìm-trong-chuỗi thì sẽ cắt nát tên khách và tên bài tập.
+  _i18nSub = [...Object.keys(I18N_VI_EN)]
+    .filter((k) => k.length >= 8)
+    .sort((a, b) => b.length - a.length)
+    .map((k) => [_i18nNorm(k), I18N_VI_EN[k]]);
+
+  // Mẫu có {0}: "Đã cập nhật {0} đêm" -> bắt phần giữa rồi ghép lại.
+  _i18nPat = Object.keys(I18N_PAT).sort((a, b) => b.length - a.length).map((k) => {
+    const rx = _i18nNorm(k).split('{0}').map((p) =>
+      p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('([\\s\\S]{0,80}?)');
+    return [new RegExp(rx), I18N_PAT[k]];
+  });
+}
+
+/** Dịch một chuỗi. Không có bản dịch thì trả nguyên văn tiếng Việt. */
+function T(vi) {
+  if (_lang !== 'en' || typeof vi !== 'string' || !vi) return vi;
+  _i18nBuild();
+  const hit = _i18nExact.get(_i18nNorm(vi));
+  return hit != null ? hit : vi;
+}
+
+/** Dịch nội dung một text node. Trả chuỗi mới, hoặc null nếu không đổi gì. */
+function _i18nText(raw) {
+  const norm = _i18nNorm(raw);
+  if (!norm) return null;
+
+  const exact = _i18nExact.get(norm);
+  if (exact != null) return exact;
+
+  let out = norm, changed = false;
+  for (const [rx, en] of _i18nPat) {
+    const m = out.match(rx);
+    if (m) {
+      out = out.replace(rx, en.replace(/\{0\}/g, () => m[1] != null ? m[1] : ''));
+      changed = true;
+    }
+  }
+  for (const [vi, en] of _i18nSub) {
+    if (out.includes(vi)) { out = out.split(vi).join(en); changed = true; }
+  }
+  return changed ? out : null;
+}
+
+/** Quét một nhánh DOM và dịch tại chỗ. */
+function i18nApply(root) {
+  if (_lang !== 'en') return;
+  _i18nBuild();
+  const scope = root || document.body;
+  if (!scope) return;
+
+  const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, null);
+  const jobs = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (!n.nodeValue || !n.nodeValue.trim()) continue;
+    if (_i18nSkip(n)) continue;
+    const t = _i18nText(n.nodeValue);
+    if (t != null) jobs.push([n, t]);
+  }
+  for (const [n, t] of jobs) n.nodeValue = t;
+
+  // placeholder và title không nằm trong text node.
+  for (const el of scope.querySelectorAll('[placeholder],[title]')) {
+    for (const attr of ['placeholder', 'title']) {
+      const v = el.getAttribute(attr);
+      if (!v) continue;
+      const t = _i18nText(v);
+      if (t != null) el.setAttribute(attr, t);
+    }
+  }
+}
+
+let _i18nQueued = false;
+function _i18nSchedule() {
+  if (_lang !== 'en' || _i18nQueued) return;
+  _i18nQueued = true;
+  requestAnimationFrame(() => { _i18nQueued = false; i18nApply(document.body); });
+}
+
+/**
+ * App vẽ lại liên tục bằng innerHTML, nên phải theo dõi DOM thay vì gọi tay ở
+ * hàng trăm chỗ render. Gom lại theo khung hình để không chạy mỗi lần chèn.
+ */
+function i18nWatch() {
+  if (!document.body || typeof MutationObserver !== 'function') return;
+  new MutationObserver((muts) => {
+    if (_lang !== 'en') return;
+    for (const m of muts) {
+      if (m.addedNodes.length || m.type === 'characterData') { _i18nSchedule(); return; }
+    }
+  }).observe(document.body, { childList: true, subtree: true, characterData: true });
+}
+
+function i18nGet() { return _lang; }
+
+/** Đổi ngôn ngữ. Việt là mã nguồn gốc nên chỉ có cách nạp lại trang. */
+function i18nSet(lang) {
+  const next = lang === 'en' ? 'en' : 'vi';
+  if (next === _lang) return;
+  try { localStorage.setItem(I18N_LANG_KEY, next); } catch (_e) {}
+  location.reload();
+}
+
+function i18nToggle() { i18nSet(_lang === 'en' ? 'vi' : 'en'); }
+
+/** Nút gạt, gắn vào thanh nav. */
+function i18nMountSwitch() {
+  const nav = document.querySelector('.nav');
+  if (!nav || document.getElementById('lang-switch')) return;
+  const b = document.createElement('button');
+  b.id = 'lang-switch';
+  b.type = 'button';
+  b.className = 'lang-switch';
+  b.setAttribute('data-i18n-skip', '');
+  b.title = 'Tiếng Việt / English';
+  b.innerHTML = '<span class="' + (_lang === 'vi' ? 'on' : '') + '">VI</span>'
+              + '<span class="' + (_lang === 'en' ? 'on' : '') + '">EN</span>';
+  b.onclick = i18nToggle;
+  nav.appendChild(b);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.documentElement.lang = _lang;
+  i18nMountSwitch();
+  i18nApply(document.body);
+  i18nWatch();
+});
+
+</script>
 </body>
 </html>
