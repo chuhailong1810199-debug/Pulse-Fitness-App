@@ -5395,6 +5395,17 @@ function _rcDate(iso) {
   const p = iso.split('-');
   return p.length === 3 ? p[2] + '/' + p[1] : iso;
 }
+/**
+ * "2026-09-30" → "2026-09-29". Cộng trừ qua Date.UTC, KHÔNG dùng new Date()
+ * rồi toISOString(): ở UTC+7 cách đó lệch nguyên một ngày.
+ */
+function _rcDayBefore(iso) {
+  if (typeof iso !== 'string') return '';
+  const p = iso.split('-').map(Number);
+  if (p.length !== 3 || p.some(isNaN)) return '';
+  const d = new Date(Date.UTC(p[0], p[1] - 1, p[2] - 1));
+  return d.toISOString().slice(0, 10);
+}
 function _rcScoreCls(v) {
   if (v == null) return '';
   return v >= 80 ? 'rc-good' : v >= 65 ? 'rc-mid' : 'rc-bad';
@@ -5460,10 +5471,13 @@ function _rcMountRings(wrap) {
   const rdCol = !rd ? 'rgba(255,255,255,.2)'
     : rd.status >= 5 ? '#7ED9A0' : rd.status >= 3 ? '#E6B34A' : '#EE5A4F';
 
-  // Tải tim mạch Polar tự tính. Thang này không có trần cố định, nên vòng đầy
-  // theo mức cao nhất của chính khách trong kỳ đang xem — không ép vào thang
-  // 0-21 của WHOOP, vì đó là thang khác.
-  const cl = ld && typeof ld.cardioLoad === 'number' ? ld.cardioLoad : null;
+  // Ba vòng phải cùng một mốc thời gian. Bản ghi giấc ngủ ngày D là đêm KẾT
+  // THÚC sáng ngày D, nên buổi tập ảnh hưởng tới đêm đó là buổi của ngày D-1 —
+  // tập xong rồi mới đi ngủ. Bản đầu lấy tải của đúng ngày D, tức buổi tập
+  // CHƯA diễn ra lúc mở app buổi sáng, nên vòng Strain sáng nào cũng trống.
+  const prevDate = _rcDayBefore(last.date);
+  const ldPrev = (_recovery.find(n => n.date === prevDate) || {}).load || null;
+  const cl = ldPrev && typeof ldPrev.cardioLoad === 'number' ? ldPrev.cardioLoad : null;
   const clPeak = _recovery.reduce((m, n) => Math.max(m, ((n.load || {}).cardioLoad) || 0), 0);
 
   const box = document.createElement('section');
@@ -5476,7 +5490,8 @@ function _rcMountRings(wrap) {
               ? ' · ANS ' + (rd.ansCharge > 0 ? '+' : '') + rd.ansCharge.toFixed(1) : '')
            : 'Polar chưa chấm', rd ? rd.status / 6 : 0)
     + _rcRing('Strain', cl == null ? null : Math.round(cl), '', '#B9AAFF',
-        ld ? ld.sessions + ' buổi · ' + _rcHM(ld.sec) : 'không có buổi tập có nhịp tim',
+        ldPrev ? _rcDate(prevDate) + ' · ' + ldPrev.sessions + ' buổi · ' + _rcHM(ldPrev.sec)
+               : _rcDate(prevDate) + ' · không tập',
         cl == null || clPeak <= 0 ? 0 : cl / clPeak);
   head.insertAdjacentElement('afterend', box);
 
@@ -5484,8 +5499,10 @@ function _rcMountRings(wrap) {
   src.className = 'rc-rings-src';
   src.textContent = 'Cả ba đều là số Polar tự tính, app không tính lại. '
     + 'Sleep score 0-100 · Recovery = Nightly Recharge 1-6 kèm ANS charge -10…+10 · '
-    + 'Strain = cardio load của Training Load Pro, vòng đầy theo mức cao nhất '
-    + _recovery.length + ' ngày gần đây. Ba thang khác nhau, đừng so chéo. '
+    + 'Strain = cardio load của Training Load Pro, lấy của NGÀY HÔM TRƯỚC — tức buổi '
+    + 'tập diễn ra trước đêm này — nên cả ba vòng cùng nói về một khoảng thời gian. '
+    + 'Vòng đầy theo mức cao nhất ' + _recovery.length + ' ngày gần đây, không phải '
+    + 'thang 0-21 của WHOOP. Ba thang khác nhau, đừng so chéo. '
     + 'Không có nhiệt độ da và SpO₂ nên không so thẳng được với WHOOP.';
   box.insertAdjacentElement('afterend', src);
 
