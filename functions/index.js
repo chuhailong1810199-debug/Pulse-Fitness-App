@@ -2297,7 +2297,7 @@ function buildRecoveryDocs(nightly, sleep) {
  * chỉ cho trung bình và cao nhất, mà với kiểu tập ngắt quãng thì trung bình
  * xoá sạch cấu trúc buổi tập.
  */
-async function dayLoad(exercises, token, ctx) {
+function dayLoad(exercises, fitById, ctx) {
   let cardio = 0, sessions = 0, sec = 0;
   const series = [], workouts = [];
 
@@ -2310,13 +2310,9 @@ async function dayLoad(exercises, token, ctx) {
     if (hasCl) cardio += cl;
     sessions++; sec += _isoDur(x.duration) || 0;
 
-    let w = null, samples = null;
-    try {
-      samples = parseFitHeartRate(await polarGetBinary(`/v3/exercises/${x.id}/fit`, token));
-      if (samples && samples.length > 1) { series.push(samples); w = workoutStrain(samples, ctx); }
-    } catch (e) {
-      console.warn(`[polar] FIT ${x.id} lỗi — ${e.message}`);
-    }
+    let w = null;
+    const samples = fitById[x.id] || null;
+    if (samples && samples.length > 1) { series.push(samples); w = workoutStrain(samples, ctx); }
     workouts.push({
       at: x.start_time,
       sport: x.detailed_sport_info || x.sport || "OTHER",
@@ -2448,10 +2444,32 @@ async function syncPolarFor(clientId, token) {
       today: docs[docs.length - 1].date,
     });
 
+    // Tải mọi file FIT MỘT LẦN và song song. Trước đó mỗi ngày tự tải tuần tự
+    // bên trong vòng lặp, nên một tuần tập nhiều buổi là chạm trần 60 giây của
+    // hàm và cả lần đồng bộ hỏng theo.
+    const need = Object.values(exByDate).flat()
+      .filter((x) => x.id && ((x.heart_rate && x.heart_rate.average) ||
+        Number((x.training_load_pro || {})["cardio-load"]) > 0));
+    const fitById = {};
+    await Promise.all(need.map(async (x) => {
+      try {
+        const s = parseFitHeartRate(await polarGetBinary(`/v3/exercises/${x.id}/fit`, token));
+        if (s && s.length > 1) fitById[x.id] = s;
+        else console.warn(`[polar] FIT ${x.id}: không có mẫu nhịp tim`);
+      } catch (e) {
+        console.warn(`[polar] FIT ${x.id} lỗi — ${e.message}`);
+      }
+    }));
+    console.log(`[polar] ${clientId}: ${Object.keys(fitById).length}/${need.length} file FIT, `
+      + `HR max ${hm.hrMax} (${hm.source})`);
+
     for (const doc of docs) {
       const rhr = rhrByDate[doc.date];
-      if (!hm.hrMax || rhr == null) continue;
-      const load = await dayLoad(exByDate[doc.date] || [], token,
+      if (!hm.hrMax || rhr == null) {
+        console.warn(`[polar] ${doc.date}: thiếu hrMax(${hm.hrMax}) hoặc rhr(${rhr}) — bỏ strain`);
+        continue;
+      }
+      const load = dayLoad(exByDate[doc.date] || [], fitById,
         { rhr, hrMax: hm.hrMax, hrMaxSource: hm.source, sex: (prof && prof.gender) === "FEMALE" ? "female" : "male" });
       if (load) doc.load = load;
     }
@@ -2510,13 +2528,16 @@ exports.syncPolarRecovery = onSchedule(
     region: "asia-southeast1",
     secrets: [POLAR_TOKEN],
     retryCount: 2,
+    timeoutSeconds: 300,
+    memory: "512MiB",
   },
   async () => { await syncAllPolar(); },
 );
 
 /** Nút "đồng bộ ngay" — chỉ coach gọi được. */
 exports.syncPolarNow = onCall(
-  { region: "asia-southeast1", secrets: [POLAR_TOKEN] },
+  // Tải file FIT của cả tuần: mặc định 60s là không đủ khi tập nhiều.
+  { region: "asia-southeast1", secrets: [POLAR_TOKEN], timeoutSeconds: 300, memory: "512MiB" },
   async (request) => {
     const email = request.auth && request.auth.token && request.auth.token.email;
     if (email !== COACH_EMAIL) {
