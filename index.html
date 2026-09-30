@@ -5395,6 +5395,12 @@ function _rcDate(iso) {
   const p = iso.split('-');
   return p.length === 3 ? p[2] + '/' + p[1] : iso;
 }
+/** Cách đọc thang 0-21. Phải khớp STRAIN_BANDS trong functions/strain.js. */
+function _rcStrainBand(v) {
+  if (typeof v !== 'number') return '';
+  return v <= 7 ? 'thấp' : v <= 10 ? 'vừa' : v <= 14 ? 'khá cao' : v <= 18 ? 'cao' : 'rất cao';
+}
+
 /**
  * "2026-09-30" → "2026-09-29". Cộng trừ qua Date.UTC, KHÔNG dùng new Date()
  * rồi toISOString(): ở UTC+7 cách đó lệch nguyên một ngày.
@@ -5477,8 +5483,9 @@ function _rcMountRings(wrap) {
   // CHƯA diễn ra lúc mở app buổi sáng, nên vòng Strain sáng nào cũng trống.
   const prevDate = _rcDayBefore(last.date);
   const ldPrev = (_recovery.find(n => n.date === prevDate) || {}).load || null;
-  const cl = ldPrev && typeof ldPrev.cardioLoad === 'number' ? ldPrev.cardioLoad : null;
-  const clPeak = _recovery.reduce((m, n) => Math.max(m, ((n.load || {}).cardioLoad) || 0), 0);
+  // Thang 0-21 của app (functions/strain.js). cardioLoad của Polar vẫn được
+  // lưu cùng chỗ và hiện ở dòng phụ, để đối chiếu hai nguồn.
+  const st = ldPrev && typeof ldPrev.strain === 'number' ? ldPrev.strain : null;
 
   const box = document.createElement('section');
   box.id = 'rc-rings';
@@ -5489,20 +5496,25 @@ function _rcMountRings(wrap) {
         rd ? rd.label + (rd.ansCharge != null
               ? ' · ANS ' + (rd.ansCharge > 0 ? '+' : '') + rd.ansCharge.toFixed(1) : '')
            : 'Polar chưa chấm', rd ? rd.status / 6 : 0)
-    + _rcRing('Strain', cl == null ? null : Math.round(cl), '', '#B9AAFF',
-        ldPrev ? _rcDate(prevDate) + ' · ' + ldPrev.sessions + ' buổi · ' + _rcHM(ldPrev.sec)
-               : _rcDate(prevDate) + ' · không tập',
-        cl == null || clPeak <= 0 ? 0 : cl / clPeak);
+    + _rcRing('Strain', st == null ? null : st.toFixed(1), '', '#B9AAFF',
+        st != null
+          ? _rcDate(prevDate) + ' · ' + _rcStrainBand(st) + ' · ' + ldPrev.sessions + ' buổi'
+          : (ldPrev ? _rcDate(prevDate) + ' · không đọc được nhịp tim'
+                    : _rcDate(prevDate) + ' · không tập'),
+        st == null ? 0 : st / 21);
   head.insertAdjacentElement('afterend', box);
 
   const src = document.createElement('p');
   src.className = 'rc-rings-src';
-  src.textContent = 'Cả ba đều là số Polar tự tính, app không tính lại. '
+  src.textContent = 'Sleep và Recovery là số Polar tự chấm, app không tính lại. '
     + 'Sleep score 0-100 · Recovery = Nightly Recharge 1-6 kèm ANS charge -10…+10 · '
-    + 'Strain = cardio load của Training Load Pro, lấy của NGÀY HÔM TRƯỚC — tức buổi '
-    + 'tập diễn ra trước đêm này — nên cả ba vòng cùng nói về một khoảng thời gian. '
-    + 'Vòng đầy theo mức cao nhất ' + _recovery.length + ' ngày gần đây, không phải '
-    + 'thang 0-21 của WHOOP. Ba thang khác nhau, đừng so chéo. '
+    + 'Strain 0-21 là thang của app, không phải của Polar: nhịp tim từng giây trong '
+    + 'file FIT → cường độ theo dự trữ nhịp tim (Karvonen) → trọng số mũ Banister '
+    + '→ ép về 0-21. Lấy của NGÀY HÔM TRƯỚC, tức buổi tập diễn ra trước đêm này, '
+    + 'nên cả ba vòng cùng nói về một khoảng thời gian. '
+    + (ldPrev && ldPrev.hrMaxSource ? 'Nhịp tim tối đa ' + ldPrev.hrMax + ' — '
+        + ldPrev.hrMaxSource + '. ' : '')
+    + 'Ba thang khác nhau, đừng so chéo. '
     + 'Không có nhiệt độ da và SpO₂ nên không so thẳng được với WHOOP.';
   box.insertAdjacentElement('afterend', src);
 

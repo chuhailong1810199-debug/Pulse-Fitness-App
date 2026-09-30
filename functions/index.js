@@ -2195,6 +2195,8 @@ Rules:
 // ═══════════════════════════════════════════════════════════════════════════
 
 const POLAR_API = "https://www.polaraccesslink.com";
+const { parseFitHeartRate } = require("./fit-hr");
+const { workoutStrain, dailyStrain, resolveHrMax } = require("./strain");
 
 // Client duy nhất đang nối Polar. Mỗi người cần token riêng, nên đây là map
 // chứ không phải một hằng số — thêm người sau này chỉ là thêm một dòng.
@@ -2209,6 +2211,13 @@ async function polarGet(path, token) {
     throw new Error(`Polar ${path} → HTTP ${r.status}: ${String(text).slice(0, 200)}`);
   }
   try { return text ? JSON.parse(text) : null; } catch { return null; }
+}
+
+/** Tải file nhị phân (file FIT của buổi tập). */
+async function polarGetBinary(path, token) {
+  const r = await fetch(POLAR_API + path, { headers: { Authorization: "Bearer " + token } });
+  if (!r.ok) throw new Error(`Polar ${path} → HTTP ${r.status}`);
+  return Buffer.from(await r.arrayBuffer());
 }
 
 /** Polar bọc mảng dưới nhiều tên khác nhau tuỳ endpoint. */
@@ -2256,6 +2265,12 @@ function buildRecoveryDocs(nightly, sleep) {
       interruptions: x.total_interruption_duration ?? null,
       // Ba điểm thành phần Polar cộng lại thành sleep_score. Dùng thẳng số
       // của Polar thay vì tự tính lại từ tổng giờ ngủ.
+      // ĐÁY nhịp tim trong đêm, tính từ mẫu thật. Khác với recharge.rhr, vốn là
+      // TRUNG BÌNH ~4h đầu giấc ngủ. Karvonen cần đáy, không cần trung bình.
+      hrMin: (() => {
+        const v = Object.values(x.heart_rate_samples || {}).map(Number).filter((n) => n > 0);
+        return v.length ? Math.min(...v) : null;
+      })(),
       dur:   x.group_duration_score ?? null,
       solid: x.group_solidity_score ?? null,
       regen: x.group_regeneration_score ?? null,
@@ -2271,27 +2286,64 @@ function buildRecoveryDocs(nightly, sleep) {
 
 /** Lõi dùng chung cho cả lịch lẫn nút đồng bộ tay. */
 /**
- * Tải tim mạch của một ngày = tổng cardio-load Polar tự tính cho từng buổi
- * tập (Training Load Pro). Trước đây chỗ này là công thức TRIMP tự viết, cần
- * nhịp tim tối đa mà AccessLink không cung cấp — nên phải đoán, và số đoán đó
- * làm điểm đổi theo từng lần sync. Polar đã tính sẵn, dùng thẳng.
+ * Tải của một ngày. Giữ CẢ HAI con số, vì chúng trả lời hai câu khác nhau:
  *
- * Chỉ buổi tập có nhịp tim mới có cardio-load; buổi không có trả 0, bỏ qua.
+ *   cardioLoad — Polar tự tính (Training Load Pro). Không có trần, chỉ so được
+ *                ngày này với ngày khác của cùng người. Không phải số của app.
+ *   strain     — thang 0-21 của app, công thức mở trong functions/strain.js.
+ *                Đọc được ngay ("14 là cao") và so được giữa các buổi.
+ *
+ * Nhịp tim lấy từ file FIT của từng buổi: mỗi giây một mẫu. Endpoint tóm tắt
+ * chỉ cho trung bình và cao nhất, mà với kiểu tập ngắt quãng thì trung bình
+ * xoá sạch cấu trúc buổi tập.
  */
-function dayCardioLoad(exercises) {
-  let load = 0, sessions = 0, sec = 0;
+async function dayLoad(exercises, token, ctx) {
+  let cardio = 0, sessions = 0, sec = 0;
+  const series = [], workouts = [];
+
   for (const x of exercises) {
-    const v = Number(((x.training_load_pro || {})["cardio-load"]));
-    if (!isFinite(v) || v <= 0) continue;
-    load += v; sessions++; sec += _isoDur(x.duration) || 0;
+    const cl = Number(((x.training_load_pro || {})["cardio-load"]));
+    const hasCl = isFinite(cl) && cl > 0;
+    const hasHr = x.heart_rate && x.heart_rate.average;
+    if (!hasCl && !hasHr) continue;      // bản trùng Polar ghi kèm, không có dữ liệu
+
+    if (hasCl) cardio += cl;
+    sessions++; sec += _isoDur(x.duration) || 0;
+
+    let w = null, samples = null;
+    try {
+      samples = parseFitHeartRate(await polarGetBinary(`/v3/exercises/${x.id}/fit`, token));
+      if (samples && samples.length > 1) { series.push(samples); w = workoutStrain(samples, ctx); }
+    } catch (e) {
+      console.warn(`[polar] FIT ${x.id} lỗi — ${e.message}`);
+    }
+    workouts.push({
+      at: x.start_time,
+      sport: x.detailed_sport_info || x.sport || "OTHER",
+      sec: _isoDur(x.duration),
+      cardioLoad: hasCl ? Math.round(cl * 10) / 10 : null,
+      strain: w ? w.strain : null,
+      hrAvg: w ? w.hrAvg : ((x.heart_rate || {}).average ?? null),
+      hrMax: w ? w.hrMax : ((x.heart_rate || {}).maximum ?? null),
+      zoneSec: w ? w.zoneSec : null,
+      samples: samples ? samples.length : 0,
+    });
   }
-  return sessions
-    ? { cardioLoad: Math.round(load * 10) / 10, sessions, sec, source: "polar-training-load-pro" }
-    : null;
+
+  if (!sessions) return null;
+  // Cộng tải THÔ của các buổi rồi mới ép về 0-21 một lần. Cộng strain từng buổi
+  // lại là sai: hàm ép là hàm lõm nên tổng sẽ bị thổi phồng.
+  const day = series.length ? dailyStrain(series, ctx) : null;
+  return {
+    cardioLoad: Math.round(cardio * 10) / 10,
+    strain: day ? day.strain : null,
+    rawLoad: day ? day.load : null,
+    zoneSec: day ? day.zoneSec : null,
+    hrMax: ctx.hrMax, hrMaxSource: ctx.hrMaxSource, rhr: ctx.rhr,
+    sessions, sec, workouts,
+    source: "polar-fit + app-strain-v1",
+  };
 }
-
-
-/** ISO 8601 duration → giây. Polar trả cả "PT2H44M" lẫn "PT2792.985S". */
 function _isoDur(v) {
   const m = /^PT(?:([\d.]+)H)?(?:([\d.]+)M)?(?:([\d.]+)S)?$/.exec(String(v || ""));
   if (!m) return null;
@@ -2362,17 +2414,45 @@ async function syncPolarFor(clientId, token) {
   const docs = buildRecoveryDocs(nightly, sleep);
   if (!docs.length) return { clientId, written: 0, dates: [] };
 
-  // Tải tim mạch theo ngày, lấy từ Training Load Pro của Polar.
-  let exByDate = {};
+  // Tải tim mạch theo ngày: cardio load của Polar + strain 0-21 của app.
   try {
     const exes = polarArray(await polarGet("/v3/exercises", token), "exercises", "data");
+    const exByDate = {};
+    let seenMax = 0;
     for (const x of exes) {
       if (!x || !x.start_time) continue;
-      const d = String(x.start_time).slice(0, 10);
-      (exByDate[d] = exByDate[d] || []).push(x);
+      (exByDate[String(x.start_time).slice(0, 10)] = exByDate[String(x.start_time).slice(0, 10)] || []).push(x);
+      const m = Number((x.heart_rate || {}).maximum);
+      if (isFinite(m) && m > seenMax) seenMax = m;
     }
+
+    // Nhịp tim nghỉ: ĐÁY thật trong đêm, không phải trung bình 4h đầu. Polar
+    // trả trung bình ở nightly recharge; đáy nằm trong mẫu của endpoint sleep.
+    const rhrByDate = {};
+    for (const d of docs) {
+      rhrByDate[d.date] = (d.sleep || {}).hrMin ?? (d.recharge || {}).rhr ?? null;
+    }
+
+    // Id người dùng Polar nằm sẵn trong mỗi bản ghi buổi tập — khỏi phải cấu
+    // hình thêm một giá trị nữa và khỏi lệch khi đổi tài khoản.
+    const uid = String((exes.find((x) => x && x.polar_user) || {}).polar_user || "").split("/").pop();
+    const prof = uid ? await polarGet(`/v3/users/${uid}`, token).catch(() => null) : null;
+
+    // maxHr do coach nhập từ bài test thật, nếu có, thắng mọi ước lượng.
+    const cDoc = await getFirestore().collection("clients").doc(clientId).get().catch(() => null);
+    const manual = cDoc && cDoc.exists ? cDoc.data().maxHr : null;
+
+    const hm = resolveHrMax({
+      manual, observed: seenMax,
+      birthdate: prof && prof.birthdate,
+      today: docs[docs.length - 1].date,
+    });
+
     for (const doc of docs) {
-      const load = dayCardioLoad(exByDate[doc.date] || []);
+      const rhr = rhrByDate[doc.date];
+      if (!hm.hrMax || rhr == null) continue;
+      const load = await dayLoad(exByDate[doc.date] || [], token,
+        { rhr, hrMax: hm.hrMax, hrMaxSource: hm.source, sex: (prof && prof.gender) === "FEMALE" ? "female" : "male" });
       if (load) doc.load = load;
     }
   } catch (e) {
