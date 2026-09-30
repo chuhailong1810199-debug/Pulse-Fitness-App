@@ -5504,19 +5504,8 @@ function _rcMountRings(wrap) {
         st == null ? 0 : st / 21);
   head.insertAdjacentElement('afterend', box);
 
-  const src = document.createElement('p');
-  src.className = 'rc-rings-src';
-  src.textContent = 'Sleep và Recovery là số Polar tự chấm, app không tính lại. '
-    + 'Sleep score 0-100 · Recovery = Nightly Recharge 1-6 kèm ANS charge -10…+10 · '
-    + 'Strain 0-21 là thang của app, không phải của Polar: nhịp tim từng giây trong '
-    + 'file FIT → cường độ theo dự trữ nhịp tim (Karvonen) → trọng số mũ Banister '
-    + '→ ép về 0-21. Lấy của NGÀY HÔM TRƯỚC, tức buổi tập diễn ra trước đêm này, '
-    + 'nên cả ba vòng cùng nói về một khoảng thời gian. '
-    + (ldPrev && ldPrev.hrMaxSource ? 'Nhịp tim tối đa ' + ldPrev.hrMax + ' — '
-        + ldPrev.hrMaxSource + '. ' : '')
-    + 'Ba thang khác nhau, đừng so chéo. '
-    + 'Không có nhiệt độ da và SpO₂ nên không so thẳng được với WHOOP.';
-  box.insertAdjacentElement('afterend', src);
+  // Đoạn giải thích nguồn và công thức từng nằm ở đây, coach bảo bỏ. Nội dung
+  // đó vẫn còn trong chú thích đầu functions/strain.js và _rcReadiness.
 
   if (!rd) {
     const note = document.createElement('p');
@@ -13308,7 +13297,6 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .rc-r-l{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--rc-muted);}
 .rc-r-s{font-size:10.5px;color:rgba(255,255,255,.33);text-align:center;line-height:1.35;}
 .rc-rings-note{margin:10px 0 0;font-size:11.5px;line-height:1.55;color:var(--rc-muted);}
-.rc-rings-src{margin:10px 0 0;font-size:10.5px;line-height:1.5;color:rgba(255,255,255,.30);}
 @media(max-width:380px){ .rc-r-v{font-size:18px;} .rc-r-l{font-size:10px;letter-spacing:.06em;} }
 /* chỉ số giấc ngủ + cột tuần */
 .rc-sleepm{margin:4px 0 6px;}
