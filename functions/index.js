@@ -21,6 +21,7 @@ const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onSchedule }         = require("firebase-functions/v2/scheduler");
 const { defineSecret }       = require("firebase-functions/params");
+const { onRequest }          = require("firebase-functions/v2/https");
 const { initializeApp }      = require("firebase-admin/app");
 const { getFirestore }       = require("firebase-admin/firestore");
 const nodemailer             = require("nodemailer");
@@ -33,6 +34,7 @@ const SMTP_PASS      = defineSecret("SMTP_PASS");
 const GROQ_API_KEY   = defineSecret("GROQ_API_KEY");
 const GEMINI_API_KEY = defineSecret("GEMINI_API_KEY");
 const POLAR_TOKEN    = defineSecret("POLAR_TOKEN");
+const POLAR_WEBHOOK_SECRET = defineSecret("POLAR_WEBHOOK_SECRET");
 
 const COACH_EMAIL = "chuhailong1810199@gmail.com";
 const APP_NAME = "Striveo";
@@ -2522,17 +2524,81 @@ async function syncAllPolar() {
   return out;
 }
 
+/**
+ * Polar đẩy dữ liệu về ngay khi mây của họ nhận được, thay vì mình chờ tới 7h
+ * sáng hoặc coach bấm tay. Mỗi ứng dụng chỉ đăng ký được MỘT webhook, và Polar
+ * tự tắt nó sau 7 ngày giao thất bại liên tục — nên hàm này phải luôn trả 200
+ * thật nhanh, việc nặng làm sau khi đã trả lời.
+ *
+ * Xác thực bằng HMAC SHA-256 trên đúng chuỗi byte của thân yêu cầu. Không có
+ * bước này thì bất kỳ ai biết URL cũng ghi được dữ liệu vào hồ sơ khách.
+ */
+exports.polarWebhook = onRequest(
+  { region: "asia-southeast1", secrets: [POLAR_TOKEN, POLAR_WEBHOOK_SECRET, GEMINI_API_KEY],
+    timeoutSeconds: 300, memory: "512MiB", cors: false },
+  async (req, res) => {
+    if (req.method !== "POST") return res.status(405).send("POST only");
+
+    const raw = req.rawBody ? req.rawBody.toString("utf8") : JSON.stringify(req.body || {});
+    const sig = req.get("Polar-Webhook-Signature") || "";
+    const key = POLAR_WEBHOOK_SECRET.value();
+
+    // Lúc đăng ký, Polar gửi một PING và CHƯA có khoá ký — nhận để URL được duyệt.
+    let body = {};
+    try { body = JSON.parse(raw); } catch (_e) {}
+    const isPing = body && body.event === "PING";
+
+    if (!isPing) {
+      if (!key) { console.error("[polarWebhook] thiếu POLAR_WEBHOOK_SECRET"); return res.status(200).send("ok"); }
+      const want = require("crypto").createHmac("sha256", key).update(raw).digest("hex");
+      // So sánh theo thời gian cố định: so bằng === rò rỉ thông tin qua thời gian.
+      const a = Buffer.from(want), b = Buffer.from(sig);
+      const ok = a.length === b.length && require("crypto").timingSafeEqual(a, b);
+      if (!ok) { console.warn("[polarWebhook] chữ ký sai — bỏ qua"); return res.status(200).send("ok"); }
+    }
+
+    // Trả 200 TRƯỚC khi làm việc nặng. Polar tính thất bại theo thời gian phản
+    // hồi, và một lần đồng bộ mất vài giây.
+    res.status(200).send("ok");
+    if (isPing) return;
+
+    const ev = String(body.event || "");
+    const uid = String(body.user_id || "");
+    console.log(`[polarWebhook] ${ev} user=${uid}`);
+
+    // Chỉ những sự kiện làm đổi bức tranh mới đáng chạy. SLEEP là sự kiện một
+    // lần mỗi đêm nên đó là chỗ sinh bản tóm tắt; các sự kiện khác chỉ kéo dữ
+    // liệu, không gọi model, để không đốt token nhiều lần trong ngày.
+    if (!["SLEEP", "EXERCISE", "ACTIVITY_SUMMARY", "CONTINUOUS_HEART_RATE"].includes(ev)) return;
+
+    try {
+      const c = POLAR_CLIENTS[0];
+      const out = await syncPolarFor(c.clientId, c.secret());
+      console.log(`[polarWebhook] ${c.clientId}: ghi ${out.written} đêm, ${out.activity || 0} ngày`);
+      if (ev === "SLEEP") await generateBriefIfMissing(c.clientId);
+    } catch (e) {
+      console.error("[polarWebhook] lỗi:", e.message);
+    }
+  },
+);
+
 exports.syncPolarRecovery = onSchedule(
   {
     schedule: "0 7 * * *",
     timeZone: "Asia/Ho_Chi_Minh",
     region: "asia-southeast1",
-    secrets: [POLAR_TOKEN],
+    secrets: [POLAR_TOKEN, GEMINI_API_KEY],
     retryCount: 2,
     timeoutSeconds: 300,
     memory: "512MiB",
   },
-  async () => { await syncAllPolar(); },
+  async () => {
+    await syncAllPolar();
+    // Lưới an toàn: webhook có thể bị Polar tắt sau 7 ngày giao lỗi, hoặc điện
+    // thoại chưa đẩy dữ liệu lên kịp lúc webhook bắn. Lượt 7h sáng sinh bản
+    // tóm tắt nếu đêm mới nhất chưa có — đã có rồi thì không gọi model.
+    for (const c of POLAR_CLIENTS) await generateBriefIfMissing(c.clientId);
+  },
 );
 
 /** Nút "đồng bộ ngay" — chỉ coach gọi được. */
@@ -2742,6 +2808,62 @@ nextSession.intensity: nêu cả khoảng strain mục tiêu 0-21
 recoveryActions: 2 tới 4 mục, mỗi mục một việc làm được ngay
 watch: 1 câu — điều gì xảy ra thì nên đổi khuyến nghị
 caveat: 1 tới 2 câu`;
+}
+
+/**
+ * Sinh bản tóm tắt cho đêm mới nhất nếu ngày đó CHƯA có. Webhook gọi hàm này,
+ * nên không được ném lỗi ra ngoài: webhook hỏng liên tiếp 7 ngày là Polar tự
+ * tắt đăng ký, và mất webhook đắt hơn mất một bản tóm tắt.
+ */
+async function generateBriefIfMissing(clientId) {
+  try {
+    const db = getFirestore();
+    const cRef = db.collection("clients").doc(clientId);
+    const cDoc = await cRef.get();
+    if (!cDoc.exists) return null;
+    const client = cDoc.data();
+
+    const recSnap = await cRef.collection("recovery").orderBy("date", "desc").limit(30).get();
+    const nights = recSnap.docs.map((d) => d.data());
+    if (!nights.length) return null;
+
+    const latest = nights[0];
+    if (latest.brief && latest.brief.text) {
+      console.log(`[brief] ${clientId} ${latest.date}: đã có, không gọi model`);
+      return latest.brief.text;
+    }
+
+    const wSnap = await cRef.collection("workoutHistory").orderBy("date", "desc").limit(10).get();
+    const workouts = wSnap.docs.map((d) => {
+      const v = d.data();
+      const dt = v.date && v.date.toDate ? v.date.toDate().toISOString().slice(0, 10) : "?";
+      return { date: dt, day: v.day, done: v.done, total: v.total, totalVolume: v.totalVolume };
+    });
+    const aSnap = await cRef.collection("activity").orderBy("date", "desc").limit(14).get();
+    const activity = aSnap.docs.map((d) => d.data());
+
+    const prompt = buildBriefPrompt({ client, nights, program: client.program || {}, workouts, activity });
+    const raw = await callGemini(GEMINI_API_KEY.value(), [{ type: "text", text: prompt }],
+      BRIEF_SCHEMA, "recoveryBrief", "low");
+
+    let brief;
+    try { brief = JSON.parse(raw); } catch (_e) {
+      console.error("[brief] JSON hỏng:", String(raw).slice(0, 200));
+      return null;
+    }
+    const keys = Object.keys(client.program || {});
+    if (brief.nextSession && brief.nextSession.sessionKey
+        && !keys.includes(brief.nextSession.sessionKey)) {
+      brief.nextSession.sessionKey = "";
+    }
+    await cRef.collection("recovery").doc(latest.date)
+      .set({ brief: { text: brief, at: new Date().toISOString(), model: GEMINI_MODEL } }, { merge: true });
+    console.log(`[brief] ${clientId} ${latest.date}: đã sinh`);
+    return brief;
+  } catch (e) {
+    console.error(`[brief] ${clientId} lỗi:`, e.message);
+    return null;
+  }
 }
 
 exports.recoveryBrief = onCall(
