@@ -2747,7 +2747,7 @@ caveat: 1 tới 2 câu`;
 exports.recoveryBrief = onCall(
   { secrets: [GEMINI_API_KEY], region: "asia-southeast1", timeoutSeconds: 120, memory: "256MiB" },
   async (request) => {
-    const { clientId, force } = request.data || {};
+    const { clientId, force, cachedOnly } = request.data || {};
     if (!clientId) throw new HttpsError("invalid-argument", "clientId is required");
 
     const email = request.auth && request.auth.token && request.auth.token.email;
@@ -2774,6 +2774,11 @@ exports.recoveryBrief = onCall(
     const latest = nights[0];
     if (!force && latest.brief && latest.brief.text) {
       return { cached: true, date: latest.date, brief: latest.brief.text, at: latest.brief.at };
+    }
+    // Chỉ lấy bản đã lưu, KHÔNG gọi model. Màn hình dùng đường này khi mở tab:
+    // xem lại trong ngày phải miễn phí, chỉ lần sinh đầu tiên mới tốn token.
+    if (cachedOnly) {
+      return { cached: false, empty: true, date: latest.date, brief: null, at: null };
     }
 
     const wSnap = await cRef.collection("workoutHistory").orderBy("date", "desc").limit(10).get();

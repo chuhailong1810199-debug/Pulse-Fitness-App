@@ -735,6 +735,7 @@ async function switchClient(id) {
 
   activeClient = next;
   _recovery = [];                 // dữ liệu hồi phục của khách CŨ, phải xoá
+  _rcBriefCache = null; _rcBriefAt = null;   // nếu không, khách B thấy lời khuyên của khách A
   checkRecoveryTab();             // hiện/ẩn tab Recovery theo khách mới (không await)
   _activity = []; checkActiveTab();
   _historyCache = null; // clear cache for new client
@@ -5643,26 +5644,69 @@ function _rcMountBrief(wrap) {
   const box = document.createElement('section');
   box.id = 'rc-brief';
   box.className = 'rc-brief';
-  box.innerHTML = '<button class="rc-brief-go" onclick="recoveryBrief(false)">Phân tích đêm qua</button>';
   head.insertAdjacentElement('afterend', box);
-  // Có sẵn bản đã lưu thì hiện luôn, không gọi model.
+  // Đã có trong bộ nhớ phiên thì vẽ luôn. Chưa có thì hỏi server bản ĐÃ LƯU —
+  // đường này không gọi model nên mở tab bao nhiêu lần cũng không mất tiền.
   if (_rcBriefCache) _rcBriefPaint(_rcBriefCache, _rcBriefAt);
+  else { _rcBriefIdle(box); recoveryBrief('cached'); }
+}
+
+/**
+ * Ép phân tích lại. Bản tóm tắt được giữ cả ngày; bấm lại là một lượt model
+ * nữa và tốn tiền thật, nên phải hỏi. Chỉ đáng làm khi vừa sync thêm dữ liệu.
+ */
+function rcBriefRedo() {
+  const at = _rcBriefAt ? String(_rcBriefAt).slice(11, 16) : '';
+  if (!confirm('Phân tích lại sẽ gọi AI thêm một lượt và tốn thêm phí.\n'
+      + (at ? 'Bản hiện tại phân tích lúc ' + at + '.\n' : '')
+      + 'Bản cũ vẫn dùng được tới hết ngày. Vẫn phân tích lại?')) return;
+  recoveryBrief('force');
+}
+
+/** Khung chờ khi chưa có bản tóm tắt nào cho ngày mới nhất. */
+function _rcBriefIdle(box) {
+  if (!box) return;
+  box.innerHTML = '<button class="rc-brief-go" onclick="recoveryBrief(\'auto\')">'
+    + 'Phân tích đêm qua</button>';
 }
 
 let _rcBriefCache = null, _rcBriefAt = null;
 
-async function recoveryBrief(force) {
+/**
+ * Ba chế độ, vì mỗi lần gọi model là mất tiền thật:
+ *   'cached' — chỉ đọc bản đã lưu, KHÔNG gọi model. Dùng khi mở tab.
+ *   'auto'   — chưa có thì sinh một lần, có rồi thì trả bản cũ. Dùng sau sync.
+ *   'force'  — bắt sinh lại. Chỉ chạy khi coach tự bấm và xác nhận.
+ * Server lưu bản tóm tắt theo NGÀY của bản ghi mới nhất, nên trong cùng một
+ * ngày dù bấm bao nhiêu lần cũng chỉ tốn đúng một lượt.
+ */
+async function recoveryBrief(mode) {
+  // Gọi cũ truyền boolean: recoveryBrief(true) nghĩa là ép sinh lại.
+  if (mode === true) mode = 'force';
+  if (mode === false || !mode) mode = 'auto';
+
   const box = document.getElementById('rc-brief');
   if (!box || !activeClient) return;
-  box.innerHTML = '<div class="rc-brief-wait">Đang đọc dữ liệu…</div>';
+  const forClient = activeClient.id;
+
+  if (mode !== 'cached') box.innerHTML = '<div class="rc-brief-wait">Đang phân tích…</div>';
   try {
     const fn = firebase.app().functions('asia-southeast1')
       .httpsCallable('recoveryBrief', { timeout: 120000 });
-    const res = await fn({ clientId: activeClient.id, force: !!force });
+    const res = await fn({
+      clientId: forClient,
+      force: mode === 'force',
+      cachedOnly: mode === 'cached',
+    });
+    // Coach đổi khách trong lúc chờ thì kết quả này đã thuộc về khách cũ.
+    if (!activeClient || activeClient.id !== forClient) return;
+
+    if (res.data.empty) { _rcBriefIdle(box); return; }
     _rcBriefCache = res.data.brief;
     _rcBriefAt    = res.data.at;
     _rcBriefPaint(_rcBriefCache, _rcBriefAt);
   } catch (e) {
+    if (mode === 'cached') { _rcBriefIdle(box); return; }
     console.warn('[recoveryBrief]', e);
     // Trước đây chỗ này ghi đè lời nhắn của server bằng câu "5 lượt/phút" viết
     // cứng, mà hạn mức thật là 20 lượt/NGÀY. Người dùng đợi một phút rồi bấm
@@ -5673,7 +5717,7 @@ async function recoveryBrief(force) {
     if (daily) msg = msg.slice(6).trim();
     box.innerHTML = '<div class="rc-brief-err">' + escHtml(msg)
       // Hết hạn mức ngày thì nút "Thử lại" chỉ đốt thêm lượt — không hiện nữa.
-      + (daily ? '' : ' <button class="rc-brief-retry" onclick="recoveryBrief(true)">Thử lại</button>')
+      + (daily ? '' : ' <button class="rc-brief-retry" onclick="recoveryBrief(\'auto\')">Thử lại</button>')
       + '</div>';
   }
 }
@@ -5693,7 +5737,7 @@ function _rcBriefPaint(b, at) {
   box.innerHTML =
     '<div class="rc-brief-top">'
       + '<span class="rc-brief-chip ' + st.cls + '">' + st.label + '</span>'
-      + '<button class="rc-brief-again" onclick="recoveryBrief(true)" title="Phân tích lại">↻</button>'
+      + '<button class="rc-brief-again" onclick="rcBriefRedo()" title="Phân tích lại">↻</button>'
     + '</div>'
     + '<p class="rc-brief-head">' + escHtml(b.headline || '') + '</p>'
     + (b.why ? '<p class="rc-brief-p">' + escHtml(b.why) + '</p>' : '')
@@ -5771,6 +5815,9 @@ async function polarSyncNow() {
     }
     set('Đã cập nhật ' + (r.written || 0) + ' đêm · '
         + (r.activity || 0) + ' ngày hoạt động', true);
+    // Sync xong là có đêm mới, nên sinh luôn bản tóm tắt thay vì bắt coach bấm
+    // thêm một nút nữa. 'auto' chỉ gọi model khi ngày đó CHƯA có bản nào.
+    recoveryBrief('auto');
   } catch (e) {
     console.warn('[polarSyncNow]', e);
     set('Lỗi: ' + String(e.message || e).slice(0, 36), true);
