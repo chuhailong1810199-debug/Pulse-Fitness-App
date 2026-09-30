@@ -5663,11 +5663,15 @@ function rcBriefRedo() {
   recoveryBrief('force');
 }
 
-/** Khung chờ khi chưa có bản tóm tắt nào cho ngày mới nhất. */
+/**
+ * Chưa có bản tóm tắt cho ngày mới nhất. KHÔNG đặt nút bấm ở đây: lời khuyên
+ * do nút "Đồng bộ ngay" sinh ra, một lượt mỗi ngày. Hai nút cùng gọi model là
+ * hai đường tiêu tiền cho một việc, và coach đã bảo bỏ.
+ */
 function _rcBriefIdle(box) {
   if (!box) return;
-  box.innerHTML = '<button class="rc-brief-go" onclick="recoveryBrief(\'auto\')">'
-    + 'Phân tích đêm qua</button>';
+  box.innerHTML = '<p class="rc-brief-hint">Bấm <b>Đồng bộ ngay</b> để kéo dữ liệu '
+    + 'và nhận lời khuyên cho hôm nay.</p>';
 }
 
 let _rcBriefCache = null, _rcBriefAt = null;
@@ -5717,7 +5721,7 @@ async function recoveryBrief(mode) {
     if (daily) msg = msg.slice(6).trim();
     box.innerHTML = '<div class="rc-brief-err">' + escHtml(msg)
       // Hết hạn mức ngày thì nút "Thử lại" chỉ đốt thêm lượt — không hiện nữa.
-      + (daily ? '' : ' <button class="rc-brief-retry" onclick="recoveryBrief(\'auto\')">Thử lại</button>')
+      + (daily ? '' : ' Bấm Đồng bộ ngay để thử lại.')
       + '</div>';
   }
 }
@@ -13408,18 +13412,15 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .rc-brief-sess:hover{background:rgba(118,101,255,.3);}
 .rc-brief-why{display:block;margin-top:8px;font-size:12.5px;color:var(--rc-muted);line-height:1.55;}
 .rc-brief-cav{margin:14px 0 0;font-size:12px;line-height:1.55;color:var(--rc-muted);}
+.rc-brief-hint{margin:0;font-size:13px;line-height:1.55;color:var(--rc-muted);}
+.rc-brief-hint b{color:var(--rc-txt);font-weight:600;}
 .rc-brief-row{display:flex;flex-direction:column;gap:3px;margin-top:11px;}
 .rc-brief-row .rc-brief-p{margin:0;}
 .rc-brief-watch{margin:13px 0 0;font-size:12.5px;line-height:1.5;color:var(--rc-txt);
   background:rgba(185,170,255,.09);border-left:2px solid #B9AAFF;border-radius:0 8px 8px 0;padding:8px 11px;}
 .rc-brief-at{margin-top:10px;font-size:11px;color:rgba(255,255,255,.3);}
-.rc-brief-go{width:100%;border:1px dashed rgba(118,101,255,.5);background:rgba(118,101,255,.08);
-  color:#E7E2FA;font:inherit;font-size:13px;font-weight:700;padding:12px;border-radius:12px;cursor:pointer;}
-.rc-brief-go:hover{background:rgba(118,101,255,.18);}
 .rc-brief-wait{font-size:13px;color:var(--rc-muted);padding:6px 0;}
 .rc-brief-err{font-size:13px;line-height:1.6;color:#F2A9A3;}
-.rc-brief-retry{margin-left:6px;border:1px solid rgba(238,90,79,.5);background:transparent;
-  color:#F2A9A3;font:inherit;font-size:12px;padding:5px 11px;border-radius:999px;cursor:pointer;}
 .rc-sync{position:absolute;top:2px;right:0;border:1px solid var(--rc-line);
   background:var(--rc-surface);color:var(--rc-txt);font:inherit;font-size:12px;
   font-weight:600;letter-spacing:.03em;padding:7px 13px;border-radius:999px;
@@ -14073,6 +14074,8 @@ const I18N_VI_EN = {
   'để tạo.': 'to create.', 'khách.': 'clients.', 'chuẩn': 'standard',
   'khách': 'clients', 'bước': 'steps',
   'MÀN HÌNH.': 'HOME SCREEN.', 'VÀO APP →': 'ENTER APP →',
+  'Bấm Đồng bộ ngay để kéo dữ liệu và nhận lời khuyên cho hôm nay.': 'Tap Sync now to pull the data and get today’s advice.',
+  'Bấm Đồng bộ ngay để thử lại.': 'Tap Sync now to try again.',
 };
 
 // Mẫu có biến chen giữa. {0} là phần thay đổi, giữ nguyên khi dịch.
