@@ -5643,13 +5643,17 @@ async function recoveryBrief(force) {
     _rcBriefPaint(_rcBriefCache, _rcBriefAt);
   } catch (e) {
     console.warn('[recoveryBrief]', e);
-    // 429 của Gemini là hạn mức 5 lượt/phút ở gói free — nói thẳng thay vì
-    // để khách nhìn một lỗi chung chung rồi bấm lại liên tục cho tệ hơn.
-    const msg = e.code === 'functions/resource-exhausted'
-      ? 'Gemini đang quá hạn mức (5 lượt/phút ở gói free). Đợi một phút rồi thử lại.'
-      : (e.message || 'Không phân tích được.');
+    // Trước đây chỗ này ghi đè lời nhắn của server bằng câu "5 lượt/phút" viết
+    // cứng, mà hạn mức thật là 20 lượt/NGÀY. Người dùng đợi một phút rồi bấm
+    // lại, hỏng tiếp, và mỗi lần bấm lại tiêu thêm một lượt. Server đã phân biệt
+    // được hai loại hạn mức nên cứ hiện đúng lời nó nói.
+    let msg = e.message || 'Không phân tích được.';
+    const daily = msg.startsWith('DAILY:');
+    if (daily) msg = msg.slice(6).trim();
     box.innerHTML = '<div class="rc-brief-err">' + escHtml(msg)
-      + ' <button class="rc-brief-retry" onclick="recoveryBrief(true)">Thử lại</button></div>';
+      // Hết hạn mức ngày thì nút "Thử lại" chỉ đốt thêm lượt — không hiện nữa.
+      + (daily ? '' : ' <button class="rc-brief-retry" onclick="recoveryBrief(true)">Thử lại</button>')
+      + '</div>';
   }
 }
 

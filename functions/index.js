@@ -1782,10 +1782,18 @@ async function callGemini(apiKey, input, schema, label, thinking) {
     // that made every rate limit surface as "model not available for this API
     // key", i.e. a passing 429 looked like a permanently broken key.
     const wait = (err.message || "").match(/retry in ([\d.]+)\s*s/i);
-    const RATE = () => new HttpsError("resource-exhausted",
-      "Gemini request limit reached." +
-      (wait ? ` Try again in about ${Math.ceil(parseFloat(wait[1]))}s.` : " Please try again in a minute.") +
-      " If this keeps happening the API key is still on the free tier — enable billing in Google AI Studio to raise the limit.");
+    // Gói free có HAI hạn mức khác hẳn nhau: vài lượt mỗi phút, và 20 lượt mỗi
+    // NGÀY. Gemini gợi ý "retry in Ns" cho cả hai, nên nếu chỉ đọc con số đó thì
+    // hạn mức ngày bị báo thành "đợi 23 giây" — người dùng bấm lại, hỏng tiếp, và
+    // mỗi lần bấm lại tiêu thêm một lượt trong số 20. Phân biệt bằng chữ "per day".
+    const daily = /per day|\bdaily\b|requests per day/i.test(err.message || "");
+    const RATE = () => new HttpsError("resource-exhausted", daily
+      ? "DAILY: Hết hạn mức Gemini trong ngày (gói free cho 20 lượt/ngày, tính chung "
+        + "cho cả phân tích giấc ngủ lẫn ảnh món ăn). Hạn mức đặt lại theo ngày của "
+        + "Google, khoảng 14:00 giờ Việt Nam. Bấm lại bây giờ chỉ tốn thêm lượt. "
+        + "Muốn bỏ trần thì bật thanh toán trong Google AI Studio."
+      : "Gemini quá tải tạm thời"
+        + (wait ? `, thử lại sau khoảng ${Math.ceil(parseFloat(wait[1]))} giây.` : ", thử lại sau một phút."));
     const BUSY = () => new HttpsError("unavailable", "Gemini is overloaded — please try again in a few minutes.");
     const KEY  = () => new HttpsError("failed-precondition",
       "Invalid Gemini API key. Check the GEMINI_API_KEY secret — the key must come from aistudio.google.com and start with 'AIza'.");
