@@ -5625,11 +5625,14 @@ async function rcOpenSession(key) {
 }
 
 // ── Bản tóm tắt AI: đêm qua thế nào, hôm nay nên tập gì ──────────────────
+// Năm mức trong bảng quyết định của coach. Phải khớp enum recommendation
+// trong BRIEF_SCHEMA ở functions/index.js.
 const RC_STATUS = {
-  tot:        { label: 'Hồi phục tốt',  cls: 'rc-b-good' },
-  kha:        { label: 'Khá',           cls: 'rc-b-mid'  },
-  than_trong: { label: 'Nên thận trọng', cls: 'rc-b-warn' },
-  nghi:       { label: 'Nên nghỉ',      cls: 'rc-b-bad'  },
+  train_hard: { label: 'Đẩy nặng được', cls: 'rc-b-good' },
+  moderate:   { label: 'Tập vừa',       cls: 'rc-b-mid'  },
+  easy:       { label: 'Tập nhẹ',       cls: 'rc-b-warn' },
+  recovery:   { label: 'Chỉ phục hồi',  cls: 'rc-b-warn' },
+  rest:       { label: 'Nghỉ hẳn',      cls: 'rc-b-bad'  },
 };
 
 /** Gắn khung tóm tắt ngay dưới header, trước vòng tròn sleep score. */
@@ -5678,10 +5681,14 @@ async function recoveryBrief(force) {
 function _rcBriefPaint(b, at) {
   const box = document.getElementById('rc-brief');
   if (!box || !b) return;
-  const st = RC_STATUS[b.status] || RC_STATUS.kha;
-  const adv = Array.isArray(b.advice) ? b.advice : [];
+  const st = RC_STATUS[b.recommendation] || RC_STATUS.moderate;
+  const acts = Array.isArray(b.recoveryActions) ? b.recoveryActions : [];
+  const ns = b.nextSession || {};
   const keys = Object.keys((activeClient || {}).program || {});
-  const canOpen = b.sessionKey && keys.includes(b.sessionKey);
+  const canOpen = ns.sessionKey && keys.includes(ns.sessionKey);
+  const row = (label, txt) => txt
+    ? '<div class="rc-brief-row"><span class="rc-micro">' + label + '</span>'
+      + '<p class="rc-brief-p">' + escHtml(txt) + '</p></div>' : '';
 
   box.innerHTML =
     '<div class="rc-brief-top">'
@@ -5689,19 +5696,27 @@ function _rcBriefPaint(b, at) {
       + '<button class="rc-brief-again" onclick="recoveryBrief(true)" title="Phân tích lại">↻</button>'
     + '</div>'
     + '<p class="rc-brief-head">' + escHtml(b.headline || '') + '</p>'
-    + (b.sleep ? '<p class="rc-brief-p">' + escHtml(b.sleep) + '</p>' : '')
-    + '<div class="rc-brief-sec"><span class="rc-micro">Hôm nay</span>'
-      + '<p class="rc-brief-p">' + escHtml(b.today || '') + '</p>'
-      + (canOpen
-          ? '<button class="rc-brief-sess" onclick="rcOpenSession(\''
-            + b.sessionKey + '\')">Mở ' + escHtml(b.sessionKey.replace('Session', 'Session '))
-            + ' →</button><span class="rc-brief-why">' + escHtml(b.sessionWhy || '') + '</span>'
-          : (b.sessionWhy ? '<span class="rc-brief-why">' + escHtml(b.sessionWhy) + '</span>' : ''))
-    + '</div>'
-    + (adv.length
-        ? '<div class="rc-brief-sec"><span class="rc-micro">Nên làm</span><ul class="rc-brief-ul">'
-          + adv.map(x => '<li>' + escHtml(x) + '</li>').join('') + '</ul></div>'
+    + (b.why ? '<p class="rc-brief-p">' + escHtml(b.why) + '</p>' : '')
+    // Ba dòng đọc riêng từng nhóm, để coach thấy yếu tố nào kéo quyết định.
+    + row('Sẵn sàng', b.readiness)
+    + row('Giấc ngủ', b.sleepRead)
+    + row('Tải', b.loadRead)
+    + ((ns.type || ns.intensity || ns.duration)
+        ? '<div class="rc-brief-sec"><span class="rc-micro">Buổi tiếp theo</span>'
+          + '<p class="rc-brief-p"><b>' + escHtml(ns.type || '') + '</b>'
+          + (ns.intensity ? ' · ' + escHtml(ns.intensity) : '')
+          + (ns.duration ? ' · ' + escHtml(ns.duration) : '') + '</p>'
+          + (canOpen
+              ? '<button class="rc-brief-sess" onclick="rcOpenSession(\'' + ns.sessionKey
+                + '\')">Mở ' + escHtml(ns.sessionKey.replace('Session', 'Session ')) + ' →</button>'
+              : '')
+          + '</div>'
         : '')
+    + (acts.length
+        ? '<div class="rc-brief-sec"><span class="rc-micro">Phục hồi</span><ul class="rc-brief-ul">'
+          + acts.map(x => '<li>' + escHtml(x) + '</li>').join('') + '</ul></div>'
+        : '')
+    + (b.watch ? '<p class="rc-brief-watch">Theo dõi: ' + escHtml(b.watch) + '</p>' : '')
     + (b.caveat ? '<p class="rc-brief-cav">' + escHtml(b.caveat) + '</p>' : '')
     + (at ? '<div class="rc-brief-at">phân tích lúc ' + escHtml(String(at).slice(11, 16))
             + ' · ' + escHtml(String(at).slice(0, 10)) + '</div>' : '');
@@ -13346,6 +13361,10 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .rc-brief-sess:hover{background:rgba(118,101,255,.3);}
 .rc-brief-why{display:block;margin-top:8px;font-size:12.5px;color:var(--rc-muted);line-height:1.55;}
 .rc-brief-cav{margin:14px 0 0;font-size:12px;line-height:1.55;color:var(--rc-muted);}
+.rc-brief-row{display:flex;flex-direction:column;gap:3px;margin-top:11px;}
+.rc-brief-row .rc-brief-p{margin:0;}
+.rc-brief-watch{margin:13px 0 0;font-size:12.5px;line-height:1.5;color:var(--rc-txt);
+  background:rgba(185,170,255,.09);border-left:2px solid #B9AAFF;border-radius:0 8px 8px 0;padding:8px 11px;}
 .rc-brief-at{margin-top:10px;font-size:11px;color:rgba(255,255,255,.3);}
 .rc-brief-go{width:100%;border:1px dashed rgba(118,101,255,.5);background:rgba(118,101,255,.08);
   color:#E7E2FA;font:inherit;font-size:13px;font-weight:700;padding:12px;border-radius:12px;cursor:pointer;}

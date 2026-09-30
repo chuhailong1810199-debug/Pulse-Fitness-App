@@ -2197,6 +2197,7 @@ Rules:
 const POLAR_API = "https://www.polaraccesslink.com";
 const { parseFitHeartRate } = require("./fit-hr");
 const { workoutStrain, dailyStrain, resolveHrMax } = require("./strain");
+const { buildContext } = require("./brief-context");
 
 // Client duy nhất đang nối Polar. Mỗi người cần token riêng, nên đây là map
 // chứ không phải một hằng số — thêm người sau này chỉ là thêm một dòng.
@@ -2558,16 +2559,30 @@ exports.syncPolarNow = onCall(
 const BRIEF_SCHEMA = {
   type: "object",
   properties: {
-    status:     { type: "string", enum: ["tot", "kha", "than_trong", "nghi"] },
-    headline:   { type: "string" },
-    sleep:      { type: "string" },
-    today:      { type: "string" },
-    sessionKey: { type: "string" },
-    sessionWhy: { type: "string" },
-    advice:     { type: "array", items: { type: "string" } },
-    caveat:     { type: "string" },
+    // Đúng 5 mức trong bảng quyết định của coach.
+    recommendation: { type: "string",
+      enum: ["train_hard", "moderate", "easy", "recovery", "rest"] },
+    headline:  { type: "string" },
+    why:       { type: "string" },   // yếu tố nào quyết định, kèm số
+    readiness: { type: "string" },   // đọc Recovery
+    sleepRead: { type: "string" },   // đọc Sleep + nợ ngủ
+    loadRead:  { type: "string" },   // đọc Strain + tải gần đây
+    nextSession: {
+      type: "object",
+      properties: {
+        sessionKey: { type: "string" },   // key giáo án có thật, hoặc ""
+        type:       { type: "string" },
+        intensity:  { type: "string" },
+        duration:   { type: "string" },
+      },
+      required: ["sessionKey", "type", "intensity", "duration"],
+    },
+    recoveryActions: { type: "array", items: { type: "string" } },
+    watch:  { type: "string" },   // điều gì sẽ làm đổi khuyến nghị
+    caveat: { type: "string" },
   },
-  required: ["status", "headline", "sleep", "today", "sessionKey", "sessionWhy", "advice", "caveat"],
+  required: ["recommendation", "headline", "why", "readiness", "sleepRead",
+             "loadRead", "nextSession", "recoveryActions", "watch", "caveat"],
 };
 
 const _r = (v) => (typeof v === "number" ? Math.round(v) : "—");
@@ -2576,109 +2591,156 @@ const _hm = (sec) => (sec == null ? "—"
   : Math.floor(sec / 3600) + "h" + String(Math.round((sec % 3600) / 60)).padStart(2, "0"));
 
 function buildBriefPrompt(ctx) {
-  const { client, nights, program, workouts, activity } = ctx;
-  const last = nights[0];
-  const prev = nights.slice(1);
-  const avg = (f) => {
-    const v = prev.map(f).filter((x) => typeof x === "number" && isFinite(x));
-    return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length) : null;
-  };
+  const C = buildContext(ctx);
+  if (!C) return null;
+  const P = (o) => JSON.stringify(o, null, 1);
+  const hm = (v) => _hm(v);
 
-  const rows = nights.map((n) => {
-    const s = n.sleep || {}, r = n.recharge || {};
-    const l = n.load || {};
-    return `${n.date} | ngủ ${_hm(s.total)} | sâu ${_hm(s.deep)} | REM ${_hm(s.rem)} | thức ${_hm(s.interruptions)}`
-      + ` | score ${s.score ?? "—"} (thời lượng ${_r(s.dur)}, bền giấc ${_r(s.solid)}, tái tạo ${_r(s.regen)})`
-      + ` | HRV ${r.hrv ?? "—"} | nhịp tim ngủ TB ${r.rhr ?? "—"} | nhịp thở ${r.breathing ?? "—"}`
-      + ` | Nightly Recharge ${r.status ?? "—"}/6 | ANS charge ${r.ansCharge ?? "—"}`
-      + ` | tải tập ${l.cardioLoad ?? 0}${l.sessions ? ` (${l.sessions} buổi)` : ""}`
+  const nights = ctx.nights.map((n) => {
+    const s = n.sleep || {}, r = n.recharge || {}, l = n.load || {};
+    return `${n.date} | ngủ ${hm(s.total)}/${hm(s.goal)} | score ${s.score ?? "—"}`
+      + ` (thời lượng ${_r(s.dur)} bền giấc ${_r(s.solid)} tái tạo ${_r(s.regen)})`
+      + ` | thức ${hm(s.interruptions)} | HRV ${r.hrv ?? "—"} | nhịp tim ngủ TB ${r.rhr ?? "—"}`
+      + ` | đáy đêm ${s.hrMin ?? "—"} | Recharge ${r.status ?? "—"}/6 | ANS ${r.ansCharge ?? "—"}`
+      + ` | strain ${l.strain ?? 0}${l.sessions ? ` (${l.sessions} buổi)` : ""}`
       + ` | lên giường ${(s.start || "").slice(11, 16) || "—"}`;
   }).join("\n");
 
-  const days = Object.keys(program || {}).sort();
-  const progTxt = days.length
+  const act = C.activity.length
+    ? C.activity.map((a) => `${a.date} | ${a.steps ?? "—"} bước | ${a.calories ?? "—"} kcal ngày`
+        + ` | ${a.activeCalories ?? "—"} kcal vận động | tập ${a.workoutCalories || 0} kcal / ${hm(a.workoutSec)}`).join("\n")
+    : "(không có)";
+
+  const hist = C.history.length
+    ? C.history.map((w) => `${w.date} — ${w.day || "?"} — ${w.done ?? "?"}/${w.total ?? "?"} bài`
+        + (w.volume ? ` — ${Math.round(w.volume)} kg` : "")).join("\n")
+    : "(khách không tự ghi lại buổi tập trong app)";
+
+  const days = Object.keys(ctx.program || {}).sort();
+  const prog = days.length
     ? days.map((d) => {
-        const ph = (program[d].phases || [])
-          .map((p) => `${p.name} (${(p.exercises || []).length} bài)`).join(", ");
-        return `${d} — ${program[d].label || ""} :: ${ph}`;
+        const ph = (ctx.program[d].phases || [])
+          .map((x) => `${x.name} (${(x.exercises || []).length} bài)`).join(", ");
+        return `${d} — ${ctx.program[d].label || ""} :: ${ph}`;
       }).join("\n")
-    : "(khách chưa có giáo án)";
+    : "(chưa có giáo án)";
 
-  const wkTxt = workouts.length
-    ? workouts.map((w) => `${w.date} — ${w.day || "?"} — ${w.done ?? "?"}/${w.total ?? "?"} bài`
-        + (w.totalVolume ? ` — ${Math.round(w.totalVolume)} kg` : "")).join("\n")
-    : "(không có buổi tập nào được ghi lại)";
+  const bl = (b, unit) => b.enough || b.mean != null
+    ? `hôm nay ${b.today ?? "—"}${unit} · nền ${b.mean}${unit} ± ${b.sd ?? "?"} qua ${b.n} đêm`
+      + (b.z != null ? ` · lệch ${b.z > 0 ? "+" : ""}${b.z} độ lệch chuẩn` : "")
+      + (b.enough ? "" : "  [nền mỏng, đọc như gợi ý]")
+    : `hôm nay ${b.today ?? "—"}${unit} · chưa đủ đêm để dựng nền (${b.n})`;
 
-  const actTxt = (activity && activity.length)
-    ? activity.map((a) => `${a.date} | ${a.steps ?? "—"} bước | ${a.calories ?? "—"} kcal cả ngày`
-        + ` | ${a.activeCalories ?? "—"} kcal vận động`
-        + ` | buổi tập ${a.workoutCalories || 0} kcal / ${_hm(a.workoutSec)}`).join("\n")
-    : "(chưa có dữ liệu hoạt động)";
-
-  return `Bạn là huấn luyện viên thể hình đọc dữ liệu hồi phục từ vòng đeo tay Polar.
-Viết một bản tóm tắt ngắn cho HLV về đêm gần nhất và hôm nay nên làm gì.
+  return `Bạn là huấn luyện viên thể hình đọc dữ liệu vòng đeo tay Polar của một khách.
+Nhiệm vụ: quyết định HÔM NAY khách nên tập thế nào, và nói rõ vì sao.
 
 KHÁCH
-tên: ${client.name || "?"} | trình độ: ${client.level || "?"} | ${client.sessionsPerWeek || "?"} buổi/tuần
-mục tiêu: ${client.goal || "(chưa đặt)"}
+tên ${ctx.client.name || "?"} | trình độ ${C.level || "?"} | ${C.sessionsPerWeek || "?"} buổi/tuần
+MỤC TIÊU: ${C.goal || "(chưa đặt)"}
+GHI CHÚ / BỐI CẢNH: ${C.notes || "(không có)"}
 
-DỮ LIỆU GIẤC NGỦ — mới nhất trước, ${nights.length} đêm
-${rows}
+════ 1. RECOVERY — cơ thể sẵn sàng tới đâu
+Nightly Recharge ${C.recovery.recharge ?? "—"}/6 (thang Polar: 1 rất kém … 4 ổn … 6 rất tốt)
+ANS charge ${C.recovery.ansCharge ?? "—"} (thang -10…+10, quanh 0 là mức thường ngày của khách)
+HRV ${C.recovery.hrv ?? "—"} ms | nhịp tim ngủ TB ${C.recovery.sleepingHr ?? "—"} | đáy thật trong đêm ${C.recovery.restingHrNight ?? "—"}
 
-TRUNG BÌNH ${prev.length} ĐÊM TRƯỚC ĐÓ (không tính đêm gần nhất)
-ngủ ${_hm(avg((n) => (n.sleep || {}).total))} | score ${avg((n) => (n.sleep || {}).score) ?? "—"} | HRV ${avg((n) => (n.recharge || {}).hrv) ?? "—"} | nhịp tim ngủ TB ${avg((n) => (n.recharge || {}).rhr) ?? "—"}
-mục tiêu ngủ khách tự đặt: ${_hm((last.sleep || {}).goal)}
+════ 2. SLEEP — khả năng phục hồi
+ngủ ${hm(C.sleep.total)} / mục tiêu ${hm(C.sleep.goal)} | sleep score ${C.sleep.score ?? "—"}
+ba thành phần: thời lượng ${_r(C.sleep.duration)} · bền giấc ${_r(C.sleep.solidity)} · tái tạo ${_r(C.sleep.regeneration)}
+thức giấc ${hm(C.sleep.interruptions)} (trong đó dài ${hm(C.sleep.longInterruptions)}) | ${C.sleep.cycles ?? "—"} chu kỳ
+lên giường ${(C.sleep.start || "").slice(11, 16) || "—"} · dậy ${(C.sleep.end || "").slice(11, 16) || "—"}
 
-GIÁO ÁN HIỆN TẠI
-${progTxt}
+════ 3. SLEEP DEBT — nợ ngủ tích luỹ
+7 ngày: ${C.sleepDebt.d7 ? hm(C.sleepDebt.d7.sec) + ` qua ${C.sleepDebt.d7.nights} đêm` : "—"}
+14 ngày: ${C.sleepDebt.d14 ? hm(C.sleepDebt.d14.sec) + ` qua ${C.sleepDebt.d14.nights} đêm` : "—"}
 
-BUỔI TẬP ĐÃ GHI GẦN ĐÂY
-${wkTxt}
+════ 4. STRAIN — tải sinh lý đã chịu (thang 0-21, buổi tập TRƯỚC đêm này)
+ngày ${C.strain.date || "—"}: strain ${C.strain.strain ?? "—"}${C.strain.note ? " — " + C.strain.note : ""}
+${(C.strain.workouts || []).map((w) => `  · ${String(w.at).slice(11, 16)} ${w.sport} ${hm(w.sec)} strain ${w.strain ?? "—"} HR ${w.hrAvg ?? "—"}/${w.hrMax ?? "—"}`).join("\n") || "  (không có buổi nào)"}
 
-HOẠT ĐỘNG BAN NGÀY (bước chân, calo)
-${actTxt}
+════ 5. RECENT LOAD — đang tích tải quá nhanh hay quá ít
+${C.recentLoad ? `3 ngày: tổng strain ${C.recentLoad.d3.sum} (${C.recentLoad.d3.days}/${C.recentLoad.d3.covered} ngày có tập)
+7 ngày: tổng strain ${C.recentLoad.d7.sum} (${C.recentLoad.d7.days}/${C.recentLoad.d7.covered} ngày có tập)
+14 ngày: tổng strain ${C.recentLoad.d14.sum} (${C.recentLoad.d14.days}/${C.recentLoad.d14.covered} ngày có tập)
+tỷ lệ cấp tính/mạn tính (7ng so 28ng): ${C.recentLoad.acuteChronic ?? "chưa tính được — " + C.recentLoad.acuteChronicNote}` : "(chưa có dữ liệu)"}
 
-THANG ĐO — đọc cho đúng, đừng quy đổi lẫn nhau
-Nightly Recharge 1..6 của Polar: 1 rất kém, 2 kém, 3 suy giảm, 4 ổn, 5 tốt, 6 rất tốt.
-ANS charge -10..+10, quanh 0 là mức thường ngày của chính khách.
-"Nhịp tim ngủ TB" là nhịp tim TRUNG BÌNH khoảng 4 tiếng đầu giấc ngủ, KHÔNG phải
-mức thấp nhất trong đêm. Đừng gọi nó là nhịp tim nghỉ thấp nhất.
-sleep score 0-100, gồm ba điểm thành phần thời lượng / bền giấc / tái tạo, cũng 0-100.
-Tải tập là cardio load của Polar Training Load Pro, KHÔNG có trần cố định và
-KHÔNG phải thang 0-21 của WHOOP — chỉ so ngày này với ngày khác của cùng khách.
-Nightly Recharge và ANS charge để trống ở những đêm Polar chưa đủ nền; trống thì
-nói là chưa có, tuyệt đối không tự chấm thay.
+════ 6. ACTIVITY — vận động ngoài buổi tập
+${act}
 
-QUY TẮC — bắt buộc tuân thủ
-1. CHỈ dùng những con số ở trên. Tuyệt đối không bịa thêm số liệu, không suy ra
-   cân nặng, calo, hay bất cứ chỉ số nào không có trong dữ liệu.
-2. Phân biệt rõ THỜI LƯỢNG ngủ với CHẤT LƯỢNG ngủ. Một đêm ngủ đủ giờ nhưng
-   thức giấc nhiều và độ liên tục thấp là vấn đề chất lượng — phải nói đúng như vậy.
-3. sessionKey PHẢI là một trong các key giáo án ở trên (ví dụ "SessionA"), hoặc
-   chuỗi rỗng "" nếu khuyến nghị nghỉ. Không được bịa key không tồn tại.
-4. Ưu tiên Nightly Recharge và ANS charge của Polar khi kết luận về hồi phục —
-   đó là đánh giá đã so với nền riêng của khách. HRV và RHR thô chỉ để giải
-   thích thêm, đừng tự so chúng với nhau rồi rút ra kết luận khác.
-5. Dữ liệu chỉ cho biết ĐIỀU GÌ xảy ra, không cho biết VÌ SAO. Nếu các chỉ số
-   xấu đi, nêu vài khả năng (tải tập, rượu, ăn muộn, căng thẳng, chớm ốm, phòng
-   nóng) và nói rõ là dữ liệu không phân biệt được — đừng khẳng định một nguyên nhân.
-6. KHÔNG chẩn đoán y khoa, không kê thuốc. Nếu số liệu bất thường kéo dài thì
-   khuyên đi khám.
-7. Toàn bộ trả lời bằng TIẾNG VIỆT, giọng trực tiếp, không hoa mỹ. Không dùng
-   dấu gạch ngang dài.
+════ 7. HR DATA — cường độ thật
+nhịp tim tối đa dùng để tính: ${C.hr.hrMax ?? "—"} (${C.hr.hrMaxSource || "không rõ nguồn"})
+phút mỗi vùng 7 ngày (z1→z5): ${C.hr.zoneMin7 ? C.hr.zoneMin7.join(" / ") : "—"}
+phút mỗi vùng 14 ngày: ${C.hr.zoneMin14 ? C.hr.zoneMin14.join(" / ") : "—"}
 
-Ý NGHĨA status
-"tot"        = hồi phục tốt, tập theo kế hoạch
-"kha"        = ổn, tập được nhưng để ý cảm giác
-"than_trong" = hồi phục kém, giảm cường độ hoặc đổi sang buổi nhẹ
-"nghi"       = nên nghỉ hoặc chỉ vận động nhẹ
+════ 8. TRAINING HISTORY — khách tự ghi trong app
+${hist}
+
+════ 9. BASELINE CÁ NHÂN — so với trạng thái bình thường của CHÍNH khách này
+HRV:            ${bl(C.baseline.hrv, " ms")}
+nhịp tim ngủ:   ${bl(C.baseline.sleepingHr, " bpm")}
+sleep score:    ${bl(C.baseline.sleepScore, "")}
+tổng giờ ngủ:   ${C.baseline.sleepTotal.mean != null ? `hôm nay ${hm(C.baseline.sleepTotal.today)} · nền ${hm(C.baseline.sleepTotal.mean)} qua ${C.baseline.sleepTotal.n} đêm` : "chưa đủ đêm"}
+tổng số đêm có dữ liệu: ${C.baseline.nights}
+
+════ 10. BEHAVIOR — KHÔNG CÓ DỮ LIỆU
+Cà phê, rượu, căng thẳng, giờ ăn, thói quen: app chưa thu thập.
+TUYỆT ĐỐI không suy đoán khách đã uống gì, ăn gì hay căng thẳng ra sao.
+
+════ 11. GIÁO ÁN HIỆN TẠI
+${prog}
+
+════ 12. TOÀN BỘ ĐÊM GẦN ĐÂY (mới nhất trước)
+${nights}
+
+════════════════════════════════════════════════════════════════
+QUY TẮC — bắt buộc
+
+1. KHÔNG có ngưỡng cứng. Cấm dùng luật kiểu "Recovery dưới X thì nghỉ".
+   Quyết định phải đến từ TƯƠNG QUAN giữa các nhóm trên, so với ĐƯỜNG NỀN
+   của chính khách này và lịch sử của chính khách này. Cùng một Recharge 3/6
+   có thể là "tập vừa" hay "nghỉ" tuỳ tải gần đây, nợ ngủ và xu hướng nền.
+
+2. Cân nhắc đủ 7 yếu tố rồi mới kết luận:
+   Recovery × Sleep × Strain hiện tại × Recent Load × Training History × Goal × Context
+   Trong "why" phải nêu yếu tố NÀO kéo quyết định về phía đó, kèm con số thật.
+
+3. Chỉ dùng số có trong bản tin này. Cấm bịa thêm số. Nhóm nào ghi "không có
+   dữ liệu" thì nói là không biết, đừng đoán.
+
+4. sessionKey PHẢI là một key giáo án có thật ở mục 11, hoặc chuỗi rỗng ""
+   nếu khuyến nghị nghỉ hoặc buổi không nằm trong giáo án.
+
+5. Xu hướng quan trọng hơn một điểm dữ liệu. Ba đêm cùng đi xuống nói nhiều
+   hơn một đêm xấu. Nói rõ khi bạn đang đọc xu hướng.
+
+6. Dữ liệu cho biết ĐIỀU GÌ xảy ra, không cho biết VÌ SAO. Nếu chỉ số xấu đi,
+   nêu vài khả năng và nói rõ dữ liệu không phân biệt được — đừng khẳng định
+   một nguyên nhân duy nhất.
+
+7. Nền dưới 7 đêm thì nói rõ trong "caveat" là chưa đủ chắc.
+
+8. Khuyến nghị phải phục vụ MỤC TIÊU của khách. Cùng một dữ liệu, người giảm
+   mỡ và người xây sức mạnh nhận lời khuyên khác nhau.
+
+9. Không chẩn đoán y khoa. Bất thường kéo dài thì khuyên đi khám.
+
+10. Toàn bộ trả lời bằng TIẾNG VIỆT, giọng trực tiếp, không hoa mỹ, không dùng
+    dấu gạch ngang dài.
+
+Ý NGHĨA 5 MỨC recommendation
+"train_hard" = đẩy nặng được, cơ thể sẵn sàng nhận tải lớn
+"moderate"   = tập bình thường theo giáo án, giữ cường độ vừa
+"easy"       = tập nhẹ, kỹ thuật hoặc zone 2, đừng đẩy
+"recovery"   = chỉ vận động phục hồi: đi bộ, mobility, cardio rất nhẹ
+"rest"       = nghỉ hẳn
 
 ĐỘ DÀI
 headline: một câu, tối đa 90 ký tự
-sleep: 2 tới 3 câu
-today: 1 tới 2 câu
-sessionWhy: 1 câu
-advice: 2 tới 4 mục, mỗi mục một câu ngắn và làm được ngay
+why: 2 tới 4 câu, phải nêu số
+readiness / sleepRead / loadRead: mỗi mục 1 tới 2 câu
+nextSession.intensity: nêu cả khoảng strain mục tiêu 0-21
+recoveryActions: 2 tới 4 mục, mỗi mục một việc làm được ngay
+watch: 1 câu — điều gì xảy ra thì nên đổi khuyến nghị
 caveat: 1 tới 2 câu`;
 }
 
@@ -2702,7 +2764,7 @@ exports.recoveryBrief = onCall(
       throw new HttpsError("permission-denied", "Không có quyền xem dữ liệu này.");
     }
 
-    const recSnap = await cRef.collection("recovery").orderBy("date", "desc").limit(21).get();
+    const recSnap = await cRef.collection("recovery").orderBy("date", "desc").limit(30).get();
     const nights = recSnap.docs.map((d) => d.data());
     if (!nights.length) {
       throw new HttpsError("failed-precondition",
@@ -2714,14 +2776,14 @@ exports.recoveryBrief = onCall(
       return { cached: true, date: latest.date, brief: latest.brief.text, at: latest.brief.at };
     }
 
-    const wSnap = await cRef.collection("workoutHistory").orderBy("date", "desc").limit(6).get();
+    const wSnap = await cRef.collection("workoutHistory").orderBy("date", "desc").limit(10).get();
     const workouts = wSnap.docs.map((d) => {
       const v = d.data();
       const dt = v.date && v.date.toDate ? v.date.toDate().toISOString().slice(0, 10) : "?";
       return { date: dt, day: v.day, done: v.done, total: v.total, totalVolume: v.totalVolume };
     });
 
-    const aSnap = await cRef.collection("activity").orderBy("date", "desc").limit(7).get();
+    const aSnap = await cRef.collection("activity").orderBy("date", "desc").limit(14).get();
     const activity = aSnap.docs.map((d) => d.data());
 
     const prompt = buildBriefPrompt({
@@ -2737,7 +2799,11 @@ exports.recoveryBrief = onCall(
     }
     // Không để model bịa ra buổi tập không tồn tại.
     const keys = Object.keys(client.program || {});
-    if (brief.sessionKey && !keys.includes(brief.sessionKey)) brief.sessionKey = "";
+    if (brief.nextSession && brief.nextSession.sessionKey
+        && !keys.includes(brief.nextSession.sessionKey)) {
+      console.warn(`[recoveryBrief] model bịa sessionKey "${brief.nextSession.sessionKey}" — xoá`);
+      brief.nextSession.sessionKey = "";
+    }
 
     const at = new Date().toISOString();
     await cRef.collection("recovery").doc(latest.date)
