@@ -5277,7 +5277,7 @@ function renderActive() {
         + '<span class="ac-kpi-s">' + (last.workouts || []).length + ' buổi'
           + ((last.workouts || []).filter(w => w.noHr || w.calories == null).length
               ? ', ' + (last.workouts || []).filter(w => w.noHr || w.calories == null).length
-                + ' buổi không đo' : '')
+                + ' buổi Polar không tính calo' : '')
           + '</span></div>'
       + '<div class="ac-kpi"><span class="ac-kpi-v rc-num">' + _acNum(last.activeCalories) + '</span>'
         + '<span class="rc-micro">kcal vận động</span>'
@@ -5323,17 +5323,17 @@ function renderActive() {
             + escHtml(AC_SPORT[r.w.sport] || r.w.sport) + '</span>'
             + '<span class="ac-w-sub">' + _rcDate(r.d) + ' · ' + _rcHM(r.w.sec) + hr + '</span></div>'
           + (r.w.calories == null
-              ? '<span class="ac-w-cal ac-w-none">không đo</span>'
+              ? '<span class="ac-w-cal ac-w-none">Polar không tính</span>'
               : '<span class="ac-w-cal rc-num">' + _acNum(r.w.calories) + '<i>kcal</i></span>')
           + '</div>';
       }).join('') + '</div>'
     : '<div class="rc-note">Chưa có buổi tập nào được ghi trên Polar trong kỳ này.</div>';
   html += '</section>';
 
-  html += '<div class="rc-note">Buổi tự khai trong app Polar Flow không có nhịp tim, nên Polar '
-    + 'không tính calo cho nó — chỗ đó ghi "không đo" chứ không phải bằng 0. Năng lượng của buổi đó '
-    + 'vẫn nằm trong "kcal vận động" của cả ngày. Muốn có calo và nhịp tim cho từng buổi thì bấm '
-    + 'bắt đầu buổi tập trên vòng, đừng chỉ ghi trong app.</div>';
+  html += '<div class="rc-note">Vòng VẪN đo nhịp tim trong buổi tự khai bằng app Polar Flow, mỗi '
+    + 'giây một mẫu. Nhưng buổi không được bấm bắt đầu trên vòng nên Polar không lập bản ghi buổi tập, '
+    + 'và không có bản ghi thì nó không quy ra calo. Năng lượng đó vẫn nằm trong kcal vận động cả ngày, '
+    + 'và nhịp tim đó vẫn vào điểm Strain. Muốn có calo riêng từng buổi thì bấm bắt đầu trên vòng.</div>';
 
   wrap.innerHTML = html;
 }
@@ -14098,10 +14098,10 @@ const I18N_VI_EN = {
   'Nhận qua đâu?': 'Where to receive it?', 'kéo chậm': 'slow sync',
   'để tạo.': 'to create.', 'khách.': 'clients.', 'chuẩn': 'standard',
   'khách': 'clients', 'bước': 'steps',
+  'Vòng VẪN đo nhịp tim trong buổi tự khai bằng app Polar Flow, mỗi giây một mẫu. Nhưng buổi không được bấm bắt đầu trên vòng nên Polar không lập bản ghi buổi tập, và không có bản ghi thì nó không quy ra calo. Năng lượng đó vẫn nằm trong kcal vận động cả ngày, và nhịp tim đó vẫn vào điểm Strain. Muốn có calo riêng từng buổi thì bấm bắt đầu trên vòng.':
+    'The band does record heart rate during a session logged by hand in the Polar Flow app, once a second. But the session was not started on the band, so Polar files no exercise record for it, and without a record it computes no calories. That energy is still in the day\'s active kcal, and that heart rate still counts toward Strain. To get calories per session, start it on the band.',
   'MÀN HÌNH.': 'HOME SCREEN.', 'VÀO APP →': 'ENTER APP →',
-  'không đo': 'not measured', 'buổi không đo': 'session not measured',
-  'Buổi tự khai trong app Polar Flow không có nhịp tim, nên Polar không tính calo cho nó — chỗ đó ghi "không đo" chứ không phải bằng 0. Năng lượng của buổi đó vẫn nằm trong "kcal vận động" của cả ngày. Muốn có calo và nhịp tim cho từng buổi thì bấm bắt đầu buổi tập trên vòng, đừng chỉ ghi trong app.':
-    'A session logged by hand in the Polar Flow app carries no heart rate, so Polar computes no calories for it. That is shown as "not measured" rather than zero. Its energy is still inside the day\'s active kcal. To get calories and heart rate per session, start the session on the band instead of only logging it in the app.',
+  'Polar không tính': 'Polar gave no figure', 'buổi Polar không tính calo': 'session with no calories from Polar',
   'Bấm Đồng bộ ngay để kéo dữ liệu và nhận lời khuyên cho hôm nay.': 'Tap Sync now to pull the data and get today’s advice.',
   'Bấm Đồng bộ ngay để thử lại.': 'Tap Sync now to try again.',
 };
