@@ -2325,7 +2325,7 @@ function groupSessions(exercises) {
   return groups;
 }
 
-function dayLoad(exercises, fitById, ctx) {
+function dayLoad(exercises, fitById, ctx, contSamples) {
   // Polar ghi MỘT buổi thành nhiều bản: app điện thoại ghi môn, vòng ghi nhịp
   // tim. Bản trước đây coi "không có calo" là bản trùng — sai. Buổi tạ hôm
   // 01/10 chạy 14:31-15:21 không có nhịp tim và cũng KHÔNG trùng bản nào, vậy
@@ -2372,7 +2372,25 @@ function dayLoad(exercises, fitById, ctx) {
     });
   }
 
-  if (!workouts.length) return null;
+  // Nhịp tim CẢ NGÀY, bỏ phần nằm trong cửa sổ buổi tập vì ở đó đã có dữ liệu
+  // từng giây của file FIT. Không bỏ thì đoạn tập bị đếm hai lần.
+  const wins = [];
+  for (const g of groups) {
+    const r = g.items.find((it) => fitById[it.x.id]);
+    if (r) {
+      const ts = fitById[r.x.id].map((p) => p.at).filter((v) => v != null);
+      if (ts.length) wins.push({ from: Math.min(...ts), to: Math.max(...ts) });
+    }
+  }
+  const outside = (contSamples || []).filter((p) =>
+    !wins.some((wn) => p.at >= wn.from && p.at <= wn.to));
+  if (outside.length > 1) series.push(outside);
+
+  // Ngày nghỉ vẫn có tải: đi lại, leo cầu thang, căng thẳng. Bản trước trả null
+  // khi không có buổi tập nào nên vòng Strain trống hẳn — sai, WHOOP vẫn có số
+  // cho ngày nghỉ vì nó đọc nhịp tim cả ngày chứ không chỉ buổi tập.
+  if (!workouts.length && outside.length < 2) return null;
+
   const day = series.length ? dailyStrain(series, ctx) : null;
   const noHr = workouts.filter((w) => w.noHr).length;
   return {
@@ -2382,6 +2400,7 @@ function dayLoad(exercises, fitById, ctx) {
     zoneSec: day ? day.zoneSec : null,
     hrMax: ctx.hrMax, hrMaxSource: ctx.hrMaxSource, rhr: ctx.rhr,
     sessions: workouts.length, sessionsNoHr: noHr, sec, workouts,
+    allDaySamples: outside.length,
     source: "polar-fit + app-strain-v1",
   };
 }
@@ -2519,6 +2538,29 @@ async function syncPolarFor(clientId, token) {
     console.log(`[polar] ${clientId}: ${Object.keys(fitById).length}/${need.length} file FIT, `
       + `HR max ${hm.hrMax} (${hm.source})`);
 
+    // Nhịp tim cả ngày — nguồn duy nhất cho tải của ngày KHÔNG tập.
+    const contByDate = {};
+    try {
+      const from = docs[0].date, to = docs[docs.length - 1].date;
+      const chr = await polarGet(`/v3/users/continuous-heart-rate?from=${from}&to=${to}`, token);
+      for (const d of polarArray(chr, "heart_rates", "data")) {
+        if (!d || !d.date) continue;
+        const p = d.date.split("-").map(Number);
+        const base = Date.UTC(p[0], p[1] - 1, p[2]) / 1000;
+        contByDate[d.date] = (d.heart_rate_samples || [])
+          .map((x) => {
+            const m = /^(\d{2}):(\d{2}):(\d{2})/.exec(String(x.sample_time || ""));
+            const hr = Number(x.heart_rate);
+            return m && hr > 0
+              ? { at: base + (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]), hr } : null;
+          })
+          .filter(Boolean);
+      }
+      console.log(`[polar] nhịp tim cả ngày: ${Object.keys(contByDate).length} ngày`);
+    } catch (e) {
+      console.warn(`[polar] bỏ qua nhịp tim cả ngày — ${e.message}`);
+    }
+
     for (const doc of docs) {
       const rhr = rhrByDate[doc.date];
       if (!hm.hrMax || rhr == null) {
@@ -2526,7 +2568,8 @@ async function syncPolarFor(clientId, token) {
         continue;
       }
       const load = dayLoad(exByDate[doc.date] || [], fitById,
-        { rhr, hrMax: hm.hrMax, hrMaxSource: hm.source, sex: (prof && prof.gender) === "FEMALE" ? "female" : "male" });
+        { rhr, hrMax: hm.hrMax, hrMaxSource: hm.source, sex: (prof && prof.gender) === "FEMALE" ? "female" : "male" },
+        contByDate[doc.date] || []);
       if (load) doc.load = load;
     }
   } catch (e) {

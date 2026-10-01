@@ -22,12 +22,12 @@
  *    Hệ quả quan trọng: tải ngày KHÔNG phải tổng strain của từng buổi. Hàm ép
  *    là hàm lõm, cộng các giá trị đã ép lại sẽ thổi phồng con số.
  *
- * 4. Hàm bão hoà: strain = 21 · (1 − e^(−T/K)), K = 155.
- *    K neo vào các mốc có thật, ghi lại ở đây để ai cũng kiểm được:
- *      T ≈ 100  (~40 phút ở 70% dự trữ)  -> 10.0  "khá cao"
- *      T ≈ 190  (~60 phút ở 75% dự trữ)  -> 14.8  "cao"
- *      T ≈ 350  (ngày tập nặng, 2 buổi)  -> 18.8  "rất cao"
- *      T → ∞                              -> tiệm cận 21, không bao giờ chạm
+ * 4. Hàm bão hoà: strain = 21 · (1 − e^(−T/K)), K = 83.
+ *    K neo vào NGÀY THẬT của khách này, đo được chứ không chọn bừa:
+ *      T ≈   7  (ngày nghỉ, chỉ đi lại)   -> 1.7
+ *      T ≈  45  (ngày tập vừa, 1 buổi)    -> 8.8
+ *      T ≈ 162  (ngày tập nặng, 2 buổi)   -> 18.0
+ *      T → ∞                               -> tiệm cận 21, không bao giờ chạm
  *    K là lựa chọn hiệu chỉnh, không phải hằng số tự nhiên. Nó quyết định
  *    "bao nhiêu là nặng", nên đổi K là đổi ý nghĩa cả thang điểm.
  *
@@ -43,7 +43,24 @@ const B_FEMALE = 1.67;
 
 // Hiệu chỉnh thang 0–21. Xem các mốc neo ở phần chú thích đầu file.
 const STRAIN_MAX = 21;
-const K = 155;
+const K = 83;
+
+/**
+ * Số mũ của cường độ, đặt TRƯỚC hàm mũ Banister.
+ *
+ * Banister nguyên bản (P = 1) được dựng cho một buổi tập, không phải cho 24
+ * giờ. Khi tích phân cả ngày, phần thời gian gần mức nghỉ chiếm ưu thế tuyệt
+ * đối: đo trên dữ liệu thật của khách này, ngày NGHỈ ra tải thô 220 còn ngày
+ * tập nặng chỉ 292 — tín hiệu tập chìm trong chi phí sống, hai ngày khác hẳn
+ * nhau mà điểm gần như bằng nhau.
+ *
+ * P = 3 ép phần cường độ thấp đóng góp không đáng kể mà vẫn giữ nguyên thứ tự
+ * và tính phi tuyến ở phần cao. Trên cùng bộ dữ liệu: nghỉ 7, tập vừa 45, tập
+ * nặng 162 — tỷ lệ tín hiệu trên nền hơn 20 lần.
+ *
+ * Đây là thay đổi CÓ Ý so với Banister công bố, không phải nhầm lẫn.
+ */
+const P = 3;
 
 // Mẫu cách nhau quá xa là đã tháo thiết bị, không phải vận động liên tục.
 // Chặn lại để một khoảng trống dài không biến thành tải khổng lồ.
@@ -150,8 +167,8 @@ function rawLoad(samples, ctx) {
     const iN = intensity(cur.hr, rhr, hrMax);
     if (iN == null) continue;
 
-    // Trọng số mũ: phần cường độ cao đóng góp nhiều hơn hẳn phần thấp.
-    load += (dt / 60) * iN * Math.exp(b * iN);
+    // Trọng số: cường độ cao đóng góp nhiều hơn hẳn phần thấp.
+    load += (dt / 60) * Math.pow(iN, P) * Math.exp(b * iN);
 
     sec += dt; sum += cur.hr * dt;
     if (cur.hr > peak) peak = cur.hr;
@@ -231,7 +248,7 @@ function strainFromZones(zoneMinutes, ctx) {
     if (!isFinite(m) || m <= 0) continue;
     const lo = ZONE_FLOOR[z], hi = z === 4 ? 1 : ZONE_FLOOR[z + 1];
     const mid = (lo + hi) / 2;
-    load += m * mid * Math.exp(b * mid);
+    load += m * Math.pow(mid, P) * Math.exp(b * mid);
     min += m;
   }
   if (!(min > 0)) return null;
@@ -244,5 +261,5 @@ module.exports = {
   intensity, resolveHrMax, rawLoad, toStrain,
   workoutStrain, dailyStrain, strainFromZones,
   strainBand, STRAIN_BANDS,
-  _const: { B_MALE, B_FEMALE, K, STRAIN_MAX, MAX_GAP_SEC, ZONE_FLOOR },
+  _const: { B_MALE, B_FEMALE, P, K, STRAIN_MAX, MAX_GAP_SEC, ZONE_FLOOR },
 };

@@ -5505,12 +5505,16 @@ function _rcMountRings(wrap) {
            : 'Polar chưa chấm', rd ? rd.status / 6 : 0)
     + _rcRing('Strain', st == null ? null : st.toFixed(1), '', '#B9AAFF',
         st != null
-          ? _rcDate(stDate) + ' · ' + _rcStrainBand(st) + ' · ' + ldPrev.sessions + ' buổi'
-            // Buổi không đeo đo nhịp tim vẫn được đếm, nhưng không vào điểm —
-            // nói ra để con số thấp không bị hiểu là tập nhẹ.
-            + (ldPrev.sessionsNoHr ? ' (' + ldPrev.sessionsNoHr + ' buổi không có nhịp tim)' : '')
+          ? _rcDate(stDate) + ' · ' + _rcStrainBand(st) + ' · '
+            // Không tập vẫn có tải: đi lại, leo cầu thang, căng thẳng. Nói rõ
+            // nguồn, để số nhỏ không bị hiểu là hỏng dữ liệu.
+            + (ldPrev.sessions
+                ? ldPrev.sessions + ' buổi'
+                  // Buổi không đeo đo nhịp tim vẫn được đếm nhưng không vào điểm.
+                  + (ldPrev.sessionsNoHr ? ' (' + ldPrev.sessionsNoHr + ' buổi không có nhịp tim)' : '')
+                : 'không tập, tính từ nhịp tim cả ngày')
           : (ldPrev ? _rcDate(stDate) + ' · ' + ldPrev.sessions + ' buổi, không có nhịp tim'
-                    : _rcDate(stDate) + ' · không tập'),
+                    : _rcDate(stDate) + ' · chưa có nhịp tim'),
         st == null ? 0 : st / 21);
   head.insertAdjacentElement('afterend', box);
 
