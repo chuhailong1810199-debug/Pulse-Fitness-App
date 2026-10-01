@@ -7163,10 +7163,21 @@ function schedSessionUnits(startTime, endTime) {
   return Math.max(1, Math.ceil(mins / 60));
 }
 
-/** 1 → "1", 1.5 → "1.5" (no trailing .0) */
+/**
+ * Số session luôn là số nguyên: schedSessionUnits() đã làm tròn LÊN cho từng
+ * buổi, nên buổi 1,5 tiếng là 2 session trước khi cộng vào đâu cả.
+ *
+ * Làm tròn phải ở mức từng buổi, không phải ở tổng. Ba buổi 1,5 tiếng là
+ * 2+2+2 = 6 session, chứ không phải ceil(4,5) = 5 — đúng với luật "mỗi tiếng
+ * bắt đầu tính 1 session".
+ *
+ * Bản cũ ở đây còn định dạng số lẻ thành "1.5". Không bao giờ chạy tới, mà đọc
+ * vào lại tưởng session có thể lẻ. Còn sót số lẻ ở đâu thì vẫn làm tròn lên,
+ * không hiện phần thập phân.
+ */
 function schedFmtUnits(n) {
-  const r = Math.round((n || 0) * 10) / 10;
-  return Number.isInteger(r) ? String(r) : r.toFixed(1);
+  const v = Number(n);
+  return String(Number.isFinite(v) ? Math.ceil(v) : 0);
 }
 
 /**
