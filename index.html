@@ -5271,7 +5271,14 @@ function renderActive() {
     + '<div class="ac-side">'
       + '<div class="ac-kpi"><span class="ac-kpi-v rc-num">' + _acNum(last.workoutCalories) + '</span>'
         + '<span class="rc-micro">kcal buổi tập</span>'
-        + '<span class="ac-kpi-s">' + (last.workouts || []).length + ' buổi</span></div>'
+        // Buổi tự khai trong app Polar Flow không có nhịp tim, nên Polar không
+        // tính calo cho nó. Không nói ra thì "2 buổi · 288 kcal" trông như sai
+        // số, trong khi thật ra là một buổi không được đo.
+        + '<span class="ac-kpi-s">' + (last.workouts || []).length + ' buổi'
+          + ((last.workouts || []).filter(w => w.noHr || w.calories == null).length
+              ? ', ' + (last.workouts || []).filter(w => w.noHr || w.calories == null).length
+                + ' buổi không đo' : '')
+          + '</span></div>'
       + '<div class="ac-kpi"><span class="ac-kpi-v rc-num">' + _acNum(last.activeCalories) + '</span>'
         + '<span class="rc-micro">kcal vận động</span>'
         + '<span class="ac-kpi-s">tổng ngày ' + _acNum(last.calories) + '</span></div>'
@@ -5315,14 +5322,18 @@ function renderActive() {
           + '<div class="ac-w-main"><span class="ac-w-sport">'
             + escHtml(AC_SPORT[r.w.sport] || r.w.sport) + '</span>'
             + '<span class="ac-w-sub">' + _rcDate(r.d) + ' · ' + _rcHM(r.w.sec) + hr + '</span></div>'
-          + '<span class="ac-w-cal rc-num">' + _acNum(r.w.calories) + '<i>kcal</i></span>'
+          + (r.w.calories == null
+              ? '<span class="ac-w-cal ac-w-none">không đo</span>'
+              : '<span class="ac-w-cal rc-num">' + _acNum(r.w.calories) + '<i>kcal</i></span>')
           + '</div>';
       }).join('') + '</div>'
     : '<div class="rc-note">Chưa có buổi tập nào được ghi trên Polar trong kỳ này.</div>';
   html += '</section>';
 
-  html += '<div class="rc-note">Chỉ tính buổi tập có dữ liệu nhịp tim. Polar ghi mỗi buổi thành '
-    + 'nhiều bản, chỉ bản có nhịp tim mới có calo — lọc theo calo là tự loại trùng.</div>';
+  html += '<div class="rc-note">Buổi tự khai trong app Polar Flow không có nhịp tim, nên Polar '
+    + 'không tính calo cho nó — chỗ đó ghi "không đo" chứ không phải bằng 0. Năng lượng của buổi đó '
+    + 'vẫn nằm trong "kcal vận động" của cả ngày. Muốn có calo và nhịp tim cho từng buổi thì bấm '
+    + 'bắt đầu buổi tập trên vòng, đừng chỉ ghi trong app.</div>';
 
   wrap.innerHTML = html;
 }
@@ -13567,6 +13578,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .ac-w-sub{font-size:11.5px;color:var(--rc-muted);font-variant-numeric:tabular-nums;}
 .ac-w-cal{flex:none;font-size:19px;font-weight:700;letter-spacing:-.02em;color:var(--rc-txt);}
 .ac-w-cal i{font-style:normal;font-size:11px;font-weight:600;color:var(--rc-muted);margin-left:4px;}
+.ac-w-none{font-size:12px;font-weight:600;color:var(--rc-muted);}
 @media(max-width:560px){
   .ac-hero{grid-template-columns:minmax(0,1fr);gap:14px;}
   .ac-ring{max-width:150px;}
@@ -14087,6 +14099,9 @@ const I18N_VI_EN = {
   'để tạo.': 'to create.', 'khách.': 'clients.', 'chuẩn': 'standard',
   'khách': 'clients', 'bước': 'steps',
   'MÀN HÌNH.': 'HOME SCREEN.', 'VÀO APP →': 'ENTER APP →',
+  'không đo': 'not measured', 'buổi không đo': 'session not measured',
+  'Buổi tự khai trong app Polar Flow không có nhịp tim, nên Polar không tính calo cho nó — chỗ đó ghi "không đo" chứ không phải bằng 0. Năng lượng của buổi đó vẫn nằm trong "kcal vận động" của cả ngày. Muốn có calo và nhịp tim cho từng buổi thì bấm bắt đầu buổi tập trên vòng, đừng chỉ ghi trong app.':
+    'A session logged by hand in the Polar Flow app carries no heart rate, so Polar computes no calories for it. That is shown as "not measured" rather than zero. Its energy is still inside the day\'s active kcal. To get calories and heart rate per session, start the session on the band instead of only logging it in the app.',
   'Bấm Đồng bộ ngay để kéo dữ liệu và nhận lời khuyên cho hôm nay.': 'Tap Sync now to pull the data and get today’s advice.',
   'Bấm Đồng bộ ngay để thử lại.': 'Tap Sync now to try again.',
 };
