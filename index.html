@@ -7169,6 +7169,33 @@ function schedFmtUnits(n) {
   return Number.isInteger(r) ? String(r) : r.toFixed(1);
 }
 
+/**
+ * Một vòng tròn thống kê. Dùng chung ngôn ngữ với vòng bên Recovery nhưng để
+ * class riêng: hai trang vẽ lại độc lập, dùng chung class là sửa bên này vỡ
+ * bên kia.
+ *
+ * @param {number} pct 0..1 — phần vòng được tô
+ * @param {?number} denom có mẫu số thì ghi "x/y" dưới vòng, không thì bỏ
+ */
+function schedRing(label, value, pct, color, denom) {
+  const R = 34, C = 2 * Math.PI * R;
+  const p = Math.max(0, Math.min(1, pct || 0));
+  const share = denom > 0 ? Math.round((value / denom) * 100) + '%' : '';
+  return `<div class="sch-ring">
+    <div class="sch-ring-c">
+      <svg viewBox="0 0 80 80" aria-hidden="true">
+        <circle cx="40" cy="40" r="${R}" fill="none" stroke="rgba(255,255,255,.09)" stroke-width="7"/>
+        <circle cx="40" cy="40" r="${R}" fill="none" stroke="${color}" stroke-width="7"
+          stroke-linecap="round" stroke-dasharray="${C.toFixed(1)}"
+          stroke-dashoffset="${(C * (1 - p)).toFixed(1)}"/>
+      </svg>
+      <span class="sch-ring-v" style="color:${color}">${schedFmtUnits(value)}</span>
+    </div>
+    <span class="sch-ring-l">${label}</span>
+    ${share ? `<span class="sch-ring-s">${share} tổng</span>` : ''}
+  </div>`;
+}
+
 function _schedRenderSummary(res) {
   const wrap = document.getElementById('sch-summary-body');
   if (!wrap) return;
@@ -7183,20 +7210,14 @@ function _schedRenderSummary(res) {
   const note = (bookings && Math.abs(total - bookings) > 0.05)
     ? `<div class="sch-sum-note">${bookings} buổi đã đặt · quy đổi ${schedFmtUnits(total)} session (mỗi tiếng bắt đầu tính 1 session)</div>`
     : '';
+  // Vòng tròn như bên Recovery. Công ty và Freelance đầy theo TỶ LỆ trong tổng,
+  // nên nhìn một cái là thấy cơ cấu tháng; Tổng đầy trọn vì nó là mẫu số.
+  const pct = (n) => (total > 0 ? Math.max(0, Math.min(1, n / total)) : 0);
   wrap.innerHTML = `
-    <div class="sch-sum-split">
-      <div class="sch-sum-box sch-sum-co">
-        <div class="sch-sum-box-num">${schedFmtUnits(company)}</div>
-        <div class="sch-sum-box-lbl">Công ty</div>
-      </div>
-      <div class="sch-sum-box sch-sum-fr">
-        <div class="sch-sum-box-num">${schedFmtUnits(freelance)}</div>
-        <div class="sch-sum-box-lbl">Freelance</div>
-      </div>
-      <div class="sch-sum-box sch-sum-all">
-        <div class="sch-sum-box-num">${schedFmtUnits(total)}</div>
-        <div class="sch-sum-box-lbl">Tổng</div>
-      </div>
+    <div class="sch-sum-rings">
+      ${schedRing('Công ty', company, pct(company), '#BCA8FF', total)}
+      ${schedRing('Freelance', freelance, pct(freelance), '#6ee7a8', total)}
+      ${schedRing('Tổng', total, 1, '#ffffff', null)}
     </div>
     ${note}
     <div class="sch-sum-rows">
@@ -12810,16 +12831,22 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .sch-kind-btn.on.sch-kind-co{background:rgba(86,60,217,.18);border-color:rgba(86,60,217,.55);color:#BCA8FF;}
 .sch-kind-btn.on.sch-kind-fr{background:rgba(31,138,91,.2);border-color:rgba(45,180,120,.6);color:#6ee7a8;}
 /* monthly split */
-.sch-sum-split{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-bottom:16px;}
-.sch-sum-box{border-radius:13px;padding:12px 8px;text-align:center;border:1px solid rgba(255,255,255,.08);}
-.sch-sum-co{background:rgba(86,60,217,.12);border-color:rgba(86,60,217,.28);}
-.sch-sum-fr{background:rgba(31,138,91,.13);border-color:rgba(45,180,120,.3);}
-.sch-sum-all{background:rgba(255,255,255,.05);}
-.sch-sum-box-num{font-size:26px;font-weight:800;line-height:1;color:#fff;font-variant-numeric:tabular-nums;}
-.sch-sum-co .sch-sum-box-num{color:#BCA8FF;}
-.sch-sum-fr .sch-sum-box-num{color:#6ee7a8;}
-.sch-sum-box-lbl{font-size:10.5px;font-weight:600;letter-spacing:.6px;color:rgba(255,255,255,.5);margin-top:5px;}
-.sch-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:middle;flex-shrink:0;}
+/* ── Vòng thống kê lịch, cùng ngôn ngữ với vòng bên Recovery ───────── */
+.sch-sum-rings{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;
+  margin:4px 0 14px;}
+.sch-ring{display:flex;flex-direction:column;align-items:center;gap:7px;min-width:0;}
+.sch-ring-c{position:relative;width:84px;height:84px;max-width:25vw;max-height:25vw;}
+.sch-ring-c svg{display:block;width:100%;height:100%;transform:rotate(-90deg);}
+.sch-ring-v{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-size:22px;font-weight:800;letter-spacing:-.03em;font-variant-numeric:tabular-nums;}
+.sch-ring-l{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
+  color:rgba(255,255,255,.55);text-align:center;}
+.sch-ring-s{font-size:10.5px;color:rgba(255,255,255,.33);text-align:center;line-height:1.35;}
+@media(max-width:380px){
+  .sch-ring-v{font-size:18px;}
+  .sch-ring-l{font-size:9.5px;letter-spacing:.05em;}
+}
+.sch-sum-co .sch-sum-fr .sch-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:middle;flex-shrink:0;}
 .sch-dot-company{background:#E7E2FA;}
 .sch-dot-freelance{background:#2db478;}
 .sch-sum-note{font-size:11px;color:rgba(255,255,255,.42);text-align:center;margin:-6px 0 12px;line-height:1.5;}
@@ -14101,6 +14128,7 @@ const I18N_VI_EN = {
   'Vòng VẪN đo nhịp tim trong buổi tự khai bằng app Polar Flow, mỗi giây một mẫu. Nhưng buổi không được bấm bắt đầu trên vòng nên Polar không lập bản ghi buổi tập, và không có bản ghi thì nó không quy ra calo. Năng lượng đó vẫn nằm trong kcal vận động cả ngày, và nhịp tim đó vẫn vào điểm Strain. Muốn có calo riêng từng buổi thì bấm bắt đầu trên vòng.':
     'The band does record heart rate during a session logged by hand in the Polar Flow app, once a second. But the session was not started on the band, so Polar files no exercise record for it, and without a record it computes no calories. That energy is still in the day\'s active kcal, and that heart rate still counts toward Strain. To get calories per session, start it on the band.',
   'MÀN HÌNH.': 'HOME SCREEN.', 'VÀO APP →': 'ENTER APP →',
+  'tổng': 'of total',
   'Polar không tính': 'Polar gave no figure', 'buổi Polar không tính calo': 'session with no calories from Polar',
   'Bấm Đồng bộ ngay để kéo dữ liệu và nhận lời khuyên cho hôm nay.': 'Tap Sync now to pull the data and get today’s advice.',
   'Bấm Đồng bộ ngay để thử lại.': 'Tap Sync now to try again.',
