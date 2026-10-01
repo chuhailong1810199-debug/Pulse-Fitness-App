@@ -7216,7 +7216,6 @@ function _schedRenderSummary(res) {
     return;
   }
   const entries = Object.entries(byTitle).sort((a,b) => b[1].n - a[1].n);
-  const maxN    = entries[0][1].n;
   // Only worth explaining the difference when some booking wasn't exactly 1 hour
   const note = (bookings && Math.abs(total - bookings) > 0.05)
     ? `<div class="sch-sum-note">${bookings} buổi đã đặt · quy đổi ${schedFmtUnits(total)} session (mỗi tiếng bắt đầu tính 1 session)</div>`
@@ -7231,16 +7230,70 @@ function _schedRenderSummary(res) {
       ${schedRing('Tổng', total, 1, '#ffffff', null)}
     </div>
     ${note}
-    <div class="sch-sum-rows">
-      ${entries.map(([, v]) => `
-        <div class="sch-sum-row">
-          <span class="sch-sum-rname"><i class="sch-dot sch-dot-${v.kind}"></i>${schedDisplayName(v.variants)}</span>
-          <div class="sch-sum-bar-wrap">
-            <div class="sch-sum-bar sch-sum-bar-${v.kind}" style="width:${Math.round(v.n/maxN*100)}%"></div>
-          </div>
-          <span class="sch-sum-rn">${schedFmtUnits(v.n)}</span>
-        </div>`).join('')}
+    <div class="sch-find">
+      <input id="sch-find-in" class="sch-find-in" type="search" autocomplete="off"
+        placeholder="Tìm tên khách…" oninput="schedFindRender(this.value)">
+      <div id="sch-find-out" class="sch-find-out"></div>
     </div>`;
+
+  // Giữ lại để ô tìm kiếm lọc tại chỗ, khỏi truy vấn Firestore mỗi lần gõ.
+  _schSumList = entries.map(([, v]) => ({
+    name: schedDisplayName(v.variants), n: v.n, kind: v.kind, bookings: v.bookings,
+  }));
+  schedFindRender('');
+}
+
+let _schSumList = [];
+
+/** Bỏ dấu để gõ "nguyet" vẫn ra "Chị Nguyệt". */
+function _schFold(s) {
+  return String(s == null ? '' : s).toLowerCase().normalize('NFD')
+    .replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Tên trên lịch là chữ coach tự gõ, không phải khoá. Chỉ mở dashboard khi nó
+ * khớp ĐÚNG MỘT khách — khớp mờ ở đây là mở nhầm hồ sơ người khác.
+ */
+function schedFindClient(name) {
+  const all = (typeof clientsData !== 'undefined' && clientsData) || [];
+  const t = _schNorm(name);
+  if (!t) return null;
+  const hits = all.filter(c => _schNorm(c.name) === t);
+  return hits.length === 1 ? hits[0] : null;
+}
+
+function schedFindRender(q) {
+  const out = document.getElementById('sch-find-out');
+  if (!out) return;
+  const f = _schFold(q);
+  if (!f) {
+    out.innerHTML = '<p class="sch-find-hint">' + _schSumList.length
+      + ' khách có buổi trong tháng. Gõ tên để xem số session và mở giáo án.</p>';
+    return;
+  }
+  const hits = _schSumList.filter(x => _schFold(x.name).includes(f));
+  if (!hits.length) {
+    out.innerHTML = '<p class="sch-find-hint">Không có khách nào tên như vậy trong tháng này.</p>';
+    return;
+  }
+  out.innerHTML = hits.map(x => {
+    const c = schedFindClient(x.name);
+    return '<div class="sch-find-row">'
+      + '<span class="sch-find-name"><i class="sch-dot sch-dot-' + x.kind + '"></i>'
+        + escHtml(x.name) + '</span>'
+      + '<span class="sch-find-n">' + schedFmtUnits(x.n) + '<i>session</i></span>'
+      // Id đi qua thuộc tính, không nhét thẳng vào onclick: một id có dấu nháy
+      // đơn sẽ cắt đứt chuỗi JS và nút chết câm. Hiện chưa id nào như vậy, và
+      // đó chính là loại lỗi chỉ lộ ra khi đã quá muộn.
+      + (c ? '<button class="sch-find-go" data-cid="' + escHtml(c.id) + '">Mở giáo án →</button>'
+           : '<span class="sch-find-no">chưa khớp hồ sơ</span>')
+      + '</div>';
+  }).join('');
+
+  out.querySelectorAll('.sch-find-go').forEach((b) => {
+    b.onclick = () => openClientDash(b.getAttribute('data-cid'));
+  });
 }
 
 async function renderSchedulePage() {
@@ -12845,6 +12898,30 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 /* ── Vòng thống kê lịch, cùng ngôn ngữ với vòng bên Recovery ───────── */
 .sch-sum-rings{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;
   margin:4px 0 14px;}
+/* ── Ô tìm khách thay cho danh sách thanh ngang ────────────────────── */
+.sch-find{margin-top:4px;}
+.sch-find-in{width:100%;box-sizing:border-box;background:rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.14);border-radius:11px;color:#F4F1FB;
+  font-family:inherit;font-size:14px;padding:11px 13px;outline:none;}
+.sch-find-in::placeholder{color:rgba(255,255,255,.35);}
+.sch-find-in:focus{border-color:#7665FF;background:rgba(118,101,255,.08);}
+.sch-find-out{margin-top:10px;}
+.sch-find-hint{margin:0;font-size:12.5px;line-height:1.55;color:rgba(255,255,255,.4);}
+.sch-find-row{display:flex;align-items:center;gap:10px;padding:10px 0;
+  border-bottom:1px solid rgba(255,255,255,.07);}
+.sch-find-row:last-child{border-bottom:0;}
+.sch-find-name{flex:1 1 auto;min-width:0;font-size:14px;font-weight:600;color:#F4F1FB;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sch-find-n{flex:none;font-size:17px;font-weight:800;color:#E7E2FA;font-variant-numeric:tabular-nums;}
+.sch-find-n i{font-style:normal;font-size:10.5px;font-weight:600;color:rgba(255,255,255,.4);margin-left:5px;}
+.sch-find-go{flex:none;background:#7665FF;border:none;border-radius:9px;color:#0A0A14;
+  font-family:inherit;font-size:12px;font-weight:700;padding:7px 11px;cursor:pointer;white-space:nowrap;}
+.sch-find-go:hover{background:#8B7BFF;}
+.sch-find-no{flex:none;font-size:11.5px;color:rgba(255,255,255,.3);white-space:nowrap;}
+@media(max-width:480px){
+  .sch-find-row{flex-wrap:wrap;gap:6px 10px;}
+  .sch-find-name{flex:1 1 100%;}
+}
 .sch-ring{display:flex;flex-direction:column;align-items:center;gap:7px;min-width:0;}
 .sch-ring-c{position:relative;width:84px;height:84px;max-width:25vw;max-height:25vw;}
 .sch-ring-c svg{display:block;width:100%;height:100%;transform:rotate(-90deg);}
@@ -12866,7 +12943,6 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   background:rgba(0,0,0,.35);border-radius:4px;padding:1px 4px;color:#fff;
   font-variant-numeric:tabular-nums;
 }
-.sch-sum-bar-freelance{background:linear-gradient(90deg,#1f8a5b,#6ee7a8) !important;}
 .sch-evt-ttl{font-size:12px;font-weight:700;color:#fff;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;}
 .sch-evt-sub{font-size:10px;color:rgba(255,255,255,.75);white-space:nowrap;overflow:hidden;}
 
@@ -12897,12 +12973,6 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .sch-sum-hero-num{font-size:52px;font-weight:800;color:#fff;line-height:1;background:linear-gradient(135deg,#fff,var(--ac-hi));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;}
 .sch-sum-hero-lbl{font-size:15px;font-weight:600;color:rgba(176,169,160,.6);}
 /* Per-client rows */
-.sch-sum-rows{display:flex;flex-direction:column;gap:10px;}
-.sch-sum-row{display:grid;grid-template-columns:90px 1fr 28px;align-items:center;gap:10px;}
-.sch-sum-rname{font-size:13px;font-weight:600;color:#F4F1FB;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.sch-sum-bar-wrap{background:rgba(86,60,217,.12);border-radius:99px;height:6px;overflow:hidden;}
-.sch-sum-bar{height:100%;border-radius:99px;background:linear-gradient(90deg,#E7E2FA,#BCA8FF);transition:width .4s ease;}
-.sch-sum-rn{font-size:14px;font-weight:700;color:#E7E2FA;text-align:right;}
 .sch-empty{font-size:12px;color:rgba(176,169,160,.4);text-align:center;padding:8px 0;margin:0;}
 
 /* ── Nutrition Page ─────────────────────────────────────────────────────── */
@@ -14139,7 +14209,9 @@ const I18N_VI_EN = {
   'Vòng VẪN đo nhịp tim trong buổi tự khai bằng app Polar Flow, mỗi giây một mẫu. Nhưng buổi không được bấm bắt đầu trên vòng nên Polar không lập bản ghi buổi tập, và không có bản ghi thì nó không quy ra calo. Năng lượng đó vẫn nằm trong kcal vận động cả ngày, và nhịp tim đó vẫn vào điểm Strain. Muốn có calo riêng từng buổi thì bấm bắt đầu trên vòng.':
     'The band does record heart rate during a session logged by hand in the Polar Flow app, once a second. But the session was not started on the band, so Polar files no exercise record for it, and without a record it computes no calories. That energy is still in the day\'s active kcal, and that heart rate still counts toward Strain. To get calories per session, start it on the band.',
   'MÀN HÌNH.': 'HOME SCREEN.', 'VÀO APP →': 'ENTER APP →',
-  'tổng': 'of total',
+  'tổng': 'of total', 'session': 'sessions', 'Mở giáo án →': 'Open program →',
+  'chưa khớp hồ sơ': 'no matching profile', 'Tìm tên khách…': 'Find a client…',
+  'Không có khách nào tên như vậy trong tháng này.': 'No client by that name this month.',
   'Polar không tính': 'Polar gave no figure', 'buổi Polar không tính calo': 'session with no calories from Polar',
   'Bấm Đồng bộ ngay để kéo dữ liệu và nhận lời khuyên cho hôm nay.': 'Tap Sync now to pull the data and get today’s advice.',
   'Bấm Đồng bộ ngay để thử lại.': 'Tap Sync now to try again.',
@@ -14147,6 +14219,8 @@ const I18N_VI_EN = {
 
 // Mẫu có biến chen giữa. {0} là phần thay đổi, giữ nguyên khi dịch.
 const I18N_PAT = {
+  '{0} khách có buổi trong tháng. Gõ tên để xem số session và mở giáo án.':
+    '{0} clients had sessions this month. Type a name for their count and program.',
   'Đã cập nhật {0} đêm ·': 'Updated {0} nights ·',
   'Đã kéo về hồ sơ {0}, không phải hồ sơ đang mở':
     'Synced into profile {0}, not the one open',
