@@ -2300,46 +2300,88 @@ function buildRecoveryDocs(nightly, sleep) {
  * chỉ cho trung bình và cao nhất, mà với kiểu tập ngắt quãng thì trung bình
  * xoá sạch cấu trúc buổi tập.
  */
+/**
+ * Gom các bản ghi của Polar thành từng BUỔI. Polar ghi một buổi thành nhiều
+ * bản (app ghi môn, vòng ghi nhịp tim); hai bản của cùng buổi thì trùng giờ
+ * nhau. Hai buổi khác nhau thì không.
+ */
+function groupSessions(exercises) {
+  const recs = (exercises || [])
+    .filter((x) => x && x.start_time)
+    .map((x) => {
+      const from = Date.parse(x.start_time.length <= 19 ? x.start_time + "Z" : x.start_time);
+      const sec = _isoDur(x.duration) || 0;
+      return { x, from, to: from + sec * 1000, sec };
+    })
+    .filter((r) => isFinite(r.from))
+    .sort((a, b) => a.from - b.from);
+
+  const groups = [];
+  for (const r of recs) {
+    const g = groups.find((q) => r.from < q.to && q.from < r.to);
+    if (g) { g.items.push(r); g.from = Math.min(g.from, r.from); g.to = Math.max(g.to, r.to); }
+    else groups.push({ from: r.from, to: r.to, items: [r] });
+  }
+  return groups;
+}
+
 function dayLoad(exercises, fitById, ctx) {
-  let cardio = 0, sessions = 0, sec = 0;
+  // Polar ghi MỘT buổi thành nhiều bản: app điện thoại ghi môn, vòng ghi nhịp
+  // tim. Bản trước đây coi "không có calo" là bản trùng — sai. Buổi tạ hôm
+  // 01/10 chạy 14:31-15:21 không có nhịp tim và cũng KHÔNG trùng bản nào, vậy
+  // mà bị bỏ, nên ngày tập 2 buổi chỉ đếm 1. Dấu hiệu đúng là TRÙNG GIỜ.
+  const groups = groupSessions(exercises);
+
+  let cardio = 0, sec = 0;
   const series = [], workouts = [];
 
-  for (const x of exercises) {
-    const cl = Number(((x.training_load_pro || {})["cardio-load"]));
-    const hasCl = isFinite(cl) && cl > 0;
-    const hasHr = x.heart_rate && x.heart_rate.average;
-    if (!hasCl && !hasHr) continue;      // bản trùng Polar ghi kèm, không có dữ liệu
+  for (const g of groups) {
+    // Trong một buổi, bản có nhịp tim là bản đo được; bản kia chỉ có tên môn.
+    const withHr = g.items.find((r) => fitById[r.x.id]) ||
+                   g.items.find((r) => r.x.heart_rate && r.x.heart_rate.average);
+    const named  = g.items.find((r) => r.x.detailed_sport_info &&
+                   !/^OTHER/.test(r.x.detailed_sport_info)) || g.items[0];
 
-    if (hasCl) cardio += cl;
-    sessions++; sec += _isoDur(x.duration) || 0;
+    const cl = g.items.reduce((n, r) => {
+      const v = Number(((r.x.training_load_pro || {})["cardio-load"]));
+      return n + (isFinite(v) && v > 0 ? v : 0);
+    }, 0);
+    cardio += cl;
+    const gsec = Math.round((g.to - g.from) / 1000);
+    sec += gsec;
 
     let w = null;
-    const samples = fitById[x.id] || null;
+    const samples = withHr ? fitById[withHr.x.id] : null;
     if (samples && samples.length > 1) { series.push(samples); w = workoutStrain(samples, ctx); }
+
     workouts.push({
-      at: x.start_time,
-      sport: x.detailed_sport_info || x.sport || "OTHER",
-      sec: _isoDur(x.duration),
-      cardioLoad: hasCl ? Math.round(cl * 10) / 10 : null,
+      at: named.x.start_time,
+      // Tên môn lấy từ bản có nhãn thật; bản của vòng hay ghi "OTHER_INDOOR".
+      sport: named.x.detailed_sport_info || named.x.sport || "OTHER",
+      sec: gsec,
+      cardioLoad: cl > 0 ? Math.round(cl * 10) / 10 : null,
       strain: w ? w.strain : null,
-      hrAvg: w ? w.hrAvg : ((x.heart_rate || {}).average ?? null),
-      hrMax: w ? w.hrMax : ((x.heart_rate || {}).maximum ?? null),
+      hrAvg: w ? w.hrAvg : ((withHr && withHr.x.heart_rate || {}).average ?? null),
+      hrMax: w ? w.hrMax : ((withHr && withHr.x.heart_rate || {}).maximum ?? null),
       zoneSec: w ? w.zoneSec : null,
       samples: samples ? samples.length : 0,
+      // Buổi có thật nhưng không đo nhịp tim: vẫn đếm, và nói rõ vì sao không
+      // có strain, thay vì biến mất khỏi danh sách như trước.
+      noHr: !samples,
+      records: g.items.length,
     });
   }
 
-  if (!sessions) return null;
-  // Cộng tải THÔ của các buổi rồi mới ép về 0-21 một lần. Cộng strain từng buổi
-  // lại là sai: hàm ép là hàm lõm nên tổng sẽ bị thổi phồng.
+  if (!workouts.length) return null;
   const day = series.length ? dailyStrain(series, ctx) : null;
+  const noHr = workouts.filter((w) => w.noHr).length;
   return {
     cardioLoad: Math.round(cardio * 10) / 10,
     strain: day ? day.strain : null,
     rawLoad: day ? day.load : null,
     zoneSec: day ? day.zoneSec : null,
     hrMax: ctx.hrMax, hrMaxSource: ctx.hrMaxSource, rhr: ctx.rhr,
-    sessions, sec, workouts,
+    sessions: workouts.length, sessionsNoHr: noHr, sec, workouts,
     source: "polar-fit + app-strain-v1",
   };
 }
@@ -2382,18 +2424,29 @@ async function buildActivityDocs(token) {
     });
   }
 
+  // Gom theo NGÀY rồi gom theo buổi bằng cách xét trùng giờ — giống dayLoad.
+  // Lọc theo "có calo" như trước là bỏ mất buổi tạ không đeo đo nhịp tim, nên
+  // ngày tập 2 buổi chỉ hiện 1.
+  const exByDay = {};
   for (const x of polarArray(exes, "exercises", "data")) {
     if (!x || !x.start_time) continue;
-    if (x.calories == null) continue;          // bản trùng, không có nhịp tim
-    const d = String(x.start_time).slice(0, 10);
-    seed(d).workouts.push({
-      at: x.start_time,
-      sport: x.detailed_sport_info || x.sport || "OTHER",
-      sec: _isoDur(x.duration),
-      calories: x.calories,
-      hrAvg: (x.heart_rate || {}).average ?? null,
-      hrMax: (x.heart_rate || {}).maximum ?? null,
-    });
+    (exByDay[String(x.start_time).slice(0, 10)] ||= []).push(x);
+  }
+  for (const d of Object.keys(exByDay)) {
+    for (const g of groupSessions(exByDay[d])) {
+      const hr = g.items.find((r) => r.x.heart_rate && r.x.heart_rate.average);
+      const named = g.items.find((r) => r.x.detailed_sport_info &&
+        !/^OTHER/.test(r.x.detailed_sport_info)) || g.items[0];
+      seed(d).workouts.push({
+        at: named.x.start_time,
+        sport: named.x.detailed_sport_info || named.x.sport || "OTHER",
+        sec: Math.round((g.to - g.from) / 1000),
+        calories: g.items.reduce((n, r) => n + (Number(r.x.calories) || 0), 0) || null,
+        hrAvg: hr ? hr.x.heart_rate.average : null,
+        hrMax: hr ? hr.x.heart_rate.maximum : null,
+        noHr: !hr,
+      });
+    }
   }
 
   for (const d of Object.keys(days)) {

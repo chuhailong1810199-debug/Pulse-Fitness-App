@@ -5482,8 +5482,14 @@ function _rcMountRings(wrap) {
   // THÚC sáng ngày D, nên buổi tập ảnh hưởng tới đêm đó là buổi của ngày D-1 —
   // tập xong rồi mới đi ngủ. Bản đầu lấy tải của đúng ngày D, tức buổi tập
   // CHƯA diễn ra lúc mở app buổi sáng, nên vòng Strain sáng nào cũng trống.
+  // Strain là tải của HÔM NAY, cộng dồn trong ngày — giống cách WHOOP đọc chỉ
+  // số này. Bản trước lấy cứng ngày hôm trước để sáng sớm vòng không trống,
+  // nhưng hệ quả là tập xong vẫn không thấy gì cho tới hôm sau. Giờ ưu tiên
+  // hôm nay, chưa tập thì mới lùi về hôm qua, và luôn ghi rõ ngày đang hiện.
   const prevDate = _rcDayBefore(last.date);
-  const ldPrev = (_recovery.find(n => n.date === prevDate) || {}).load || null;
+  const ldToday = last.load || null;
+  const ldPrev = ldToday || ((_recovery.find(n => n.date === prevDate) || {}).load || null);
+  const stDate = ldToday ? last.date : prevDate;
   // Thang 0-21 của app (functions/strain.js). cardioLoad của Polar vẫn được
   // lưu cùng chỗ và hiện ở dòng phụ, để đối chiếu hai nguồn.
   const st = ldPrev && typeof ldPrev.strain === 'number' ? ldPrev.strain : null;
@@ -5499,9 +5505,12 @@ function _rcMountRings(wrap) {
            : 'Polar chưa chấm', rd ? rd.status / 6 : 0)
     + _rcRing('Strain', st == null ? null : st.toFixed(1), '', '#B9AAFF',
         st != null
-          ? _rcDate(prevDate) + ' · ' + _rcStrainBand(st) + ' · ' + ldPrev.sessions + ' buổi'
-          : (ldPrev ? _rcDate(prevDate) + ' · không đọc được nhịp tim'
-                    : _rcDate(prevDate) + ' · không tập'),
+          ? _rcDate(stDate) + ' · ' + _rcStrainBand(st) + ' · ' + ldPrev.sessions + ' buổi'
+            // Buổi không đeo đo nhịp tim vẫn được đếm, nhưng không vào điểm —
+            // nói ra để con số thấp không bị hiểu là tập nhẹ.
+            + (ldPrev.sessionsNoHr ? ' (' + ldPrev.sessionsNoHr + ' buổi không có nhịp tim)' : '')
+          : (ldPrev ? _rcDate(stDate) + ' · ' + ldPrev.sessions + ' buổi, không có nhịp tim'
+                    : _rcDate(stDate) + ' · không tập'),
         st == null ? 0 : st / 21);
   head.insertAdjacentElement('afterend', box);
 
