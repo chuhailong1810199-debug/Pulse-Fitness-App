@@ -12,7 +12,16 @@ const fs = require("fs");
 const path = require("path");
 const { decode, encode, resize } = require("./png-tool.js");
 
-const SRC = process.argv[2] || "/tmp/logo2.png";
+/**
+ * Chạy hai kiểu:
+ *   node outputs/build-logo.js <anh-thiet-ke.png>   dựng lại TẤT CẢ từ ảnh gốc
+ *   node outputs/build-logo.js                      chỉ dựng lại bộ icon từ
+ *                                                   images/pulse-mark.png
+ *
+ * Tách làm hai vì ảnh thiết kế gốc là file coach gửi, không nằm trong repo.
+ * Bản mark đã tách nền và đổi màu thì có, nên bộ icon luôn dựng lại được.
+ */
+const SRC = process.argv[2];
 const OUT = path.join(__dirname, "..", "images");
 
 // Màu app. Nhịp tim lấy màu nhấn, chữ P giữ trắng.
@@ -74,11 +83,21 @@ function extract(src, x0, y0, x1, y1) {
   return { W: w, H: h, px };
 }
 
-/** Đặt ảnh trong suốt lên nền đặc, canh giữa, chừa lề an toàn. */
-function onBg(img, size, inset) {
+/**
+ * Canh ảnh vào khung vuông, chừa lề an toàn.
+ *
+ * `clear` = true thì giữ nền trong suốt. Chỉ dùng cho favicon: trình duyệt
+ * ghép nó lên thanh tab nên trong suốt là hợp nhất. KHÔNG dùng cho icon
+ * maskable (Android cắt theo mặt nạ, nền trong sẽ lộ nền hệ thống) và cũng
+ * không dùng cho apple-touch-icon (iOS ghép lên nền TRẮNG, logo trắng bạc sẽ
+ * biến mất).
+ */
+function onBg(img, size, inset, clear) {
   const out = Buffer.alloc(size * size * 4);
-  for (let i = 0; i < size * size; i++) {
-    out[i * 4] = BG[0]; out[i * 4 + 1] = BG[1]; out[i * 4 + 2] = BG[2]; out[i * 4 + 3] = 255;
+  if (!clear) {
+    for (let i = 0; i < size * size; i++) {
+      out[i * 4] = BG[0]; out[i * 4 + 1] = BG[1]; out[i * 4 + 2] = BG[2]; out[i * 4 + 3] = 255;
+    }
   }
   const box = Math.round(size * inset);
   const sc = Math.min(box / img.W, box / img.H);
@@ -90,32 +109,42 @@ function onBg(img, size, inset) {
       const s = (y * w + x) * 4, d = ((y + oy) * size + (x + ox)) * 4;
       const a = small[s + 3] / 255;
       if (!a) continue;
+      if (clear) {
+        out[d] = small[s]; out[d + 1] = small[s + 1]; out[d + 2] = small[s + 2];
+        out[d + 3] = small[s + 3];
+        continue;
+      }
       for (let k = 0; k < 3; k++) out[d + k] = Math.round(small[s + k] * a + out[d + k] * (1 - a));
     }
   }
   return out;
 }
 
-const src = decode(fs.readFileSync(SRC));
-console.log(`nguon ${src.W}x${src.H}`);
-
-// Toạ độ đo từ ảnh gốc, chừa viền bo ra ngoài.
-const mark = extract(src, 288, 282, 1002, 714);     // chữ P + nhịp tim
+let mark;
+if (SRC) {
+  const src = decode(fs.readFileSync(SRC));
+  console.log(`nguon ${src.W}x${src.H}`);
+  // Toạ độ đo từ ảnh gốc, chừa viền bo ra ngoài.
+  mark = extract(src, 288, 282, 1002, 714);     // chữ P + nhịp tim
 // Không lấy dòng "BUILD. TRAIN. GROW.": chỗ dùng bản ghép cao 34-72px, ở đó
 // tagline chỉ còn là một vệt xám không đọc được, mà vẫn chiếm 1/4 chiều cao
 // nên đẩy phần đọc được nhỏ lại.
-const lock = extract(src, 238, 282, 1016, 845);     // chữ P + PULSE
+  const lock = extract(src, 238, 282, 1016, 845);   // chữ P + PULSE
 
-fs.writeFileSync(path.join(OUT, "pulse-mark.png"), encode(mark.W, mark.H, mark.px));
-fs.writeFileSync(path.join(OUT, "pulse-logo.png"), encode(lock.W, lock.H, lock.px));
-console.log(`pulse-mark.png  ${mark.W}x${mark.H}`);
-console.log(`pulse-logo.png  ${lock.W}x${lock.H}`);
+  fs.writeFileSync(path.join(OUT, "pulse-mark.png"), encode(mark.W, mark.H, mark.px));
+  fs.writeFileSync(path.join(OUT, "pulse-logo.png"), encode(lock.W, lock.H, lock.px));
+  console.log(`pulse-mark.png  ${mark.W}x${mark.H}`);
+  console.log(`pulse-logo.png  ${lock.W}x${lock.H}`);
+} else {
+  mark = decode(fs.readFileSync(path.join(OUT, "pulse-mark.png")));
+  console.log(`dung lai pulse-mark.png ${mark.W}x${mark.H} — chi dung bo icon`);
+}
 
 // Icon: maskable cần nội dung nằm trong vùng an toàn giữa.
-for (const [name, size, inset] of [
-  ["icon-512.png", 512, 0.62], ["icon-192.png", 192, 0.62],
-  ["apple-touch-icon.png", 180, 0.70], ["favicon-32.png", 32, 0.86],
+for (const [name, size, inset, clear] of [
+  ["icon-512.png", 512, 0.62, false], ["icon-192.png", 192, 0.62, false],
+  ["apple-touch-icon.png", 180, 0.70, false], ["favicon-32.png", 32, 0.86, true],
 ]) {
-  fs.writeFileSync(path.join(OUT, name), encode(size, size, onBg(mark, size, inset)));
-  console.log(`${name.padEnd(22)} ${size}x${size}`);
+  fs.writeFileSync(path.join(OUT, name), encode(size, size, onBg(mark, size, inset, clear)));
+  console.log(`${name.padEnd(22)} ${size}x${size}   ${clear ? "nền trong suốt" : "nền đặc"}`);
 }
