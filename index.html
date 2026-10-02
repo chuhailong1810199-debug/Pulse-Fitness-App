@@ -5376,6 +5376,16 @@ async function loadRecovery() {
       escHtml(e.message || '') + '</div>';
     return;
   }
+  // Healthspan cần bước chân, nằm ở subcollection khác. Đọc một lần, im lặng
+  // nếu hỏng — thiếu bước chân thì mất một dòng, không được làm hỏng cả tab.
+  if (!_activity.length) {
+    try {
+      const a = await getDocs(query(
+        collection(db, 'clients', activeClient.id, 'activity'),
+        orderBy('date', 'desc'), limit(AC_DAYS)));
+      a.forEach(d => _activity.push(d.data()));
+    } catch (e) { console.warn('[loadRecovery] bỏ qua hoạt động:', e.code || e.message); }
+  }
   renderRecovery();
 }
 
@@ -5393,6 +5403,151 @@ function renderRecovery() {
   _rcMountBrief(wrap);
   _rcMountSleep(wrap);
   _rcMountRings(wrap);
+  _rcMountHealth(wrap);
+}
+
+// ── HEALTHSPAN — 6 thói quen so với ngưỡng đã công bố ────────────────────
+//
+// Lấy cảm hứng từ màn Healthspan của WHOOP, nhưng CỐ Ý không có con số "tuổi".
+// WHOOP quy hành vi thành tuổi sinh lý bằng định luật Gompertz cộng hazard
+// ratio mượn từ y văn, khớp trên dữ liệu hàng nghìn người — và chính họ nói
+// không có chuẩn lâm sàng để kiểm chứng con số đó. Ở đây có 1 người đeo và
+// vài tuần dữ liệu, nên dựng một mô hình tử vong là bịa.
+//
+// Thay vào đó: đếm xem đạt bao nhiêu ngưỡng CÓ NGUỒN. Mỗi dòng ghi rõ giá trị
+// thật, ngưỡng, và nguồn. Không trọng số ẩn, không hệ số tự đặt — ai cũng kiểm
+// lại được bằng tay.
+const HS_SRC = {
+  sleep:  'Giấc ngủ 7–9h mỗi đêm cho người lớn',
+  cons:   'Ngủ đều giờ gắn với nguy cơ tử vong thấp hơn',
+  zone:   'WHO 2020: ≥150 phút cường độ vừa mỗi tuần',
+  lift:   'WHO 2020: ≥2 buổi tập sức mạnh mỗi tuần',
+  steps:  'Lancet Public Health: 7.000 bước/ngày — giảm 47% nguy cơ so với 2.000',
+  rhr:    'So với đường nền của chính bạn, không có ngưỡng chung',
+};
+
+/**
+ * @returns {{list:Array, met:number, total:number, days:number}|null}
+ */
+function _hsCompute(rec, act) {
+  const nights = (rec || []).filter(n => n && n.date);
+  if (nights.length < 3) return null;
+  const days = nights.length;
+  const weeks = days / 7;
+
+  const avg = (a) => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+  const num = (v) => (typeof v === 'number' && isFinite(v) ? v : null);
+
+  // 1. Giờ ngủ trung bình
+  const slept = nights.map(n => num((n.sleep || {}).total)).filter(v => v != null);
+  const sleepAvg = avg(slept);
+
+  // 2. Đều giờ — dùng lại đúng hàm của tab Recovery
+  const cons = _rcConsistency(nights.slice(0, 14));
+
+  // 3. Phút mỗi tuần ở vùng cường độ (từ z1 trở lên = ≥50% dự trữ nhịp tim)
+  let zoneSec = 0, hasZone = false;
+  for (const n of nights) {
+    const z = (n.load || {}).zoneSec;
+    if (Array.isArray(z)) { hasZone = true; zoneSec += z.reduce((a, b) => a + (b || 0), 0); }
+  }
+  const zoneWk = hasZone ? (zoneSec / 60) / weeks : null;
+
+  // 4. Buổi tập sức mạnh mỗi tuần
+  let lifts = 0, hasW = false;
+  for (const n of nights) {
+    const w = (n.load || {}).workouts;
+    if (!Array.isArray(w)) continue;
+    hasW = true;
+    for (const x of w) if (/STRENGTH|WEIGHT|GYM/i.test(String(x.sport || ''))) lifts++;
+  }
+  const liftWk = hasW ? lifts / weeks : null;
+
+  // 5. Bước chân trung bình
+  const steps = (act || []).map(a => num(a && a.steps)).filter(v => v != null);
+  const stepAvg = steps.length ? avg(steps) : null;
+
+  // 6. Nhịp tim nghỉ so với nền của chính mình
+  const rhrs = nights.map(n => num((n.sleep || {}).hrMin)).filter(v => v != null);
+  let rhrNow = null, rhrBase = null;
+  if (rhrs.length >= 5) {
+    rhrNow = avg(rhrs.slice(0, Math.min(7, rhrs.length)));
+    rhrBase = avg(rhrs);
+  }
+
+  const list = [
+    { key: 'sleep', name: 'Giờ ngủ', val: sleepAvg,
+      txt: sleepAvg == null ? '—' : _rcHM(Math.round(sleepAvg)),
+      target: '≥ 7h', met: sleepAvg != null ? sleepAvg >= 7 * 3600 : null,
+      pct: sleepAvg == null ? 0 : Math.min(1, sleepAvg / (7 * 3600)) },
+    { key: 'cons', name: 'Đều giờ ngủ', val: cons,
+      txt: cons == null ? '—' : cons + '%',
+      target: '≥ 70%', met: cons != null ? cons >= 70 : null,
+      pct: cons == null ? 0 : Math.min(1, cons / 70) },
+    { key: 'zone', name: 'Phút cường độ / tuần', val: zoneWk,
+      txt: zoneWk == null ? '—' : Math.round(zoneWk) + ' phút',
+      target: '≥ 150', met: zoneWk != null ? zoneWk >= 150 : null,
+      pct: zoneWk == null ? 0 : Math.min(1, zoneWk / 150) },
+    { key: 'lift', name: 'Buổi tạ / tuần', val: liftWk,
+      txt: liftWk == null ? '—' : (Math.round(liftWk * 10) / 10) + ' buổi',
+      target: '≥ 2', met: liftWk != null ? liftWk >= 2 : null,
+      pct: liftWk == null ? 0 : Math.min(1, liftWk / 2) },
+    { key: 'steps', name: 'Bước chân / ngày', val: stepAvg,
+      txt: stepAvg == null ? '—' : Math.round(stepAvg).toLocaleString('vi-VN'),
+      target: '≥ 7.000', met: stepAvg != null ? stepAvg >= 7000 : null,
+      pct: stepAvg == null ? 0 : Math.min(1, stepAvg / 7000) },
+    { key: 'rhr', name: 'Nhịp tim nghỉ', val: rhrNow,
+      txt: rhrNow == null ? '—' : Math.round(rhrNow) + ' / nền ' + Math.round(rhrBase),
+      target: '≤ nền',
+      met: rhrNow != null ? rhrNow <= rhrBase + 1 : null,
+      pct: rhrNow == null ? 0 : (rhrNow <= rhrBase + 1 ? 1 : 0.4) },
+  ];
+  const scored = list.filter(x => x.met !== null);
+  return { list, met: scored.filter(x => x.met).length, total: scored.length, days };
+}
+
+function _rcMountHealth(wrap) {
+  if (!_recovery.length || wrap.querySelector('#rc-health')) return;
+  const hs = _hsCompute(_recovery, _activity);
+  if (!hs) return;
+
+  const C = 2 * Math.PI * 46;
+  const p = hs.total ? hs.met / hs.total : 0;
+  const col = p >= 0.8 ? '#7ED9A0' : p >= 0.5 ? '#E6B34A' : '#EE5A4F';
+
+  const rows = hs.list.map(x => {
+    const c = x.met === null ? 'rgba(255,255,255,.2)' : x.met ? '#7ED9A0' : '#E6B34A';
+    return '<div class="hs-row">'
+      + '<span class="hs-name">' + x.name + '<i class="hs-src">' + HS_SRC[x.key] + '</i></span>'
+      + '<span class="hs-track"><i style="width:' + Math.max(2, x.pct * 100) + '%;background:' + c + '"></i></span>'
+      + '<span class="hs-val" style="color:' + c + '">' + x.txt + '</span>'
+      + '<span class="hs-target">' + x.target + '</span>'
+      + '</div>';
+  }).join('');
+
+  const box = document.createElement('section');
+  box.id = 'rc-health';
+  box.className = 'rc-sec';
+  box.innerHTML =
+      '<div class="rc-sec-head"><h2 class="rc-h2">Healthspan</h2>'
+      + '<span class="rc-micro">' + hs.days + ' ngày</span></div>'
+    + '<div class="hs-top">'
+      + '<div class="hs-ring"><svg viewBox="0 0 108 108" aria-hidden="true">'
+        + '<circle cx="54" cy="54" r="46" fill="none" stroke="rgba(255,255,255,.09)" stroke-width="9"/>'
+        + '<circle cx="54" cy="54" r="46" fill="none" stroke="' + col + '" stroke-width="9"'
+        + ' stroke-linecap="round" stroke-dasharray="' + C.toFixed(1) + '"'
+        + ' stroke-dashoffset="' + (C * (1 - p)).toFixed(1) + '"/></svg>'
+        + '<div class="hs-ring-in"><span class="hs-ring-v rc-num">' + hs.met + '<i>/' + hs.total + '</i></span>'
+        + '<span class="rc-micro">đạt chuẩn</span></div></div>'
+      + '<p class="hs-lead">Sáu thói quen có bằng chứng liên hệ với tuổi thọ. '
+        + 'Đây KHÔNG phải tuổi sinh lý: không ai kiểm chứng được một con số như vậy '
+        + 'trên dữ liệu vài tuần của một người. Mỗi dòng là một ngưỡng có nguồn.</p>'
+    + '</div>'
+    + '<div class="hs-rows">' + rows + '</div>'
+    + (hs.days < 28
+        ? '<p class="rc-note">Mới ' + hs.days + ' ngày dữ liệu nên số theo tuần là ước tính. '
+          + 'Đủ 28 ngày thì đọc mới chắc.</p>' : '');
+  wrap.appendChild(box);
 }
 
 // Ba helper này từng bị xoá khi thay khối render bằng bản thiết kế mới —
@@ -13571,6 +13726,32 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .rc-brief-why{display:block;margin-top:8px;font-size:12.5px;color:var(--rc-muted);line-height:1.55;}
 .rc-brief-cav{margin:14px 0 0;font-size:12px;line-height:1.55;color:var(--rc-muted);}
 .rc-brief-hint{margin:0;font-size:13px;line-height:1.55;color:var(--rc-muted);}
+/* ── Healthspan ─────────────────────────────────────────────────────── */
+.hs-top{display:flex;align-items:center;gap:18px;margin-bottom:18px;}
+.hs-ring{position:relative;width:108px;height:108px;flex:none;}
+.hs-ring svg{display:block;width:100%;height:100%;transform:rotate(-90deg);}
+.hs-ring-in{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:2px;}
+.hs-ring-v{font-size:28px;font-weight:800;letter-spacing:-.03em;line-height:1;color:var(--rc-txt);}
+.hs-ring-v i{font-style:normal;font-size:15px;font-weight:700;color:var(--rc-muted);}
+.hs-lead{margin:0;font-size:12.5px;line-height:1.6;color:var(--rc-muted);}
+.hs-rows{border-top:1px solid var(--rc-line);}
+.hs-row{display:grid;grid-template-columns:minmax(0,1fr) 78px 96px 62px;
+  grid-template-areas:"n t v g";align-items:center;gap:4px 12px;
+  padding:12px 0;border-bottom:1px solid var(--rc-line);}
+.hs-name{grid-area:n;font-size:13.5px;color:var(--rc-txt);display:flex;flex-direction:column;gap:2px;}
+.hs-src{font-style:normal;font-size:10.5px;line-height:1.4;color:rgba(255,255,255,.35);}
+.hs-track{grid-area:t;position:relative;height:5px;border-radius:3px;
+  background:rgba(255,255,255,.10);overflow:hidden;}
+.hs-track i{position:absolute;left:0;top:0;bottom:0;border-radius:3px;display:block;}
+.hs-val{grid-area:v;text-align:right;font-size:13.5px;font-weight:700;font-variant-numeric:tabular-nums;}
+.hs-target{grid-area:g;text-align:right;font-size:11.5px;color:var(--rc-muted);white-space:nowrap;}
+@media(max-width:560px){
+  .hs-top{flex-direction:column;align-items:flex-start;gap:12px;}
+  .hs-row{grid-template-columns:minmax(0,1fr) 68px;
+    grid-template-areas:"n v" "t g";gap:6px 10px;}
+  .hs-target{text-align:left;}
+}
 .rc-brief-hint b{color:var(--rc-txt);font-weight:600;}
 .rc-brief-row{display:flex;flex-direction:column;gap:3px;margin-top:11px;}
 .rc-brief-row .rc-brief-p{margin:0;}
@@ -14238,6 +14419,20 @@ const I18N_VI_EN = {
   'tổng': 'of total', 'session': 'sessions', 'Mở giáo án →': 'Open program →',
   'chưa khớp hồ sơ': 'no matching profile', 'Tìm tên khách…': 'Find a client…',
   'Không có khách nào tên như vậy trong tháng này.': 'No client by that name this month.',
+  'Healthspan': 'Healthspan', 'đạt chuẩn': 'at target', 'Giờ ngủ': 'Sleep hours',
+  'Đều giờ ngủ': 'Sleep consistency', 'Phút cường độ / tuần': 'Intense minutes / week',
+  'Buổi tạ / tuần': 'Strength sessions / week', 'Bước chân / ngày': 'Steps / day',
+  'Nhịp tim nghỉ': 'Resting heart rate', '≤ nền': '≤ baseline',
+  'Giấc ngủ 7–9h mỗi đêm cho người lớn': 'Adults need 7–9h a night',
+  'Ngủ đều giờ gắn với nguy cơ tử vong thấp hơn': 'Regular sleep timing is linked to lower mortality',
+  'WHO 2020: ≥150 phút cường độ vừa mỗi tuần': 'WHO 2020: ≥150 min moderate intensity a week',
+  'WHO 2020: ≥2 buổi tập sức mạnh mỗi tuần': 'WHO 2020: ≥2 strength sessions a week',
+  'Lancet Public Health: 7.000 bước/ngày — giảm 47% nguy cơ so với 2.000':
+    'Lancet Public Health: 7,000 steps/day — 47% lower risk than 2,000',
+  'So với đường nền của chính bạn, không có ngưỡng chung':
+    'Against your own baseline; there is no universal threshold',
+  'Sáu thói quen có bằng chứng liên hệ với tuổi thọ. Đây KHÔNG phải tuổi sinh lý: không ai kiểm chứng được một con số như vậy trên dữ liệu vài tuần của một người. Mỗi dòng là một ngưỡng có nguồn.':
+    'Six habits with evidence linking them to lifespan. This is NOT a biological age: no one can validate such a number on a few weeks of one person\'s data. Each row is a sourced threshold.',
   'Polar không tính': 'Polar gave no figure', 'buổi Polar không tính calo': 'session with no calories from Polar',
   'Bấm Đồng bộ ngay để kéo dữ liệu và nhận lời khuyên cho hôm nay.': 'Tap Sync now to pull the data and get today’s advice.',
   'Bấm Đồng bộ ngay để thử lại.': 'Tap Sync now to try again.',
@@ -14245,6 +14440,8 @@ const I18N_VI_EN = {
 
 // Mẫu có biến chen giữa. {0} là phần thay đổi, giữ nguyên khi dịch.
 const I18N_PAT = {
+  'Mới {0} ngày dữ liệu nên số theo tuần là ước tính. Đủ 28 ngày thì đọc mới chắc.':
+    'Only {0} days of data, so the weekly figures are estimates. Read them with confidence at 28 days.',
   '{0} khách có buổi trong tháng. Gõ tên để xem số session và mở giáo án.':
     '{0} clients had sessions this month. Type a name for their count and program.',
   'Đã cập nhật {0} đêm ·': 'Updated {0} nights ·',
