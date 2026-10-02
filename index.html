@@ -5506,14 +5506,76 @@ function _hsCompute(rec, act) {
   return { list, met: scored.filter(x => x.met).length, total: scored.length, days };
 }
 
+/**
+ * Quả cầu có vân, xoay chậm — kiểu WHOOP dùng cho Healthspan.
+ *
+ * Vân sinh bằng bộ sinh số giả ngẫu nhiên CÓ HẠT GIỐNG CỐ ĐỊNH, nên mỗi lần vẽ
+ * lại ra đúng một hình. Dùng Math.random() thì mỗi lần đổi khách hay mở lại tab
+ * là quả cầu nhảy sang hình khác, trông như lỗi.
+ *
+ * Mép cầu cố ý KHÔNG tròn đều: bốn cung Bézier lệch nhẹ cho ra dáng hữu cơ.
+ * Chữ số nằm ngoài nhóm xoay, nếu không nó quay theo và không đọc được.
+ */
+function _hsSphere(p, col) {
+  let seed = 20261002;                      // đổi số này là đổi vân
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+
+  const R = 44, cx = 60, cy = 60;
+  // Bốn điểm neo lệch nhẹ khỏi đường tròn -> viền mềm, không phải hình tròn máy.
+  const k = 0.5523 * R;
+  const j = () => (rnd() - 0.5) * R * 0.11;
+  const path = `M ${cx} ${cy - R + j()}`
+    + ` C ${cx + k + j()} ${cy - R + j()} ${cx + R + j()} ${cy - k + j()} ${cx + R + j()} ${cy}`
+    + ` C ${cx + R + j()} ${cy + k + j()} ${cx + k + j()} ${cy + R + j()} ${cx} ${cy + R + j()}`
+    + ` C ${cx - k + j()} ${cy + R + j()} ${cx - R + j()} ${cy + k + j()} ${cx - R + j()} ${cy}`
+    + ` C ${cx - R + j()} ${cy - k + j()} ${cx - k + j()} ${cy - R + j()} ${cx} ${cy - R} Z`;
+
+  // Đốm sáng rải trên mặt cầu. Lấy căn của bán kính để phân bố đều theo DIỆN
+  // TÍCH; không lấy căn thì đốm dồn vào giữa.
+  let dots = '';
+  for (let i = 0; i < 74; i++) {
+    const a = rnd() * Math.PI * 2, rr = Math.sqrt(rnd()) * (R - 2);
+    const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr;
+    const s = 0.6 + rnd() * 1.9, o = 0.25 + rnd() * 0.6;
+    dots += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${s.toFixed(2)}"`
+          + ` fill="#fff" opacity="${o.toFixed(2)}"/>`;
+  }
+
+  const id = 'hsg' + Math.abs(Math.round(p * 1000));
+  return `<defs>
+      <radialGradient id="${id}" cx="34%" cy="28%" r="78%">
+        <stop offset="0%" stop-color="#7BE8AE" stop-opacity="1"/>
+        <stop offset="45%" stop-color="${col}" stop-opacity=".92"/>
+        <stop offset="100%" stop-color="#114F33" stop-opacity=".9"/>
+      </radialGradient>
+      <clipPath id="${id}c"><path d="${path}"/></clipPath>
+      <radialGradient id="${id}s" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#0B2419" stop-opacity=".84"/>
+        <stop offset="55%" stop-color="#0B2419" stop-opacity=".62"/>
+        <stop offset="100%" stop-color="#0B2419" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <g class="hs-orb">
+      <path d="${path}" fill="url(#${id})"/>
+      <g clip-path="url(#${id}c)">${dots}</g>
+    </g>
+    <!-- Lớp tối ở giữa, KHÔNG xoay: vân sáng chạy qua sau chữ làm số nhảy
+         nhoè, đọc rất mệt. Mờ dần ra rìa nên không thành một cái đĩa cứng. -->
+    <circle cx="${cx}" cy="${cy}" r="34" fill="url(#${id}s)"/>`;
+}
+
 function _rcMountHealth(wrap) {
   if (!_recovery.length || wrap.querySelector('#rc-health')) return;
   const hs = _hsCompute(_recovery, _activity);
   if (!hs) return;
 
-  const C = 2 * Math.PI * 46;
+  const C = 2 * Math.PI * 50;
   const p = hs.total ? hs.met / hs.total : 0;
   const col = p >= 0.8 ? '#7ED9A0' : p >= 0.5 ? '#E6B34A' : '#EE5A4F';
+  // Quả cầu luôn XANH LÁ — đó là nhận diện của mục Healthspan, không phải
+  // thước đo. Trạng thái nằm ở cung ngoài, ở con số giữa và ở từng dòng bên
+  // dưới; cho quả cầu đổi màu nữa là nói cùng một điều bốn lần.
+  const sphere = _hsSphere(p, '#3FBF7F');
 
   const rows = hs.list.map(x => {
     const c = x.met === null ? 'rgba(255,255,255,.2)' : x.met ? '#7ED9A0' : '#E6B34A';
@@ -5532,11 +5594,12 @@ function _rcMountHealth(wrap) {
       '<div class="rc-sec-head"><h2 class="rc-h2">Healthspan</h2>'
       + '<span class="rc-micro">' + hs.days + ' ngày</span></div>'
     + '<div class="hs-top">'
-      + '<div class="hs-ring"><svg viewBox="0 0 108 108" aria-hidden="true">'
-        + '<circle cx="54" cy="54" r="46" fill="none" stroke="rgba(255,255,255,.09)" stroke-width="9"/>'
-        + '<circle cx="54" cy="54" r="46" fill="none" stroke="' + col + '" stroke-width="9"'
+      + '<div class="hs-ring"><svg viewBox="0 0 120 120" aria-hidden="true">' + sphere
+        + '<circle cx="60" cy="60" r="50" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="3"/>'
+        + '<circle cx="60" cy="60" r="50" fill="none" stroke="' + col + '" stroke-width="3"'
         + ' stroke-linecap="round" stroke-dasharray="' + C.toFixed(1) + '"'
-        + ' stroke-dashoffset="' + (C * (1 - p)).toFixed(1) + '"/></svg>'
+        + ' stroke-dashoffset="' + (C * (1 - p)).toFixed(1) + '"'
+        + ' transform="rotate(-90 60 60)"/></svg>'
         + '<div class="hs-ring-in"><span class="hs-ring-v rc-num">' + hs.met + '<i>/' + hs.total + '</i></span>'
         + '<span class="rc-micro">đạt chuẩn</span></div></div>'
       + '<p class="hs-lead">Sáu thói quen có bằng chứng liên hệ với tuổi thọ. '
@@ -13728,12 +13791,24 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .rc-brief-hint{margin:0;font-size:13px;line-height:1.55;color:var(--rc-muted);}
 /* ── Healthspan ─────────────────────────────────────────────────────── */
 .hs-top{display:flex;align-items:center;gap:18px;margin-bottom:18px;}
-.hs-ring{position:relative;width:108px;height:108px;flex:none;}
-.hs-ring svg{display:block;width:100%;height:100%;transform:rotate(-90deg);}
+.hs-ring{position:relative;width:124px;height:124px;flex:none;}
+/* Quả cầu xoay chậm 48 giây một vòng — đủ để thấy chuyển động mà không gây
+   mất tập trung khi coach đang đọc số bên cạnh. */
+.hs-orb{transform-origin:60px 60px;animation:hs-spin 48s linear infinite;}
+@keyframes hs-spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+/* Người đặt hệ thống giảm chuyển động thì dừng hẳn, không chỉ làm chậm. */
+@media(prefers-reduced-motion:reduce){ .hs-orb{animation:none;} }
+/* KHÔNG xoay cả thẻ svg. Hồi còn mỗi vòng cung thì xoay ở đây cũng được,
+   nhưng giờ trong svg có quả cầu: xoay cả thẻ sẽ hất điểm sáng của quả cầu
+   xuống dưới, và cộng dồn với rotate(-90) của vòng cung làm nó chạy từ 6 giờ. */
+.hs-ring svg{display:block;width:100%;height:100%;}
 .hs-ring-in{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
-  justify-content:center;gap:2px;}
-.hs-ring-v{font-size:28px;font-weight:800;letter-spacing:-.03em;line-height:1;color:var(--rc-txt);}
-.hs-ring-v i{font-style:normal;font-size:15px;font-weight:700;color:var(--rc-muted);}
+  justify-content:center;gap:2px;text-shadow:0 1px 2px rgba(0,0,0,.9),0 0 7px rgba(6,22,15,.95),0 0 14px rgba(6,22,15,.85);}
+.hs-ring-v{font-size:28px;font-weight:800;letter-spacing:-.03em;line-height:1;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.9),0 0 7px rgba(6,22,15,.95),0 0 14px rgba(6,22,15,.85);}
+.hs-ring-v i{font-style:normal;font-size:15px;font-weight:700;color:rgba(255,255,255,.72);}
+/* Chữ nằm trên mặt cầu đang xoay, không phải trên nền phẳng: 55% trắng của
+   .rc-micro là đủ ở chỗ khác nhưng ở đây thì chìm. */
+.hs-ring-in .rc-micro{color:rgba(255,255,255,.85);letter-spacing:.09em;}
 .hs-lead{margin:0;font-size:12.5px;line-height:1.6;color:var(--rc-muted);}
 .hs-rows{border-top:1px solid var(--rc-line);}
 .hs-row{display:grid;grid-template-columns:minmax(0,1fr) 78px 96px 62px;
