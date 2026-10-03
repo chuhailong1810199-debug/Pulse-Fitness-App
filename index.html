@@ -6079,8 +6079,27 @@ async function polarSyncNow() {
     } else {
       _activity = [];                      // buộc đọc lại khi mở tab
     }
-    set('Đã cập nhật ' + (r.written || 0) + ' đêm · '
-        + (r.activity || 0) + ' ngày hoạt động', true);
+    // Polar chỉ công bố Nightly Recharge sau khi đồng hồ đẩy lên mây VÀ họ xử
+    // lý xong. Bấm lúc vừa ngủ dậy thì đêm vừa rồi chưa có gì để kéo.
+    //
+    // r.written đếm cả cửa sổ ~28 ngày Polar trả về, không phải số đêm MỚI,
+    // nên trước đây nút luôn báo "Đã cập nhật 9 đêm" kể cả khi không có đêm
+    // nay. Nhìn thì y hệt một lần đồng bộ thành công, mà màn hình không đổi gì
+    // — không cách nào biết là Polar chưa có hay là app hỏng.
+    //
+    // KHÔNG dùng new Date().toISOString(): nó cho ngày theo UTC, mà ở UTC+7
+    // thì từ 0h tới 7h sáng nó vẫn còn trả ngày HÔM QUA — đúng khoảng giờ hay
+    // bấm nút này nhất, nên sai là sai ngay ca dùng chính.
+    const _n = new Date();
+    const today = new Date(_n.getTime() - _n.getTimezoneOffset() * 60000)
+      .toISOString().slice(0, 10);
+    const hasToday = Array.isArray(r.dates) && r.dates.includes(today);
+
+    set(hasToday
+      ? 'Đã cập nhật ' + (r.written || 0) + ' đêm · '
+        + (r.activity || 0) + ' ngày hoạt động'
+      : 'Đã kéo xong, nhưng Polar chưa có đêm nay — đồng bộ Polar Flow rồi thử lại',
+      true);
     // Sync xong là có đêm mới, nên sinh luôn bản tóm tắt thay vì bắt coach bấm
     // thêm một nút nữa. 'auto' chỉ gọi model khi ngày đó CHƯA có bản nào.
     recoveryBrief('auto');
@@ -14555,6 +14574,8 @@ const I18N_VI_EN = {
   'Sáu thói quen có bằng chứng liên hệ với tuổi thọ. Đây KHÔNG phải tuổi sinh lý: không ai kiểm chứng được một con số như vậy trên dữ liệu vài tuần của một người. Mỗi dòng là một ngưỡng có nguồn.':
     'Six habits with evidence linking them to lifespan. This is NOT a biological age: no one can validate such a number on a few weeks of one person\'s data. Each row is a sourced threshold.',
   'Chi tiết từng chỉ số': 'Per-metric detail',
+  'Đã kéo xong, nhưng Polar chưa có đêm nay — đồng bộ Polar Flow rồi thử lại':
+    'Pulled, but Polar has no data for last night yet — sync Polar Flow and retry',
   'Polar không tính': 'Polar gave no figure', 'buổi Polar không tính calo': 'session with no calories from Polar',
   'Bấm Đồng bộ ngay để kéo dữ liệu và nhận lời khuyên cho hôm nay.': 'Tap Sync now to pull the data and get today’s advice.',
   'Bấm Đồng bộ ngay để thử lại.': 'Tap Sync now to try again.',
