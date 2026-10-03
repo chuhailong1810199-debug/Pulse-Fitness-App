@@ -2509,6 +2509,24 @@ async function syncPolarFor(clientId, token) {
     const uid = String((exes.find((x) => x && x.polar_user) || {}).polar_user || "").split("/").pop();
     const prof = uid ? await polarGet(`/v3/users/${uid}`, token).catch(() => null) : null;
 
+    // Hồ sơ Polar (ngày sinh, giới tính, cân, cao) lưu lại để tab Health tính
+    // tuổi. Trước đây chỉ dùng tạm cho resolveHrMax rồi bỏ, nên phía app không
+    // có ngày sinh và không ra được tuổi.
+    //
+    // merge: true và CHỈ đụng polarProfile. Tuyệt đối không ghi clients.email ở
+    // đây — địa chỉ phải đi qua claimClientEmail() và chỉ mục /clientEmails.
+    if (prof && prof.birthdate) {
+      await getFirestore().collection("clients").doc(clientId).set({
+        polarProfile: {
+          birthdate: prof.birthdate,
+          gender: prof.gender ?? null,
+          weight: prof.weight ?? null,
+          height: prof.height ?? null,
+          at: new Date().toISOString(),
+        },
+      }, { merge: true }).catch((e) => console.warn("[polar] khong luu duoc ho so:", e.message));
+    }
+
     // maxHr do coach nhập từ bài test thật, nếu có, thắng mọi ước lượng.
     const cDoc = await getFirestore().collection("clients").doc(clientId).get().catch(() => null);
     const manual = cDoc && cDoc.exists ? cDoc.data().maxHr : null;

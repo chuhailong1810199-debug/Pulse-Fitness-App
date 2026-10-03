@@ -5215,6 +5215,16 @@ async function checkActiveTab() {
   }
 }
 
+/**
+ * Tab Health bám theo tab Recovery: cả hai đọc subcollection recovery/, nên
+ * khách nào không có dữ liệu Polar thì không thấy tab nào trong hai tab này.
+ */
+function syncHealthTab() {
+  const health = document.getElementById('health-nav-tab');
+  const rec = document.getElementById('recovery-nav-tab');
+  if (health && rec) health.style.display = rec.style.display;
+}
+
 async function loadActive() {
   const wrap = document.getElementById('active-body');
   if (!wrap || !activeClient) return;
@@ -5359,6 +5369,7 @@ async function checkRecoveryTab() {
   } catch (_e) {
     tab.style.display = 'none';   // chưa có quyền hoặc chưa có dữ liệu
   }
+  syncHealthTab();
 }
 
 async function loadRecovery() {
@@ -5403,7 +5414,192 @@ function renderRecovery() {
   _rcMountBrief(wrap);
   _rcMountSleep(wrap);
   _rcMountRings(wrap);
-  _rcMountHealth(wrap);
+  // Healthspan chuyển sang tab Health riêng, không mount ở đây nữa.
+}
+
+/**
+ * HEALTH MONITOR — ba chỉ số đêm so với đường nền của CHÍNH mình.
+ *
+ * WHOOP có năm ô: RESP, SpO₂, RHR, HRV, nhiệt độ da. Polar chỉ đo ba trong
+ * năm — không có SpO₂, không có nhiệt độ da, và dĩ nhiên không có huyết áp
+ * hay ECG. Ở đây chỉ hiện ba ô có thật; bịa thêm hai ô nữa thì con số đẹp mà
+ * vô nghĩa.
+ *
+ * "Trong ngưỡng" là so với nền của chính mình, không phải ngưỡng dân số: với
+ * ba chỉ số này cái đáng chú ý là ĐỘ LỆCH khỏi thường ngày của bạn. Nhịp tim
+ * nghỉ 45 là bình thường với người này và là dấu hiệu bất thường với người kia.
+ */
+const HS_MON = [
+  { key: 'resp', name: 'RESP', full: 'Nhịp thở', unit: ' l/ph', dp: 1,
+    pick: (n) => (n.recharge || {}).breathing },
+  { key: 'rhr', name: 'RHR', full: 'Nhịp tim nghỉ', unit: ' bpm', dp: 0,
+    pick: (n) => (n.sleep || {}).hrMin },
+  { key: 'hrv', name: 'HRV', full: 'Biến thiên nhịp tim', unit: ' ms', dp: 0,
+    pick: (n) => (n.recharge || {}).hrv },
+];
+
+function _hsMonitor(rec) {
+  const nights = (rec || []).filter((n) => n && n.date);
+  if (nights.length < 5) return null;
+  const num = (v) => (typeof v === 'number' && isFinite(v) ? v : null);
+
+  const out = HS_MON.map((m) => {
+    const today = num(m.pick(nights[0]));
+    const past = nights.slice(1).map(m.pick).map(num).filter((v) => v != null);
+    if (today == null || past.length < 4) {
+      return { key: m.key, name: m.name, full: m.full, today: null, state: 'none' };
+    }
+    const mean = past.reduce((a, b) => a + b, 0) / past.length;
+    const sd = Math.sqrt(past.reduce((a, b) => a + (b - mean) ** 2, 0) / past.length);
+    // SD quá nhỏ thì z nổ tung vì một dao động vài phần trăm. Sàn 2% của nền.
+    const sdUse = Math.max(sd, Math.abs(mean) * 0.02);
+    const z = (today - mean) / sdUse;
+    return {
+      key: m.key, name: m.name, full: m.full,
+      today, mean, sd, z: Math.round(z * 100) / 100,
+      txt: today.toFixed(m.dp) + m.unit,
+      base: mean.toFixed(m.dp) + m.unit,
+      // ±2 độ lệch chuẩn là ngưỡng quen thuộc: ~95% số đêm bình thường rơi vào trong.
+      state: Math.abs(z) <= 2 ? 'ok' : 'off',
+    };
+  });
+
+  const scored = out.filter((x) => x.state !== 'none');
+  return { list: out, ok: scored.filter((x) => x.state === 'ok').length, total: scored.length };
+}
+
+/** Tab Health: Healthspan + Health Monitor. Đọc cùng dữ liệu với tab Recovery. */
+async function loadHealth() {
+  const wrap = document.getElementById('health-body');
+  if (!wrap || !activeClient) return;
+  if (!_recovery.length || !_activity.length) {
+    wrap.innerHTML = '<div class="rc-empty">Đang đọc dữ liệu sức khoẻ…</div>';
+    try {
+      if (!_recovery.length) {
+        const snap = await getDocs(query(
+          collection(db, 'clients', activeClient.id, 'recovery'),
+          orderBy('date', 'desc'), limit(RC_DAYS)));
+        _recovery = [];
+        snap.forEach((d) => _recovery.push(d.data()));
+      }
+      if (!_activity.length) {
+        const a = await getDocs(query(
+          collection(db, 'clients', activeClient.id, 'activity'),
+          orderBy('date', 'desc'), limit(AC_DAYS)));
+        a.forEach((d) => _activity.push(d.data()));
+      }
+    } catch (e) {
+      wrap.innerHTML = '<div class="rc-empty">Không đọc được: ' + escHtml(e.message || '') + '</div>';
+      return;
+    }
+  }
+  renderHealth();
+}
+
+function renderHealth() {
+  const wrap = document.getElementById('health-body');
+  if (!wrap) return;
+  wrap.classList.add('rc-root');
+  wrap.innerHTML = '';
+  if (!_recovery.length) {
+    wrap.innerHTML = '<div class="rc-empty">Chưa có dữ liệu. Bấm Đồng bộ ngay ở tab Recovery.</div>';
+    return;
+  }
+  _hsMountAge(wrap);
+  _hsMountMonitor(wrap);
+  _rcMountHealth(wrap);          // sáu thói quen, gấp lại như cũ
+}
+
+/** Thẻ tuổi: nhịp lão hoá bên trái, quả cầu bên phải. */
+function _hsMountAge(wrap) {
+  const hs = _hsCompute(_recovery, _activity);
+  const prof = (activeClient && activeClient.polarProfile) || null;
+  const a = hs ? _hsAge(hs, _recovery, prof) : null;
+
+  const box = document.createElement('section');
+  box.className = 'rc-sec';
+  box.id = 'hs-age';
+
+  if (!a) {
+    box.innerHTML = '<div class="rc-sec-head"><h2 class="rc-h2">Healthspan</h2></div>'
+      + '<p class="hs-lead">Chưa tính được tuổi: '
+      + (prof && prof.birthdate ? 'cần ít nhất 3 đêm dữ liệu.'
+         : 'thiếu ngày sinh. Bấm Đồng bộ ngay để kéo hồ sơ từ Polar.')
+      + '</p>';
+    wrap.appendChild(box);
+    return;
+  }
+
+  const younger = a.delta < 0;
+  const yrs = Math.abs(a.delta).toFixed(1);
+  const paceWord = a.pace < 1 ? 'chậm hơn' : a.pace > 1 ? 'nhanh hơn' : 'bằng';
+  const col = younger ? '#7ED9A0' : '#E6B34A';
+  const C = 2 * Math.PI * 50;
+  // Vòng cung = mức lệch đã dùng so với trần cho phép ở tuổi này.
+  const p = Math.min(1, Math.abs(a.delta) / (0.22 * a.age || 1));
+
+  box.innerHTML =
+      '<div class="rc-sec-head"><h2 class="rc-h2">Healthspan</h2>'
+      + '<span class="rc-micro">' + (hs ? hs.days : 0) + ' ngày</span></div>'
+    + '<div class="hs-age-top">'
+      + '<div class="hs-age-l">'
+        + '<span class="rc-micro">Nhịp lão hoá</span>'
+        + '<span class="hs-age-pace">' + a.pace.toFixed(2).replace(/0$/, '') + 'x</span>'
+        + '<span class="hs-chip ' + (younger ? 'good' : 'warn') + '">' + paceWord
+        + ' trung bình cùng tuổi</span>'
+      + '</div>'
+      + '<div class="hs-ring hs-ring-age"><svg viewBox="0 0 120 120" aria-hidden="true">'
+        + _hsSphere(p, '#3FBF7F')
+        + '<circle cx="60" cy="60" r="50" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="3"/>'
+        + '<circle cx="60" cy="60" r="50" fill="none" stroke="' + col + '" stroke-width="3"'
+        + ' stroke-linecap="round" stroke-dasharray="' + C.toFixed(1) + '"'
+        + ' stroke-dashoffset="' + (C * (1 - p)).toFixed(1) + '"'
+        + ' transform="rotate(-90 60 60)"/></svg>'
+        + '<div class="hs-ring-in"><span class="hs-ring-v rc-num">' + a.bioAge.toFixed(1) + '</span>'
+        + '<span class="rc-micro">tuổi Pulse</span></div></div>'
+    + '</div>'
+    + '<div class="hs-age-bar"><b class="' + (younger ? 'hs-good' : 'hs-warn') + '">'
+      + yrs + ' tuổi ' + (younger ? 'trẻ hơn' : 'già hơn') + '</b> so với tuổi thật '
+      + a.age.toFixed(0) + '</div>'
+    + '<p class="hs-lead">Không phải tuổi sinh học đo được — ở đây không có xét nghiệm nào. '
+      + 'Sáu thói quen bên dưới được tra sang tỉ số nguy cơ tử vong đã công bố, nhân lại, '
+      + 'rồi quy ngược ra tuổi. Mô hình lấy nguyên hệ số từ y văn và áp lên một người, '
+      + 'nên hãy đọc xu hướng của chính mình chứ đừng đem so với người khác.'
+      + (a.atCap ? ' Mức lệch đang chạm trần ±22% tuổi thật.' : '') + '</p>';
+  wrap.appendChild(box);
+}
+
+/** Thẻ Health Monitor: ba ô Polar thật sự đo được. */
+function _hsMountMonitor(wrap) {
+  const m = _hsMonitor(_recovery);
+  const box = document.createElement('section');
+  box.className = 'rc-sec';
+  box.id = 'hs-monitor';
+  if (!m) {
+    box.innerHTML = '<div class="rc-sec-head"><h2 class="rc-h2">Health Monitor</h2></div>'
+      + '<p class="hs-lead">Cần ít nhất 5 đêm để dựng đường nền.</p>';
+    wrap.appendChild(box);
+    return;
+  }
+  const cells = m.list.map((x) => {
+    const mark = x.state === 'ok' ? '<i class="hs-tick ok">✓</i>'
+               : x.state === 'off' ? '<i class="hs-tick off">!</i>'
+               : '<i class="hs-tick none">–</i>';
+    return '<div class="hs-mon-c"><span class="hs-mon-n">' + x.name + '</span>'
+      + '<span class="hs-mon-v">' + (x.txt || '—') + '</span>'
+      + mark
+      + '<span class="hs-mon-b">' + (x.base ? 'nền ' + x.base : '') + '</span></div>';
+  }).join('');
+  box.innerHTML =
+      '<div class="rc-sec-head"><h2 class="rc-h2">Health Monitor</h2>'
+      + '<span class="rc-micro">đêm ' + _rcDate(_recovery[0].date) + '</span></div>'
+    + '<div class="hs-mon">' + cells + '</div>'
+    + '<div class="hs-mon-sum ' + (m.ok === m.total ? 'good' : 'warn') + '">'
+      + m.ok + '/' + m.total + ' chỉ số trong ngưỡng của bạn</div>'
+    + '<p class="hs-lead">So với đường nền của chính bạn (±2 độ lệch chuẩn), không phải '
+      + 'ngưỡng dân số. Polar không đo SpO₂, nhiệt độ da, huyết áp hay ECG nên không có '
+      + 'mấy ô đó.</p>';
+  wrap.appendChild(box);
 }
 
 // ── HEALTHSPAN — 6 thói quen so với ngưỡng đã công bố ────────────────────
@@ -5516,19 +5712,153 @@ function _hsCompute(rec, act) {
  * Mép cầu cố ý KHÔNG tròn đều: bốn cung Bézier lệch nhẹ cho ra dáng hữu cơ.
  * Chữ số nằm ngoài nhóm xoay, nếu không nó quay theo và không đọc được.
  */
+/**
+ * TUỔI PULSE — mô hình Gompertz, cùng cách WHOOP dựng "WHOOP Age".
+ *
+ * ĐỌC KỸ TRƯỚC KHI TIN CON SỐ NÀY.
+ * Đây KHÔNG phải tuổi sinh học đo được. Không có xét nghiệm nào ở đây. Nó là
+ * một phép quy đổi: lấy sáu thói quen đo được, tra hazard ratio (tỉ số nguy cơ
+ * tử vong) đã công bố cho từng thói quen, nhân lại, rồi hỏi ngược "mức nguy cơ
+ * này ứng với người bao nhiêu tuổi có lối sống trung bình?".
+ *
+ * WHOOP khớp mô hình của họ trên dữ liệu hàng nghìn người. Ở đây mô hình lấy
+ * nguyên hệ số từ y văn và áp lên MỘT người, nên con số đúng về mặt số học
+ * nhưng chưa ai kiểm chứng nó trên bạn. Dùng để theo dõi xu hướng của chính
+ * mình, đừng đem so với người khác.
+ *
+ * Gompertz: nguy cơ tử vong nhân đôi mỗi ~8 năm tuổi, nên γ = ln2/8.
+ * Lệch tuổi = ln(tổng hazard ratio) / γ.
+ *
+ * Mốc tham chiếu là NGƯỜI TRUNG BÌNH cùng tuổi, không phải mức khuyến nghị —
+ * có vậy "bằng tuổi thật" mới nghĩa là "trung bình", và tốt hơn trung bình mới
+ * ra số âm.
+ */
+const HS_GAMMA = Math.LN2 / 8;
+
+// Mỗi dòng: [hệ số, mốc trung bình, nguồn]. Đổi số nào thì sửa luôn nguồn.
+const HS_HAZARD = {
+  // Zhang et al., CMAJ 2016 (meta-analysis): tử vong mọi nguyên nhân
+  // HR 1.09 mỗi 10 nhịp/phút nhịp tim nghỉ tăng thêm.
+  rhr:   { per: Math.log(1.09) / 10, ref: 70,
+           src: 'Zhang 2016 CMAJ · HR 1.09 mỗi 10 bpm' },
+  // Hillebrand et al., Europace 2013: HRV thấp hơn 1 độ lệch chuẩn -> HR 1.32.
+  // RMSSD người lớn: trung bình ~42 ms, độ lệch chuẩn ~25 ms.
+  // Mốc 55 ms là RMSSD ĐÊM của người lớn khoẻ mạnh. Hillebrand đo SDNN ban
+  // ngày (~42 ms); Polar trả RMSSD lúc ngủ, vốn cao hơn hẳn. Lấy mốc ban ngày
+  // áp cho số ban đêm là tự tặng mình mấy tuổi.
+  hrv:   { per: -Math.log(1.32) / 25, ref: 55,
+           src: 'Hillebrand 2013 Europace · HR 1.32 mỗi 1 SD HRV thấp hơn' },
+  // Cappuccio et al., Sleep 2010: ngủ ngắn HR 1.12, ngủ dài (>9h) HR 1.30.
+  sleepShort: { per: Math.log(1.12), src: 'Cappuccio 2010 Sleep · HR 1.12 ngủ ngắn' },
+  sleepLong:  { per: Math.log(1.30), src: 'Cappuccio 2010 Sleep · HR 1.30 ngủ >9h' },
+  // Paluch et al., Lancet Public Health 2022: 7.000 so với 2.000 bước -> HR 0.60.
+  steps: { per: Math.log(0.60) / 5000, ref: 5000, lo: 2000, hi: 8000,
+           src: 'Paluch 2022 Lancet Public Health · 7.000 vs 2.000 bước, HR 0.60' },
+  // Arem et al., JAMA Intern Med 2015: đạt 150 phút/tuần -> HR 0.69.
+  zone:  { per: Math.log(0.69) / 150, ref: 90, lo: 0, hi: 450,
+           src: 'Arem 2015 JAMA Intern Med · 150 phút/tuần, HR 0.69' },
+  // Momma et al., BJSM 2022: tập sức mạnh đều -> HR 0.85.
+  lift:  { per: Math.log(0.85) / 2, ref: 0.6, lo: 0, hi: 3,
+           src: 'Momma 2022 BJSM · tập tạ đều, HR 0.85' },
+};
+
+// Không cho MỘT chỉ số nào tự mình kéo quá ±0.35 log-hazard (HR 0.70–1.42).
+// Thiếu chặn này thì một đêm HRV 103 ms đủ để trừ hơn chục tuổi.
+const HS_CAP = 0.25;
+const _hsClamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+
+function _hsAge(hs, rec, prof) {
+  if (!hs || !prof || !prof.birthdate) return null;
+  const by = String(prof.birthdate).split('-').map(Number);
+  if (by.length !== 3 || by.some(isNaN)) return null;
+  // Tuổi theo ngày, qua Date.UTC — KHÔNG new Date().toISOString() (lệch ở UTC+7).
+  const now = new Date();
+  const todayUTC = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  const age = (todayUTC - Date.UTC(by[0], by[1] - 1, by[2])) / 31557600000;
+  if (!(age > 5 && age < 120)) return null;
+
+  const get = (k) => { const x = hs.list.find((y) => y.key === k); return x ? x.val : null; };
+  const num = (v) => (typeof v === 'number' && isFinite(v) ? v : null);
+
+  const hrvs = (rec || []).map((n) => num((n.recharge || {}).hrv)).filter((v) => v != null);
+  const hrv = hrvs.length ? hrvs.reduce((a, b) => a + b, 0) / hrvs.length : null;
+
+  const parts = [];
+  const push = (key, label, ln, shown, src) => {
+    if (ln == null) return;
+    const c = _hsClamp(ln, -HS_CAP, HS_CAP);
+    parts.push({ key, label, ln: c, capped: c !== ln, shown, src });
+  };
+
+  const H = HS_HAZARD;
+  const rhr = num(get('rhr'));
+  if (rhr != null) push('rhr', 'Nhịp tim nghỉ', H.rhr.per * (rhr - H.rhr.ref),
+    Math.round(rhr) + ' bpm', H.rhr.src);
+  if (hrv != null) push('hrv', 'HRV', H.hrv.per * (hrv - H.hrv.ref),
+    Math.round(hrv) + ' ms', H.hrv.src);
+
+  const slp = num(get('sleep'));
+  if (slp != null) {
+    const h = slp / 3600;
+    const ln = h < 7 ? H.sleepShort.per * (7 - h)
+             : h > 9 ? H.sleepLong.per * (h - 9) : 0;
+    push('sleep', 'Giờ ngủ', ln, (Math.round(h * 10) / 10) + 'h', H.sleepShort.src);
+  }
+
+  const st = num(get('steps'));
+  if (st != null) push('steps', 'Bước chân',
+    H.steps.per * (_hsClamp(st, H.steps.lo, H.steps.hi) - H.steps.ref),
+    Math.round(st).toLocaleString('vi-VN'), H.steps.src);
+
+  const z = num(get('zone'));
+  if (z != null) {
+    // Trên mốc 150 phút lợi ích phẳng dần, nên phần vượt chỉ tính 1/4 hệ số.
+    const c = _hsClamp(z, H.zone.lo, H.zone.hi);
+    const ln = c <= 150 ? H.zone.per * (c - H.zone.ref)
+             : H.zone.per * (150 - H.zone.ref) + H.zone.per * (c - 150) * 0.25;
+    push('zone', 'Phút cường độ / tuần', ln, Math.round(z) + ' phút', H.zone.src);
+  }
+
+  const lf = num(get('lift'));
+  if (lf != null) push('lift', 'Buổi tạ / tuần',
+    H.lift.per * (_hsClamp(lf, H.lift.lo, H.lift.hi) - H.lift.ref),
+    (Math.round(lf * 10) / 10) + ' buổi', H.lift.src);
+
+  if (parts.length < 3) return null;      // quá ít đầu vào thì không ra số
+
+  const lnTotal = parts.reduce((a, b) => a + b.ln, 0);
+  // Chặn độ lệch theo TUỔI THẬT, không phải một con số cứng.
+  //
+  // Công thức Gompertz cho ra độ lệch không phụ thuộc tuổi, nên người 27 tuổi
+  // tập đều ra "trẻ hơn 12 tuổi" = 15 tuổi. Vô lý: ở tuổi 27 chưa tích luỹ đủ
+  // hư hại để mà chênh nhiều đến thế, còn 15 tuổi thì chưa dậy thì xong.
+  // WHOOP chênh khoảng 12% tuổi thật (7.8 trên 64). Lấy 22% làm trần, rộng
+  // hơn chút nhưng vẫn trong khoảng người thật có thể rơi vào.
+  const cap = 0.22 * age;
+  const delta = _hsClamp(lnTotal / HS_GAMMA, -cap, cap);
+  const capped = Math.abs(lnTotal / HS_GAMMA) > cap;
+  return {
+    age: Math.round(age * 10) / 10,
+    bioAge: Math.round(Math.max(18, age + delta) * 10) / 10,
+    atCap: capped,
+    delta: Math.round(delta * 10) / 10,     // âm = trẻ hơn tuổi thật
+    // Nhịp lão hoá tính NGƯỢC TỪ delta đã chặn, không từ lnTotal thô. Lấy
+    // lnTotal thô thì khi chạm trần hai con số nói hai chuyện khác nhau:
+    // "trẻ hơn 5.9 tuổi" mà lại "0.43x nguy cơ" (ứng với trẻ hơn 9.6 tuổi).
+    pace: Math.round(Math.exp(delta * HS_GAMMA) * 100) / 100,
+    parts,
+  };
+}
+
 function _hsSphere(p, col) {
   let seed = 20261002;                      // đổi số này là đổi vân
   const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
 
   const R = 44, cx = 60, cy = 60;
-  // Bốn điểm neo lệch nhẹ khỏi đường tròn -> viền mềm, không phải hình tròn máy.
-  const k = 0.5523 * R;
-  const j = () => (rnd() - 0.5) * R * 0.11;
-  const path = `M ${cx} ${cy - R + j()}`
-    + ` C ${cx + k + j()} ${cy - R + j()} ${cx + R + j()} ${cy - k + j()} ${cx + R + j()} ${cy}`
-    + ` C ${cx + R + j()} ${cy + k + j()} ${cx + k + j()} ${cy + R + j()} ${cx} ${cy + R + j()}`
-    + ` C ${cx - k + j()} ${cy + R + j()} ${cx - R + j()} ${cy + k + j()} ${cx - R + j()} ${cy}`
-    + ` C ${cx - R + j()} ${cy - k + j()} ${cx - k + j()} ${cy - R + j()} ${cx} ${cy - R} Z`;
+  // Tròn đều. Bản trước lệch mỗi điểm neo ±11% cho "tự nhiên", nhưng ở 124px
+  // thì ±5px là nhìn ra ngay: quả cầu trông méo chứ không trông mềm.
+  const path = `M ${cx} ${cy} m ${-R} 0 a ${R} ${R} 0 1 0 ${R * 2} 0`
+    + ` a ${R} ${R} 0 1 0 ${-R * 2} 0 Z`;
 
   // Đốm sáng rải trên mặt cầu. Lấy căn của bán kính để phân bố đều theo DIỆN
   // TÍCH; không lấy căn thì đốm dồn vào giữa.
@@ -5592,7 +5922,7 @@ function _rcMountHealth(wrap) {
   box.id = 'rc-health';
   box.className = 'rc-sec';
   box.innerHTML =
-      '<div class="rc-sec-head"><h2 class="rc-h2">Healthspan</h2>'
+      '<div class="rc-sec-head"><h2 class="rc-h2">Sáu thói quen</h2>'
       + '<span class="rc-micro">' + hs.days + ' ngày</span></div>'
     + '<div class="hs-top">'
       + '<div class="hs-ring"><svg viewBox="0 0 120 120" aria-hidden="true">' + sphere
@@ -6340,6 +6670,7 @@ function showPage(page) {
   document.getElementById('billing-page').classList.toggle('active', page === 'billing');
   document.getElementById('dash-page').classList.toggle('active', page === 'dash');
   document.getElementById('recovery-page').classList.toggle('active', page === 'recovery');
+  document.getElementById('health-page').classList.toggle('active', page === 'health');
   document.getElementById('active-page').classList.toggle('active', page === 'active');
   document.getElementById('cdash-page').classList.toggle('active', page === 'cdash');
   if (page === 'dash') renderDashboard();
@@ -6367,6 +6698,9 @@ function showPage(page) {
   }
   if (page === 'active') {
     loadActive();
+  }
+  if (page === 'health') {
+    loadHealth();
   }
   renderAccessAlert();
   if (page === 'log') {
@@ -11712,6 +12046,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <div class="nav-tab active" data-page="workout" onclick="showPage('workout')">Workout</div>
     <div class="nav-tab" data-page="progress" onclick="showPage('progress')">Progress</div>
     <div class="nav-tab" id="recovery-nav-tab" data-page="recovery" style="display:none" onclick="showPage('recovery')">Recovery</div>
+    <div class="nav-tab" id="health-nav-tab" data-page="health" style="display:none" onclick="showPage('health')">Health</div>
     <div class="nav-tab" id="active-nav-tab" data-page="active" style="display:none" onclick="showPage('active')">Active</div>
     <div class="nav-tab" data-page="nutrition" onclick="showPage('nutrition')">Nutrition</div>
     <div class="nav-tab" data-page="youth" onclick="showPage('youth')">Youth</div>
@@ -11835,6 +12170,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   <div id="cdash-page"><div id="cdash-body"></div></div>
   <div id="billing-page"><div id="billing-body"></div></div>
   <div id="recovery-page"><div id="recovery-body"></div></div>
+  <div id="health-page"><div id="health-body"></div></div>
   <div id="active-page"><div id="active-body"></div></div>
 
   <!-- ── YOUTH DEVELOPMENT TEST BATTERY ───────────────────────────────── -->
@@ -13849,6 +14185,42 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
    .rc-micro là đủ ở chỗ khác nhưng ở đây thì chìm. */
 .hs-ring-in .rc-micro{color:rgba(255,255,255,.85);letter-spacing:.09em;}
 .hs-lead{margin:0;font-size:12.5px;line-height:1.6;color:var(--rc-muted);}
+/* ── Tab Health: thẻ tuổi + Health Monitor ──────────────────────────── */
+.hs-age-top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px;}
+.hs-age-l{display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:0;}
+.hs-age-pace{font-size:40px;font-weight:800;letter-spacing:-.04em;line-height:1;color:var(--rc-txt);}
+.hs-chip{display:inline-block;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:600;
+  line-height:1.4;white-space:nowrap;}
+.hs-chip.good{background:rgba(126,217,160,.14);color:#7ED9A0;}
+.hs-chip.warn{background:rgba(230,179,74,.14);color:#E6B34A;}
+/* Vòng tuổi to hơn vòng 6 thói quen — nó là con số chính của tab này. */
+.hs-ring-age{width:142px;height:142px;}
+.hs-ring-age .hs-ring-v{font-size:30px;}
+.hs-age-bar{padding:10px 12px;border-radius:10px;background:rgba(255,255,255,.04);
+  font-size:12.5px;color:var(--rc-muted);margin-bottom:12px;}
+.hs-age-bar b{font-weight:700;}
+.hs-good{color:#7ED9A0;} .hs-warn{color:#E6B34A;}
+.hs-mon{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px;}
+.hs-mon-c{display:flex;flex-direction:column;align-items:center;gap:5px;padding:12px 6px;
+  border-radius:12px;background:rgba(255,255,255,.035);text-align:center;}
+.hs-mon-n{font-size:10.5px;font-weight:700;letter-spacing:.1em;color:var(--rc-muted);}
+.hs-mon-v{font-size:16px;font-weight:700;color:var(--rc-txt);font-variant-numeric:tabular-nums;
+  white-space:nowrap;}
+.hs-mon-b{font-size:10px;color:rgba(255,255,255,.35);white-space:nowrap;}
+.hs-tick{font-style:normal;width:20px;height:20px;border-radius:6px;display:flex;
+  align-items:center;justify-content:center;font-size:12px;font-weight:700;}
+.hs-tick.ok{background:rgba(126,217,160,.16);color:#7ED9A0;}
+.hs-tick.off{background:rgba(230,179,74,.16);color:#E6B34A;}
+.hs-tick.none{background:rgba(255,255,255,.06);color:rgba(255,255,255,.3);}
+.hs-mon-sum{padding:9px 12px;border-radius:10px;font-size:12.5px;font-weight:600;margin-bottom:12px;}
+.hs-mon-sum.good{background:rgba(126,217,160,.1);color:#7ED9A0;}
+.hs-mon-sum.warn{background:rgba(230,179,74,.1);color:#E6B34A;}
+@media(max-width:560px){
+  .hs-age-pace{font-size:34px;}
+  .hs-ring-age{width:118px;height:118px;}
+  .hs-ring-age .hs-ring-v{font-size:25px;}
+  .hs-mon-v{font-size:14px;}
+}
 /* Sáu dòng gấp lại, mở ra khi bấm. Mở app là thấy ngay quả cầu với con số
    tổng; chi tiết chỉ bày ra khi hỏi tới.
    Mở bằng grid-template-rows 0fr -> 1fr chứ KHÔNG phải max-height: không
@@ -14574,6 +14946,17 @@ const I18N_VI_EN = {
   'Sáu thói quen có bằng chứng liên hệ với tuổi thọ. Đây KHÔNG phải tuổi sinh lý: không ai kiểm chứng được một con số như vậy trên dữ liệu vài tuần của một người. Mỗi dòng là một ngưỡng có nguồn.':
     'Six habits with evidence linking them to lifespan. This is NOT a biological age: no one can validate such a number on a few weeks of one person\'s data. Each row is a sourced threshold.',
   'Chi tiết từng chỉ số': 'Per-metric detail',
+  'Sáu thói quen': 'Six habits', 'Nhịp lão hoá': 'Pace of aging',
+  'tuổi Pulse': 'Pulse Age', 'Health Monitor': 'Health Monitor',
+  'chậm hơn trung bình cùng tuổi': 'slower than average for your age',
+  'nhanh hơn trung bình cùng tuổi': 'faster than average for your age',
+  'bằng trung bình cùng tuổi': 'same as average for your age',
+  'Cần ít nhất 5 đêm để dựng đường nền.': 'Needs at least 5 nights to build a baseline.',
+  'Chưa có dữ liệu. Bấm Đồng bộ ngay ở tab Recovery.':
+    'No data yet. Tap Sync now on the Recovery tab.',
+  'Đang đọc dữ liệu sức khoẻ…': 'Reading health data…',
+  'So với đường nền của chính bạn (±2 độ lệch chuẩn), không phải ngưỡng dân số. Polar không đo SpO₂, nhiệt độ da, huyết áp hay ECG nên không có mấy ô đó.':
+    'Against your own baseline (±2 SD), not a population cut-off. Polar does not measure SpO₂, skin temperature, blood pressure or ECG, so those tiles are absent.',
   'Đã kéo xong, nhưng Polar chưa có đêm nay — đồng bộ Polar Flow rồi thử lại':
     'Pulled, but Polar has no data for last night yet — sync Polar Flow and retry',
   'Polar không tính': 'Polar gave no figure', 'buổi Polar không tính calo': 'session with no calories from Polar',
@@ -14588,6 +14971,9 @@ const I18N_PAT = {
   '{0} khách có buổi trong tháng. Gõ tên để xem số session và mở giáo án.':
     '{0} clients had sessions this month. Type a name for their count and program.',
   'Đã cập nhật {0} đêm ·': 'Updated {0} nights ·',
+  '{0} chỉ số trong ngưỡng của bạn': '{0} metrics within your range',
+  '{0} tuổi trẻ hơn': '{0} years younger', '{0} tuổi già hơn': '{0} years older',
+  'so với tuổi thật {0}': 'vs actual age {0}',
   'Đã kéo về hồ sơ {0}, không phải hồ sơ đang mở':
     'Synced into profile {0}, not the one open',
   'Không đọc được dữ liệu hoạt động của {0}.': 'Could not read activity data for {0}.',
