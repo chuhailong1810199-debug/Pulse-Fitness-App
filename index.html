@@ -5577,9 +5577,10 @@ function _rcMountHealth(wrap) {
   // dưới; cho quả cầu đổi màu nữa là nói cùng một điều bốn lần.
   const sphere = _hsSphere(p, '#3FBF7F');
 
-  const rows = hs.list.map(x => {
+  // --i là thứ tự dòng, CSS lấy nó để trễ dần khi mở ra.
+  const rows = hs.list.map((x, i) => {
     const c = x.met === null ? 'rgba(255,255,255,.2)' : x.met ? '#7ED9A0' : '#E6B34A';
-    return '<div class="hs-row">'
+    return '<div class="hs-row" style="--i:' + i + '">'
       + '<span class="hs-name">' + x.name + '<i class="hs-src">' + HS_SRC[x.key] + '</i></span>'
       + '<span class="hs-track"><i style="width:' + Math.max(2, x.pct * 100) + '%;background:' + c + '"></i></span>'
       + '<span class="hs-val" style="color:' + c + '">' + x.txt + '</span>'
@@ -5606,11 +5607,30 @@ function _rcMountHealth(wrap) {
         + 'Đây KHÔNG phải tuổi sinh lý: không ai kiểm chứng được một con số như vậy '
         + 'trên dữ liệu vài tuần của một người. Mỗi dòng là một ngưỡng có nguồn.</p>'
     + '</div>'
-    + '<div class="hs-rows">' + rows + '</div>'
-    + (hs.days < 28
-        ? '<p class="rc-note">Mới ' + hs.days + ' ngày dữ liệu nên số theo tuần là ước tính. '
-          + 'Đủ 28 ngày thì đọc mới chắc.</p>' : '');
+    + '<button type="button" class="hs-toggle" aria-expanded="false" aria-controls="hs-fold">'
+      + '<span>Chi tiết từng chỉ số</span>'
+      + '<svg class="hs-chev" viewBox="0 0 16 16" aria-hidden="true">'
+        + '<path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8"'
+        + ' stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    + '</button>'
+    + '<div class="hs-fold" id="hs-fold"><div class="hs-foldin">'
+      + '<div class="hs-rows">' + rows + '</div>'
+      + (hs.days < 28
+          ? '<p class="rc-note">Mới ' + hs.days + ' ngày dữ liệu nên số theo tuần là ước tính. '
+            + 'Đủ 28 ngày thì đọc mới chắc.</p>' : '')
+    + '</div></div>';
   wrap.appendChild(box);
+
+  const btn = box.querySelector('.hs-toggle');
+  const fold = box.querySelector('.hs-fold');
+  btn.addEventListener('click', () => {
+    const open = btn.getAttribute('aria-expanded') === 'true';
+    btn.setAttribute('aria-expanded', open ? 'false' : 'true');
+    fold.classList.toggle('is-open', !open);
+  });
+  // Quả cầu là thứ to nhất ở đây nên tay sẽ chạm vào nó trước cái nút chữ.
+  // Nút vẫn là thứ máy đọc màn hình và bàn phím dùng; chỗ này chỉ chuyển tiếp.
+  box.querySelector('.hs-ring').addEventListener('click', () => btn.click());
 }
 
 // Ba helper này từng bị xoá khi thay khối render bằng bản thiết kế mới —
@@ -13810,7 +13830,33 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
    .rc-micro là đủ ở chỗ khác nhưng ở đây thì chìm. */
 .hs-ring-in .rc-micro{color:rgba(255,255,255,.85);letter-spacing:.09em;}
 .hs-lead{margin:0;font-size:12.5px;line-height:1.6;color:var(--rc-muted);}
-.hs-rows{border-top:1px solid var(--rc-line);}
+/* Sáu dòng gấp lại, mở ra khi bấm. Mở app là thấy ngay quả cầu với con số
+   tổng; chi tiết chỉ bày ra khi hỏi tới.
+   Mở bằng grid-template-rows 0fr -> 1fr chứ KHÔNG phải max-height: không
+   phải đoán trước chiều cao, nên thêm bớt dòng sau này vẫn chạy đúng. */
+.hs-ring{cursor:pointer;}
+.hs-toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  width:100%;padding:13px 0;background:none;border:0;border-top:1px solid var(--rc-line);
+  color:var(--rc-muted);font:inherit;font-size:12.5px;font-weight:600;
+  letter-spacing:.02em;text-align:left;cursor:pointer;transition:color .2s ease;}
+.hs-toggle:hover,.hs-toggle[aria-expanded="true"]{color:var(--rc-txt);}
+.hs-chev{flex:none;width:16px;height:16px;transition:transform .3s cubic-bezier(.4,0,.2,1);}
+.hs-toggle[aria-expanded="true"] .hs-chev{transform:rotate(180deg);}
+.hs-fold{display:grid;grid-template-rows:0fr;
+  transition:grid-template-rows .36s cubic-bezier(.4,0,.2,1);}
+.hs-fold.is-open{grid-template-rows:1fr;}
+.hs-foldin{overflow:hidden;min-height:0;}
+/* Đóng thì tắt nhanh và cùng lúc; mở thì từng dòng trôi xuống trễ dần. */
+.hs-row{opacity:0;transform:translateY(-6px);
+  transition:opacity .16s ease,transform .16s ease;}
+.hs-fold.is-open .hs-row{opacity:1;transform:none;
+  transition:opacity .34s ease,transform .34s cubic-bezier(.2,.7,.3,1);
+  transition-delay:calc(var(--i,0) * 55ms);}
+@media(prefers-reduced-motion:reduce){
+  .hs-fold,.hs-chev{transition:none;}
+  .hs-row{transform:none;transition:none;}
+  .hs-fold.is-open .hs-row{transition:none;transition-delay:0s;}
+}
 .hs-row{display:grid;grid-template-columns:minmax(0,1fr) 78px 96px 62px;
   grid-template-areas:"n t v g";align-items:center;gap:4px 12px;
   padding:12px 0;border-bottom:1px solid var(--rc-line);}
@@ -14508,6 +14554,7 @@ const I18N_VI_EN = {
     'Against your own baseline; there is no universal threshold',
   'Sáu thói quen có bằng chứng liên hệ với tuổi thọ. Đây KHÔNG phải tuổi sinh lý: không ai kiểm chứng được một con số như vậy trên dữ liệu vài tuần của một người. Mỗi dòng là một ngưỡng có nguồn.':
     'Six habits with evidence linking them to lifespan. This is NOT a biological age: no one can validate such a number on a few weeks of one person\'s data. Each row is a sourced threshold.',
+  'Chi tiết từng chỉ số': 'Per-metric detail',
   'Polar không tính': 'Polar gave no figure', 'buổi Polar không tính calo': 'session with no calories from Polar',
   'Bấm Đồng bộ ngay để kéo dữ liệu và nhận lời khuyên cho hôm nay.': 'Tap Sync now to pull the data and get today’s advice.',
   'Bấm Đồng bộ ngay để thử lại.': 'Tap Sync now to try again.',
