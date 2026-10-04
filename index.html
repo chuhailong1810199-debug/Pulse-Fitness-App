@@ -519,6 +519,9 @@ async function loadApp() {
     if (schTab) schTab.style.display = '';
     const dashTab = document.getElementById('dash-nav-tab');
     if (dashTab) dashTab.style.display = '';
+    // Youth là công cụ của coach: khách không cần thấy pin test này.
+    const youthTab = document.getElementById('youth-nav-tab');
+    if (youthTab) youthTab.style.display = '';
     // Coach with no clients yet — show empty state
     if (clientsData.length === 0) {
       activeClient = null;
@@ -6775,6 +6778,9 @@ function centerActiveNavTab() {
 }
 
 function showPage(page) {
+  // Youth chỉ dành cho coach. Giấu tab mới là trang trí; chỗ chặn thật nằm ở
+  // đây, vì showPage còn gọi được từ console, từ nút cũ hay từ link sâu.
+  if (page === 'youth' && userRole !== 'coach') return;
   document.querySelectorAll('.nav-tab').forEach(t => {
     t.classList.toggle('active', t.dataset.page === page);
   });
@@ -9349,6 +9355,7 @@ function youthDerived(session) {
 // ── DATA ────────────────────────────────────────────────────────────────────
 async function loadYouthData() {
   if (!activeClient) return;
+  if (userRole !== 'coach') return;
   _youthProfile = null; _youthSessions = []; _youthDraft = {};
   try {
     const p = await getDoc(doc(db, 'clients', activeClient.id, 'profile', 'data'));
@@ -12168,7 +12175,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <div class="nav-tab" id="health-nav-tab" data-page="health" style="display:none" onclick="showPage('health')">Health</div>
     <div class="nav-tab" id="active-nav-tab" data-page="active" style="display:none" onclick="showPage('active')">Active</div>
     <div class="nav-tab" data-page="nutrition" onclick="showPage('nutrition')">Nutrition</div>
-    <div class="nav-tab" data-page="youth" onclick="showPage('youth')">Youth</div>
+    <div class="nav-tab" id="youth-nav-tab" data-page="youth" style="display:none" onclick="showPage('youth')">Youth</div>
     <div class="nav-tab" data-page="billing" onclick="showPage('billing')">Billing</div>
     <div class="nav-tab" data-page="log" onclick="showPage('log')">Log</div>
     <div class="nav-tab" id="schedule-nav-tab" data-page="schedule" style="display:none" onclick="showPage('schedule')">Schedule</div>
