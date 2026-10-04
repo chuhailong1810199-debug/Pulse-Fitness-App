@@ -14083,6 +14083,10 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 /* ── RECOVERY tab — thiết kế theo ngôn ngữ WHOOP ── */
 #recovery-page{display:none;}
 #recovery-page.active{display:block;}
+/* Thiếu cặp rule này thì thẻ div không có display mặc định nào -> hiện ở MỌI
+   tab, vì showPage chỉ bật/tắt class .active chứ không tự ẩn gì cả. */
+#health-page{display:none;}
+#health-page.active{display:block;}
 .rc-root{
   --rc-bg:var(--bg-1,#161111);
   --rc-bg-2:var(--bg-2,#211E1D);
