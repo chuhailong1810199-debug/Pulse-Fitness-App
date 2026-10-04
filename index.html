@@ -1557,10 +1557,20 @@ async function loadClientDash(force) {
       (byName[key] = byName[key] || []).push({ at, kg });
     }));
     Object.values(byName).forEach(a => a.sort((x, y) => String(x.at).localeCompare(String(y.at))));
-    _cdash = { clientId: id, byName, sessions };
+
+    // Tạ đã ghi sẵn cho TỪNG buổi. Dashboard bày cả giáo án nên phải đọc hết
+    // sessionLoads, không dùng được exerciseLoads/setLoads trong bộ nhớ —
+    // hai biến đó chỉ giữ đúng activeDay.
+    const loads = {};
+    try {
+      const ls = await getDocs(collection(db, 'clients', id, 'sessionLoads'));
+      ls.forEach((d) => { loads[d.id] = d.data() || {}; });
+    } catch (e) { console.warn('[clientDash] sessionLoads:', e.message); }
+
+    _cdash = { clientId: id, byName, sessions, loads };
   } catch (e) {
     console.warn('[clientDash]', e.message);
-    _cdash = { clientId: id, byName: {}, sessions: [] };
+    _cdash = { clientId: id, byName: {}, sessions: [], loads: {} };
   }
 }
 
@@ -1627,6 +1637,83 @@ function _cdSpark(series) {
     + '" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg>';
 }
 
+/**
+ * Ghi mức tạ cho một bài ngay từ dashboard. Điền một số là CẢ BUỔI dùng số đó:
+ * mọi set của bài được đặt bằng nhau, đúng như coach vẫn giao.
+ *
+ * Phải ghi vào setLoads chứ không chỉ exerciseLoads. Ô nhập từng set bên tab
+ * Workout đọc đúng setLoads[key][si]; để trống exerciseLoads thì bên đó vẫn
+ * hiện dấu "—" và coach tưởng chưa lưu được.
+ *
+ * Ghi thẳng Firestore chứ không qua exerciseLoads/setLoads trong bộ nhớ: hai
+ * biến đó chỉ chứa activeDay, mà dashboard sửa được mọi buổi. Khi buổi đang
+ * sửa ĐÚNG là activeDay thì cập nhật cả hai nơi, nếu không lần lưu trễ của tab
+ * Workout (setDoc ghi đè nguyên doc) sẽ xoá mất thứ vừa nhập ở đây.
+ */
+async function cdSetLoad(day, pi, ei, nSets, bw, rawValue, el) {
+  if (!activeClient) return;
+  const key = activeClient.id + '_' + day + '_' + pi + '_' + ei;
+  const typed = parseFloat(rawValue);
+  const blank = String(rawValue).trim() === '';
+
+  // Bài bodyweight nhập theo kiểu "cộng thêm bao nhiêu", lưu theo tải thật sự
+  // nâng — giống hệt tab Workout, nếu không hai màn hình nói hai con số khác nhau.
+  const base = bw && _clientBodyweight > 0 ? _clientBodyweight : 0;
+  let val = base ? base + (Number.isFinite(typed) ? typed : (blank ? NaN : NaN))
+                 : typed;
+  const ok = !blank && Number.isFinite(val) && val > 0;
+  const sets = ok ? Array.from({ length: Math.max(1, nSets) }, () => val) : null;
+
+  if (day === activeDay) {
+    if (ok) { exerciseLoads[key] = val; setLoads[key] = sets.slice(); }
+    else { delete exerciseLoads[key]; delete setLoads[key]; }
+    saveExerciseLoadsToLocal();
+    saveSetLoadsToLocal();
+  }
+
+  if (_cdash && _cdash.loads) {
+    const d = (_cdash.loads[day] = _cdash.loads[day] || {});
+    d.exerciseLoads = d.exerciseLoads || {};
+    d.setLoads = d.setLoads || {};
+    d.exerciseLoads[key] = ok ? val : null;
+    d.setLoads[key] = sets;
+  }
+
+  if (el) el.classList.add('cd-kg-saving');
+  try {
+    // merge để không đụng tới những bài khác trong cùng buổi. Xoá thì ghi null
+    // chứ không deleteField — shim Firebase ở file này không có deleteField, và
+    // null đi qua parseFloat ra NaN nên mọi chỗ đọc đều coi như chưa có tạ.
+    await setDoc(
+      doc(db, 'clients', activeClient.id, 'sessionLoads', day),
+      { exerciseLoads: { [key]: ok ? val : null },
+        setLoads: { [key]: sets },
+        updatedAt: serverTimestamp() },
+      { merge: true });
+    if (el) { el.classList.remove('cd-kg-saving'); el.classList.add('cd-kg-saved');
+      setTimeout(() => el.classList.remove('cd-kg-saved'), 1200); }
+  } catch (e) {
+    console.warn('[cdSetLoad]', e.message);
+    if (el) { el.classList.remove('cd-kg-saving'); el.classList.add('cd-kg-err'); }
+  }
+}
+
+/** Số đang lưu cho một bài, trả về đúng dạng coach gõ vào (bài BW là phần cộng thêm). */
+function cdLoadValue(day, pi, ei, bw) {
+  if (!activeClient || !_cdash || !_cdash.loads) return '';
+  const key = activeClient.id + '_' + day + '_' + pi + '_' + ei;
+  const d = _cdash.loads[day] || {};
+  const per = (d.setLoads || {})[key];
+  const one = (d.exerciseLoads || {})[key];
+  const v = Array.isArray(per) && per.length && Number.isFinite(per[0]) ? per[0] : one;
+  if (!Number.isFinite(v) || v <= 0) return '';
+  if (bw && _clientBodyweight > 0) {
+    const added = +(v - _clientBodyweight).toFixed(2);
+    return added === 0 ? '0' : String(added);
+  }
+  return String(v);
+}
+
 async function renderClientDash() {
   const wrap = document.getElementById('cdash-body');
   if (!wrap || !activeClient || userRole !== 'coach') return;
@@ -1653,18 +1740,28 @@ async function renderClientDash() {
             return `<i class="cd-tick ${pctv >= 90 ? 'full' : pctv >= 50 ? 'part' : 'low'}"
               title="${s.done ?? '?'}/${s.total ?? '?'} bài"></i>`; }).join('') : ''}</div>
         </header>
-        ${phases.map(ph => `
+        ${phases.map((ph, pi) => `
           <div class="cd-ph">${escHtml(ph.name || '')}</div>
-          ${(ph.exercises || []).map(ex => {
+          ${(ph.exercises || []).map((ex, ei) => {
             const t = cdTrend(ex.name);
+            const nSets = parseSetsCount(ex.setsReps, ph.tag);
+            const cur = cdLoadValue(d, pi, ei, !!ex.bw);
+            // Chỗ trống hiện số của buổi gần nhất, để coach biết lần trước nâng
+            // bao nhiêu mà không phải rời màn hình này đi tra.
+            const ph0 = ex.bw ? '+0' : (t ? String(t.last) : '—');
             return `<div class="cd-ex">
               <div class="cd-ex-n">${escHtml(ex.name || '')}</div>
               <div class="cd-ex-r">${escHtml(ex.setsReps || '')}</div>
-              <div class="cd-ex-l">${t
-                ? '<b>' + t.last + '<span>kg</span></b>' + (t.delta != null && t.delta !== 0
-                    ? '<i class="' + (t.delta > 0 ? 'up' : 'down') + '">'
-                      + (t.delta > 0 ? '+' : '') + t.delta + '</i>' : '')
-                : '<span class="cd-none">chưa có</span>'}</div>
+              <div class="cd-ex-l">
+                <input class="cd-kg" type="number" step="0.5" ${ex.bw ? '' : 'min="0" '}
+                  inputmode="decimal" placeholder="${escHtml(ph0)}" value="${escHtml(cur)}"
+                  title="${nSets} set, tất cả cùng mức tạ này"
+                  onchange="cdSetLoad('${escHtml(d)}',${pi},${ei},${nSets},${ex.bw ? 'true' : 'false'},this.value,this)">
+                <span class="cd-kg-u">kg</span>
+                ${t && t.delta != null && t.delta !== 0
+                  ? '<i class="' + (t.delta > 0 ? 'up' : 'down') + '">'
+                    + (t.delta > 0 ? '+' : '') + t.delta + '</i>' : ''}
+              </div>
               <div class="cd-ex-s">${t ? _cdSpark(t.series) : ''}</div>
             </div>`;
           }).join('')}`).join('')}
@@ -14068,18 +14165,32 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .cd-ph{font-size:9.5px;font-weight:800;letter-spacing:1.1px;text-transform:uppercase;color:#8FDBFF;
   margin:11px 0 6px;}
 .cd-ph:first-of-type{margin-top:0;}
-.cd-ex{display:grid;grid-template-columns:minmax(0,1fr) 62px 74px 46px;align-items:center;gap:8px;
+.cd-ex{display:grid;grid-template-columns:minmax(0,1fr) 60px 84px 42px;align-items:center;gap:8px;
   padding:6px 0;border-bottom:1px solid rgba(61,56,51,.5);}
 .cd-ex:last-child{border-bottom:none;}
 .cd-ex-n{font-size:12px;color:#F4F1FB;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .cd-ex-r{font-size:10.5px;color:#8FDBFF;white-space:nowrap;}
-.cd-ex-l{text-align:right;font-size:10px;color:#8FDBFF;white-space:nowrap;}
+.cd-ex-l{display:flex;align-items:center;justify-content:flex-end;gap:2px;
+  font-size:10px;color:#8FDBFF;white-space:nowrap;}
+/* Ô nhập tạ ngay trên dashboard. Trông như chữ cho tới khi chạm vào, để bảng
+   không biến thành một rừng khung nhập. */
+.cd-kg{width:42px;padding:3px 2px;border:1px solid transparent;border-radius:6px;
+  background:transparent;color:#F4F1FB;font:inherit;font-size:13px;font-weight:800;
+  text-align:right;-moz-appearance:textfield;transition:border-color .15s,background .15s;}
+.cd-kg::-webkit-outer-spin-button,.cd-kg::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+.cd-kg::placeholder{font-size:11px;font-weight:600;color:#3F3F3D;}
+.cd-kg:hover{border-color:rgba(143,219,255,.25);}
+.cd-kg:focus{outline:none;border-color:#8FDBFF;background:rgba(143,219,255,.07);}
+.cd-kg-u{font-size:9px;font-weight:600;color:#8FDBFF;}
+.cd-kg-saving{border-color:rgba(143,219,255,.5);}
+.cd-kg-saved{border-color:#7ED9A0;}
+.cd-kg-err{border-color:#EE5A4F;}
 .cd-ex-l b{font-size:13px;font-weight:800;color:#F4F1FB;}
 .cd-ex-l b span{font-size:9px;font-weight:600;color:#8FDBFF;margin-left:1px;}
 .cd-ex-l i{font-style:normal;font-size:9.5px;font-weight:800;margin-left:5px;}
 .cd-ex-l i.up{color:#7ED9A0;} .cd-ex-l i.down{color:#EE5A4F;}
 .cd-none{font-size:10px;color:#3F3F3D;}
-.cd-spark{width:46px;height:16px;display:block;}
+.cd-spark{width:42px;height:16px;display:block;}
 /* ── RECOVERY tab — thiết kế theo ngôn ngữ WHOOP ── */
 #recovery-page{display:none;}
 #recovery-page.active{display:block;}
