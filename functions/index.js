@@ -3053,3 +3053,185 @@ exports.recoveryBrief = onCall(
     return { cached: false, date: latest.date, brief, at };
   },
 );
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THÔNG BÁO ĐẨY — nhắc coach giờ tập khách
+//
+// Web Push chuẩn với khoá VAPID của chính mình, không qua SDK của FCM. Khoá
+// công khai nằm trong index.html (nó vốn để công khai), khoá riêng ở secret.
+//
+// Lịch lưu date "2026-10-05" + startTime "09:00" theo GIỜ VIỆT NAM. Máy chủ
+// chạy theo UTC, nên mọi so sánh giờ ở đây phải quy về UTC+7 trước. Lấy giờ
+// máy chủ rồi so thẳng là lệch đúng 7 tiếng — nhắc sai cả buổi.
+// ═══════════════════════════════════════════════════════════════════════════
+const VAPID_PRIVATE = defineSecret("VAPID_PRIVATE_KEY");
+const VAPID_PUBLIC =
+  "BIJ4s2OywoPzXV0HG7Z6RZ5dDQHAn0ZgRZSZGkvsk-87zINU1qm1NKg-k0tf1aSMiAgX2uNEsfT7BsxL3_f4veQ";
+const ICT_MS = 7 * 3600 * 1000;
+
+/** "Bây giờ" theo giờ VN, trả về các mảnh đã tách sẵn. */
+function ictNow(at) {
+  const d = new Date((at ? at.getTime() : Date.now()) + ICT_MS);
+  const pad = (n) => String(n).padStart(2, "0");
+  return {
+    date: `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`,
+    minutes: d.getUTCHours() * 60 + d.getUTCMinutes(),
+    d,
+  };
+}
+/** "2026-10-05" + n ngày, qua Date.UTC để không dính lệch múi giờ. */
+function ictPlusDays(dateStr, n) {
+  const p = dateStr.split("-").map(Number);
+  const d = new Date(Date.UTC(p[0], p[1] - 1, p[2] + n));
+  return d.toISOString().slice(0, 10);
+}
+const hhmmToMin = (s) => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(s || "").trim());
+  return m ? +m[1] * 60 + +m[2] : null;
+};
+
+/** Gửi một payload tới mọi máy đã đăng ký; dọn luôn máy đã chết. */
+async function pushToAll(payload, { role } = {}) {
+  const webpush = require("web-push");
+  webpush.setVapidDetails("mailto:" + COACH_EMAIL, VAPID_PUBLIC, VAPID_PRIVATE.value());
+
+  const db = getFirestore();
+  let q = db.collection("pushSubs");
+  if (role) q = q.where("role", "==", role);
+  const snap = await q.get();
+
+  let sent = 0, gone = 0;
+  await Promise.all(snap.docs.map(async (d) => {
+    const v = d.data() || {};
+    if (!v.endpoint || !v.keys) return;
+    try {
+      await webpush.sendNotification(
+        { endpoint: v.endpoint, keys: v.keys }, JSON.stringify(payload));
+      sent++;
+    } catch (e) {
+      // 404/410 = người dùng gỡ app hoặc thu hồi quyền. Giữ lại chỉ tổ bắn
+      // vào chỗ chết mỗi 5 phút, nên xoá luôn.
+      if (e.statusCode === 404 || e.statusCode === 410) {
+        gone++;
+        await d.ref.delete().catch(() => {});
+      } else {
+        console.warn("[push] gửi hỏng", e.statusCode, (e.body || e.message || "").toString().slice(0, 120));
+      }
+    }
+  }));
+  if (gone) console.log(`[push] dọn ${gone} đăng ký đã chết`);
+  return { sent, gone, total: snap.size };
+}
+
+/** Lịch của một ngày, đã sắp theo giờ và bỏ buổi đã huỷ. */
+async function bookingsOn(dateStr) {
+  const snap = await getFirestore().collection("bookings").where("date", "==", dateStr).get();
+  return snap.docs
+    .map((d) => ({ id: d.id, ref: d.ref, ...d.data() }))
+    .filter((b) => b.status !== "cancelled" && hhmmToMin(b.startTime) != null)
+    .sort((a, b) => hhmmToMin(a.startTime) - hhmmToMin(b.startTime));
+}
+
+/**
+ * Buổi nào tới hạn nhắc, tính thuần từ dữ liệu — không đụng mạng, không đụng
+ * đồng hồ. Tách ra để test được, vì đây là chỗ dễ sai nhất: lệch múi giờ hay
+ * lệch cửa sổ đều dẫn tới nhắc sai giờ mà nhìn log thì vẫn thấy "đã chạy".
+ *
+ * @param {Array}  list       lịch của ngày đó
+ * @param {number} nowMin     bây giờ, tính bằng phút từ 0h GIỜ VN
+ * @param {number} dayOffset  0 = hôm nay, 1 = ngày mai
+ * @returns {Array} [{booking, lead}] với lead = còn bao nhiêu phút nữa
+ */
+function dueReminders(list, nowMin, dayOffset) {
+  const out = [];
+  for (const b of list || []) {
+    if (b.remindedAt) continue;                 // đã nhắc rồi
+    const st = hhmmToMin(b.startTime);
+    if (st == null) continue;
+    const lead = st + dayOffset * 1440 - nowMin;
+    // Cửa sổ rộng 25–35 phút: một lượt chạy trễ vài phút vẫn bắt được buổi.
+    // Chống gửi trùng là việc của cờ remindedAt, không phải của cửa sổ hẹp.
+    if (lead >= 25 && lead <= 35) out.push({ booking: b, lead });
+  }
+  return out;
+}
+
+/**
+ * Nhắc 30 phút trước mỗi buổi. Chạy 5 phút một lần.
+ */
+exports.scheduleReminders = onSchedule(
+  {
+    schedule: "*/5 * * * *",
+    timeZone: "Asia/Ho_Chi_Minh",
+    region: "asia-southeast1",
+    secrets: [VAPID_PRIVATE],
+    timeoutSeconds: 120,
+  },
+  async () => {
+    const now = ictNow();
+    // Buổi lúc 00:15 thì 30 phút trước đã sang ngày hôm trước, nên xét cả mai.
+    const days = [now.date, ictPlusDays(now.date, 1)];
+    for (let i = 0; i < days.length; i++) {
+      const day = days[i];
+      const list = await bookingsOn(day);
+      for (const { booking: b, lead } of dueReminders(list, now.minutes, i)) {
+        const r = await pushToAll({
+          title: `${b.startTime} — ${b.title || "Buổi tập"}`,
+          body: `Bắt đầu sau ${lead} phút` + (b.endTime ? ` · tới ${b.endTime}` : ""),
+          tag: "bk_" + b.id,
+          url: "/index.html",
+          sticky: true,
+        }, { role: "coach" });
+        await b.ref.update({ remindedAt: new Date().toISOString() }).catch(() => {});
+        console.log(`[push] nhắc ${b.startTime} ${b.title} -> ${r.sent} máy`);
+      }
+    }
+  },
+);
+
+/** Tóm tắt cả ngày, 6h sáng. */
+exports.morningSchedule = onSchedule(
+  {
+    schedule: "0 6 * * *",
+    timeZone: "Asia/Ho_Chi_Minh",
+    region: "asia-southeast1",
+    secrets: [VAPID_PRIVATE],
+    timeoutSeconds: 120,
+  },
+  async () => {
+    const now = ictNow();
+    const list = await bookingsOn(now.date);
+    if (!list.length) {
+      console.log("[push] hôm nay không có buổi nào — không gửi");
+      return;                       // Im lặng còn hơn báo "0 buổi" mỗi sáng nghỉ.
+    }
+    const lines = list.map((b) => `${b.startTime} ${b.title || "?"}`);
+    await pushToAll({
+      title: `Hôm nay ${list.length} buổi`,
+      body: lines.join(" · "),
+      tag: "today",
+      url: "/index.html",
+    }, { role: "coach" });
+    console.log(`[push] tóm tắt sáng: ${list.length} buổi`);
+  },
+);
+
+/** Nút "Gửi thử" trên tab Schedule. */
+exports.pushTest = onCall(
+  { region: "asia-southeast1", secrets: [VAPID_PRIVATE], timeoutSeconds: 60 },
+  async (request) => {
+    const email = request.auth && request.auth.token && request.auth.token.email;
+    if (email !== COACH_EMAIL) throw new HttpsError("permission-denied", "Chỉ coach.");
+    const now = ictNow();
+    const list = await bookingsOn(now.date);
+    const next = list.find((b) => hhmmToMin(b.startTime) >= now.minutes);
+    return await pushToAll({
+      title: "Pulse — thử thông báo",
+      body: next
+        ? `Buổi tới: ${next.startTime} ${next.title || ""}`.trim()
+        : "Hôm nay không còn buổi nào.",
+      tag: "test",
+      url: "/index.html",
+    }, { role: "coach" });
+  },
+);

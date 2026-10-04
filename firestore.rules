@@ -103,6 +103,21 @@ service cloud.firestore {
       allow read, write: if isCoach();
     }
 
+    // ── PUSH SUBSCRIPTIONS ────────────────────────────────
+    // Một doc cho mỗi máy đã bật thông báo. Id là băm của endpoint, KHÔNG
+    // phải uid — cùng một người trên hai máy là hai doc, nên bật ở điện thoại
+    // không làm mất đăng ký trên máy tính.
+    //
+    // Hàm nền đọc bằng Admin SDK nên không đi qua đây. Phía máy khách chỉ
+    // được tự ghi đăng ký của chính mình, và không đọc được của ai cả:
+    // endpoint cộng keys là đủ để gửi thông báo tới máy người khác.
+    match /pushSubs/{subId} {
+      allow read: if false;
+      allow create, update: if request.auth != null
+                            && request.resource.data.uid == request.auth.uid;
+      allow delete: if request.auth != null && resource.data.uid == request.auth.uid;
+    }
+
     // ── CLIENTS collection ────────────────────────────────
     // Coach: full access tất cả clients
     // Client: chỉ đọc/ghi data của chính mình (khớp email)
