@@ -586,5 +586,23 @@ async function runAssistant({ client, model, messages, clientId }) {
   };
 }
 
-module.exports = { TOOLS, SYSTEM, MAX_STEPS, runTool, runAssistant, progSummary,
+/**
+ * Nặn kết quả runAssistant thành thứ trả về cho máy khách.
+ *
+ * Tách ra vì đã trượt một lần: hàm callable được viết hồi chưa có khái niệm
+ * đề xuất, sau thêm `pending` vào runAssistant mà quên nới chỗ trả về — server
+ * dựng đề xuất đúng, model báo "đã gửi", nhưng thẻ duyệt không bao giờ tới
+ * trình duyệt. Một chỗ nặn duy nhất, có test, thì thêm trường mới không rơi nữa.
+ */
+function shapeReply(r) {
+  return {
+    text: (r && r.text) || "",
+    toolLog: (r && r.toolLog) || [],
+    pending: (r && r.pending) || [],
+    steps: (r && r.steps) || 0,
+    hitLimit: !!(r && r.hitLimit),
+  };
+}
+
+module.exports = { TOOLS, SYSTEM, MAX_STEPS, runTool, runAssistant, progSummary, shapeReply,
   validateProgram, validateNewClient, makeClientId, LEVELS };

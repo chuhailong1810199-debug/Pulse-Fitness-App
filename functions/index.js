@@ -3277,7 +3277,7 @@ exports.coachAssistant = onCall(
         `Không khởi tạo được Gemini: ${err.message}`);
     }
 
-    const { runAssistant } = require("./assistant.js");
+    const { runAssistant, shapeReply } = require("./assistant.js");
     try {
       const r = await runAssistant({
         client,
@@ -3289,7 +3289,9 @@ exports.coachAssistant = onCall(
       console.log(`[coachAssistant] ${r.steps} vòng, ${r.toolLog.length} tool `
         + `(${r.toolLog.map((t) => t.name).join(", ") || "không"}), `
         + `token vào ${u.input_tokens ?? "?"} ra ${u.output_tokens ?? "?"}`);
-      return { text: r.text, toolLog: r.toolLog, steps: r.steps, hitLimit: !!r.hitLimit };
+      // Qua shapeReply, đừng liệt kê tay từng trường ở đây — đó là chỗ đã làm
+      // rơi mất `pending` và thẻ duyệt không bao giờ hiện ra.
+      return shapeReply(r);
     } catch (err) {
       // Dùng lại đúng cách phân loại lỗi của callGemini: hạn mức ngày, quá tải,
       // khoá sai — mỗi thứ một câu đọc được, thay vì một chữ INTERNAL.

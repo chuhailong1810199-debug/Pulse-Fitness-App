@@ -132,6 +132,39 @@ ok("progSummary dem dung so bai", () => {
   assert.deepStrictEqual(A.progSummary(null), []);
 });
 
+// ── Duong di cua de xuat tu server ra may khach ──────────────────────
+// Bug that: callable chi chuyen tiep text/toolLog/steps/hitLimit nen `pending`
+// bi roi, server dung de xuat dung ma the duyet khong bao gio hien ra.
+ok("shapeReply chuyen tiep pending — the duyet phai toi duoc may khach", () => {
+  const r = A.shapeReply({
+    text: "ok", toolLog: [{ name: "propose_new_client" }],
+    pending: [{ action: { kind: "create_client", clientId: "vy_1" }, preview: { name: "Vy" } }],
+    steps: 2,
+  });
+  assert.strictEqual(r.pending.length, 1, "pending bi roi tren duong ve may khach");
+  assert.strictEqual(r.pending[0].action.kind, "create_client");
+  assert.strictEqual(r.pending[0].preview.name, "Vy");
+});
+
+ok("shapeReply khong vo khi thieu truong", () => {
+  for (const bad of [null, undefined, {}, { text: "x" }]) {
+    const r = A.shapeReply(bad);
+    assert(Array.isArray(r.pending), "pending phai luon la mang");
+    assert(Array.isArray(r.toolLog), "toolLog phai luon la mang");
+    assert.strictEqual(typeof r.text, "string");
+    assert.strictEqual(typeof r.hitLimit, "boolean");
+  }
+});
+
+ok("callable PHAI di qua shapeReply, khong liet ke tay tung truong", () => {
+  const idxSrc = fs.readFileSync(path.join(__dirname, "..", "functions", "index.js"), "utf8");
+  const i = idxSrc.indexOf("exports.coachAssistant");
+  assert(i >= 0, "khong tim thay coachAssistant");
+  const body = idxSrc.slice(i, i + 4000);
+  assert(/return shapeReply\(/.test(body), "coachAssistant khong dung shapeReply");
+  assert(!/return \{ text: r\.text/.test(body), "van con liet ke tay tung truong — de roi truong moi");
+});
+
 // ── Bo kiem truoc khi ghi ────────────────────────────────────────────
 // Day la chot chan DUY NHAT giua model va du lieu that cua 19 khach.
 const goodProg = {
