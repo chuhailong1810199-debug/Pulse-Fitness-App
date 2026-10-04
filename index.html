@@ -617,6 +617,10 @@ async function loadApp() {
     }
     clientsData  = [{ id: snap.id, ...snap.data() }];
     activeClient = clientsData[0];
+    // Dashboard riêng của khách. Coach đã có tab "Dashboard" trỏ tới trang tất
+    // cả khách, nên tab này chỉ bật cho khách và trỏ thẳng vào hồ sơ của họ.
+    const cdTab = document.getElementById('cdash-nav-tab');
+    if (cdTab) cdTab.style.display = '';
     console.log('[clientId-debug] activeClient.id =', activeClient.id, '| userClientId =', userClientId);
     renderClientBar(false);
 
@@ -1604,6 +1608,18 @@ function cdMuscles() {
 async function openClientDash(id) {
   const sw = window._switchClient || switchClient;
   const sp = window._showPage || showPage;
+  // Khách chỉ được mở hồ sơ của chính mình. Luật Firestore đã chặn đọc chéo
+  // (isClientOwner so theo email), nhưng chặn luôn ở đây để không ai đổi được
+  // activeClient sang người khác rồi ngồi nhìn một màn hình nửa nạc nửa mỡ.
+  if (userRole !== 'coach') {
+    if (!activeClient) return;
+    if (id && id !== activeClient.id) {
+      console.warn('[openClientDash] khách không được mở hồ sơ khách khác');
+      return;
+    }
+    sp('cdash');
+    return;
+  }
   try {
     if (id && (!activeClient || activeClient.id !== id)) await sw(id);
   } catch (e) { console.warn('[openClientDash] đổi khách lỗi:', e.message); }
@@ -1716,7 +1732,11 @@ function cdLoadValue(day, pi, ei, bw) {
 
 async function renderClientDash() {
   const wrap = document.getElementById('cdash-body');
-  if (!wrap || !activeClient || userRole !== 'coach') return;
+  if (!wrap || !activeClient) return;
+  // Khách xem được dashboard của CHÍNH MÌNH. activeClient của một tài khoản
+  // khách luôn là hồ sơ của họ (loadApp nạp đúng một doc), và luật Firestore
+  // chặn đọc chéo, nên đây chỉ là chuyện bày ra cho đúng người.
+  const isCoach = userRole === 'coach';
   wrap.innerHTML = '<div class="cd-loading">Đang đọc lịch sử tập…</div>';
   await loadClientDash();
 
@@ -1775,19 +1795,20 @@ async function renderClientDash() {
   wrap.innerHTML = `
     <div class="cd-head">
       <div>
-        <div class="cd-back" onclick="showPage('dash')">← Tất cả khách</div>
+        ${isCoach ? `<div class="cd-back" onclick="showPage('dash')">← Tất cả khách</div>` : ''}
         <h1 class="cd-h1">${escHtml(c.name || c.id)}</h1>
         <div class="cd-sub">${escHtml(c.level || '')}${c.sessionsPerWeek ? ' · ' + c.sessionsPerWeek + ' buổi/tuần' : ''}
           ${c.goal ? ' · ' + escHtml(c.goal) : ''}</div>
       </div>
       <div class="cd-badges">
-        <span class="cd-badge bl-badge-${st.state}">${ACCESS_LABEL[st.state]}</span>
+        ${isCoach ? `<span class="cd-badge bl-badge-${st.state}">${ACCESS_LABEL[st.state]}</span>` : ''}
         ${gap != null ? `<span class="cd-badge ${gap >= lim ? 'cd-warn' : 'cd-ok'}">Tập gần nhất ${
           _cdDate(c.lastWorkoutAt)} · ${gap} ngày</span>` : ''}
-        <button class="cd-goto" onclick="showPage('workout')">Mở giáo án để sửa</button>
+        <button class="cd-goto" onclick="showPage('workout')">${
+          isCoach ? 'Mở giáo án để sửa' : 'Mở giáo án'}</button>
       </div>
     </div>
-    ${dashClientStrip(c.id)}
+    ${isCoach ? dashClientStrip(c.id) : ''}
     <div class="cd-strip">
       <div class="cd-kpi"><span>${sess.length}</span>buổi đã ghi</div>
       <div class="cd-kpi"><span>${Math.round(totalVol).toLocaleString('vi-VN')}</span>kg tổng khối lượng</div>
@@ -12142,6 +12163,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <div class="nav-tab" id="dash-nav-tab" data-page="dash" style="display:none" onclick="showPage('dash')">Dashboard</div>
     <div class="nav-tab active" data-page="workout" onclick="showPage('workout')">Workout</div>
     <div class="nav-tab" data-page="progress" onclick="showPage('progress')">Progress</div>
+    <div class="nav-tab" id="cdash-nav-tab" data-page="cdash" style="display:none" onclick="showPage('cdash')">Dashboard</div>
     <div class="nav-tab" id="recovery-nav-tab" data-page="recovery" style="display:none" onclick="showPage('recovery')">Recovery</div>
     <div class="nav-tab" id="health-nav-tab" data-page="health" style="display:none" onclick="showPage('health')">Health</div>
     <div class="nav-tab" id="active-nav-tab" data-page="active" style="display:none" onclick="showPage('active')">Active</div>
