@@ -8127,24 +8127,51 @@ async function pushDisable(btn) {
   } catch (e) { console.warn('[push] tắt hỏng:', e); }
 }
 
-/** Nút trên tab Schedule, kèm trạng thái hiện tại. */
-async function pushMountToggle() {
-  const host = document.getElementById('sch-push');
-  if (!host || userRole !== 'coach') return;
+/**
+ * Tự lo đăng ký, không bày nút nào ra màn hình.
+ *
+ * Coach đã cho phép thông báo rồi, nên một hàng nút "Bật / Đã bật / Gửi thử"
+ * nằm trên thanh lịch chỉ là rác — bấm một lần rồi không bao giờ bấm nữa.
+ *
+ * Vẫn phải gọi mỗi lần mở tab Schedule chứ không chỉ một lần lúc đăng nhập:
+ * đăng ký đẩy có hạn, trình duyệt thu hồi là im lặng, và máy mới thì chưa có
+ * gì cả. Gọi lại thì getSubscription() trả bản cũ, setDoc ghi đè đúng doc đó,
+ * không sinh rác.
+ *
+ * KHÔNG tự hỏi quyền khi chưa từng hỏi: trình duyệt tính đó là làm phiền và
+ * có nơi chặn thẳng. Chưa cấp quyền thì ghi lý do ra console rồi thôi, bật
+ * tay bằng pushEnable() được.
+ */
+async function pushAutoSubscribe() {
+  if (userRole !== 'coach') return;
   const st = pushState();
-  if (!st.ok) {
-    host.innerHTML = '<span class="sch-push-off">' + escHtml(st.why) + '</span>';
+  if (!st.ok) { console.info('[push]', st.why); return; }
+  if (Notification.permission !== 'granted') {
+    console.info('[push] chưa cấp quyền thông báo — chạy pushEnable() để bật.');
     return;
   }
-  let on = false;
   try {
     const reg = await _swRegister();
-    on = !!(await reg.pushManager.getSubscription());
-  } catch (_e) {}
-  host.innerHTML = on
-    ? '<button class="sch-push-btn on" onclick="pushDisable(this).then(pushMountToggle)">Đã bật ✓</button>'
-      + '<button class="sch-push-btn" onclick="pushTest(this)">Gửi thử</button>'
-    : '<button class="sch-push-btn" onclick="pushEnable(this).then(pushMountToggle)">Bật thông báo</button>';
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: _b64ToBytes(VAPID_PUBLIC),
+      });
+    }
+    const j = sub.toJSON();
+    await setDoc(doc(db, 'pushSubs', await _pushId(j.endpoint)), {
+      endpoint: j.endpoint,
+      keys: j.keys || {},
+      uid: currentUser ? currentUser.uid : null,
+      email: currentUser ? currentUser.email : null,
+      role: userRole || null,
+      ua: navigator.userAgent.slice(0, 180),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (e) {
+    console.warn('[push] đăng ký ngầm hỏng:', e.message || e);
+  }
 }
 
 /** Bắn thử một cái ngay, để biết nó có tới máy thật hay không. */
@@ -8173,8 +8200,6 @@ async function renderSchedulePage() {
       <button class="sch-nav-btn" onclick="schedNavWeek(-1)">&#8249;</button>
       <span class="sch-week-lbl" id="sch-week-lbl"></span>
       <button class="sch-nav-btn" onclick="schedNavWeek(1)">&#8250;</button>
-      <button class="sch-today-btn" onclick="schedGoToday()">Today</button>
-      <span id="sch-push" class="sch-push"></span>
     </div>
     <div id="sch-cal-wrap"><div class="loading">Loading schedule...</div></div>
     <div class="sch-sum-wrap">
@@ -8191,7 +8216,7 @@ async function renderSchedulePage() {
   _schedRenderCalendar();
   _schedSumKey = '';                 // force a load on first paint
   _schedRefreshSummary();
-  pushMountToggle();                 // nút bật thông báo, chỉ coach thấy
+  pushAutoSubscribe();               // đăng ký ngầm, không bày nút nào
 }
 
 function _schedUpdateLabel() {
@@ -8206,12 +8231,6 @@ async function schedNavWeek(dir) {
   _schedRenderCalendar();
 }
 
-async function schedGoToday() {
-  _schedWeekStart = _schedMonday(new Date()); _schedUpdateLabel();
-  const w = document.getElementById('sch-cal-wrap'); if(w) w.innerHTML='<div class="loading">Đang tải...</div>';
-  try { _schedEvents = await _schedLoadWeek(_schedWeekStart); } catch(e) { _schedEvents = []; }
-  _schedRenderCalendar();
-}
 
 window._showPage = showPage;
 window._openClientDash = openClientDash;
@@ -13691,22 +13710,10 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 #schedule-page.active{display:block;}
 
 /* Topbar */
-.sch-push{display:inline-flex;gap:6px;align-items:center;margin-left:auto;}
-.sch-push-btn{padding:5px 11px;border-radius:999px;border:1px solid rgba(143,219,255,.35);
-  background:transparent;color:#8FDBFF;font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;
-  white-space:nowrap;transition:background .15s,border-color .15s;}
-.sch-push-btn:hover{background:rgba(143,219,255,.1);}
-.sch-push-btn.on{border-color:#7ED9A0;color:#7ED9A0;}
-.sch-push-btn:disabled{opacity:.6;cursor:default;}
-/* Lý do không bật được (hay gặp nhất: iPhone chưa thêm vào màn hình chính).
-   Nói hẳn ra, vì một cái nút xám không giải thích gì sẽ bị hiểu là app hỏng. */
-.sch-push-off{font-size:10.5px;line-height:1.4;color:var(--txt-muted,rgba(255,255,255,.55));max-width:260px;}
 .sch-topbar{display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:0 12px;}
 .sch-nav-btn{width:34px;height:34px;border-radius:50%;background:rgba(63,63,61,.12);border:1px solid rgba(63,63,61,.3);color:var(--ac-hi);font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;line-height:1;}
 .sch-nav-btn:active{background:rgba(63,63,61,.25);}
 .sch-week-lbl{flex:1;text-align:center;font-size:15px;font-weight:700;color:#F4F1FB;}
-.sch-today-btn{padding:7px 14px;border:none;border-radius:99px;background:linear-gradient(135deg,#161111,rgba(255,255,255,0.75));color:#161111;font-size:12px;font-weight:700;letter-spacing:.8px;cursor:pointer;flex-shrink:0;}
-.sch-today-btn:active{opacity:.8;}
 
 /* Calendar container */
 .sch-cal-outer{margin:0 4px;border-radius:12px;overflow:hidden;border:1px solid rgba(255,255,255,.08);background:#111;}
