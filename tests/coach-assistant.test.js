@@ -98,9 +98,10 @@ ok("tool duoc khai bao dung hinh dang SDK", () => {
   assert.strictEqual(new Set(names).size, names.length, "có tool trùng tên");
 });
 
-ok("ban 1 KHONG duoc co tool nao ghi du lieu", () => {
+ok("khong tool nao ghi thang — chi duoc de xuat", () => {
+  // Tool ghi thang bi cam. Muon doi du lieu thi phai la propose_* -> coach duyet.
   const bad = A.TOOLS.filter((t) => /^(set|save|apply|update|delete|push|write|create)_/.test(t.name));
-  assert.strictEqual(bad.length, 0, "có tool ghi lọt vào bản chỉ đọc: " + bad.map((t) => t.name));
+  assert.strictEqual(bad.length, 0, "có tool ghi thẳng, phải đổi thành propose_: " + bad.map((t) => t.name));
   // Bỏ lời gọi Gemini ra trước: interactions.create() không phải ghi Firestore,
   // để nguyên thì phép kiểm báo động giả và sẽ bị ai đó gỡ đi cho đỡ phiền.
   const srcFile = fs.readFileSync(path.join(__dirname, "..", "functions", "assistant.js"), "utf8")
@@ -129,6 +130,95 @@ ok("progSummary dem dung so bai", () => {
   assert.deepStrictEqual(s.map((x) => x.exercises), [4, 0]);
   assert.deepStrictEqual(s.map((x) => x.day), ["SessionA", "SessionB"]);
   assert.deepStrictEqual(A.progSummary(null), []);
+});
+
+// ── Bo kiem truoc khi ghi ────────────────────────────────────────────
+// Day la chot chan DUY NHAT giua model va du lieu that cua 19 khach.
+const goodProg = {
+  SessionA: { label: "A", phases: [{ name: "Strength", tag: "strength",
+    exercises: [{ name: "Goblet Squat", setsReps: "3 × 8-10", tempo: "3-1-1" }] }] },
+};
+
+ok("giao an dung dinh dang thi qua", () => {
+  const v = A.validateProgram(goodProg);
+  assert(v.ok, v.errors.join(" | "));
+  assert.strictEqual(v.stats.days, 1);
+  assert.strictEqual(v.stats.exercises, 1);
+});
+
+ok("khoa Mon/Wed/Fri BI CHAN (dinh dang nay lam treo app)", () => {
+  const v = A.validateProgram({ Mon: goodProg.SessionA, Wed: goodProg.SessionA });
+  assert(!v.ok, "dinh dang cu lot qua duoc");
+  assert(/SessionA/.test(v.errors.join(" ")), "loi phai noi ro phai dung SessionA");
+  assert(/treo/.test(v.errors.join(" ")), "loi phai noi ro hau qua");
+});
+
+ok("giao an thieu truong thi bi chan, va noi ro thieu gi", () => {
+  const cases2 = [
+    [{}, /rỗng/],
+    [{ SessionA: {} }, /thiếu phases/],
+    [{ SessionA: { phases: [] } }, /thiếu phases/],
+    [{ SessionA: { phases: [{ name: "P", exercises: [] }] } }, /không có bài/],
+    [{ SessionA: { phases: [{ name: "P", exercises: [{ name: "Squat" }] }] } }, /thiếu set/],
+    [{ SessionA: { phases: [{ name: "P", exercises: [{ setsReps: "3 × 8" }] }] } }, /thiếu tên bài/],
+    [null, /object/],
+  ];
+  for (const [prog, re] of cases2) {
+    const v = A.validateProgram(prog);
+    assert(!v.ok, "lot qua: " + JSON.stringify(prog));
+    assert(re.test(v.errors.join(" ")), "loi khong ro rang cho " + JSON.stringify(prog)
+      + " -> " + v.errors.join(" | "));
+  }
+});
+
+ok("khach moi KHONG duoc mang email, ke ca dia chi giu cho", () => {
+  for (const em of ["placeholder@gmail.com", "a@b.com", "  x@y.com  "]) {
+    const v = A.validateNewClient({ name: "Minh", email: em });
+    assert(!v.ok, "email '" + em + "' lot qua");
+    assert(/một Gmail một khách/.test(v.errors.join(" ")), "loi phai giai thich vi sao");
+  }
+  assert(A.validateNewClient({ name: "Minh" }).ok, "khong email thi phai qua");
+  assert(A.validateNewClient({ name: "Minh", email: "" }).ok, "email rong phai qua");
+});
+
+ok("khach moi: kiem trinh do va so buoi", () => {
+  assert(!A.validateNewClient({ name: "A", level: "Pro" }).ok, "trinh do la lot qua");
+  assert(A.validateNewClient({ name: "A", level: "Advanced" }).ok);
+  for (const n of [0, 8, 2.5, -1]) {
+    assert(!A.validateNewClient({ name: "A", sessionsPerWeek: n }).ok, "so buoi " + n + " lot qua");
+  }
+  assert(A.validateNewClient({ name: "A", sessionsPerWeek: 3 }).ok);
+  assert(!A.validateNewClient({ name: "" }).ok, "thieu ten lot qua");
+});
+
+ok("khach moi kem giao an hong thi bi chan theo", () => {
+  const v = A.validateNewClient({ name: "A", program: { Mon: { phases: [] } } });
+  assert(!v.ok, "giao an hong trong khach moi lot qua");
+});
+
+ok("makeClientId bo dau tieng Viet, khong sinh id la", () => {
+  assert.strictEqual(A.makeClientId("Nguyễn Đức Minh", 123), "nguyen_duc_minh_123");
+  assert.strictEqual(A.makeClientId("Chị Tâm", 1), "chi_tam_1");
+  assert.strictEqual(A.makeClientId("", 7), "client_7");
+  assert(/^[a-z0-9_]+$/.test(A.makeClientId("A!!! @#$ B", 9)), "id co ky tu la");
+});
+
+ok("tool de xuat KHONG tu ghi — chi dung action cho coach duyet", () => {
+  const names = A.TOOLS.map((t) => t.name);
+  assert(names.includes("propose_program"), "thieu propose_program");
+  assert(names.includes("propose_new_client"), "thieu propose_new_client");
+  // van khong duoc co lenh ghi Firestore nao trong assistant.js
+  const srcFile = fs.readFileSync(path.join(__dirname, "..", "functions", "assistant.js"), "utf8")
+    .replace(/interactions\.create\(/g, "");
+  for (const m of [".set(", ".update(", ".delete(", ".add(", ".create(", "batch(", "runTransaction"]) {
+    assert(!srcFile.includes(m), "assistant.js co lenh ghi Firestore: " + m);
+  }
+});
+
+ok("prompt cam noi 'da luu' khi moi chi la de xuat", () => {
+  assert(/không nói "đã lưu"|TUYỆT ĐỐI không nói/.test(A.SYSTEM),
+    "thieu luat cam bao da luu");
+  assert(/duyệt/.test(A.SYSTEM), "thieu khai niem cho duyet");
 });
 
 // ── _aiFmt: dung bang va chan the la ─────────────────────────────────

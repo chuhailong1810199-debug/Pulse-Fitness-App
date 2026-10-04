@@ -94,6 +94,49 @@ const TOOLS = [
   },
   {
     type: "function",
+    name: "propose_program",
+    description:
+      "Đề xuất đẩy một giáo án cho khách. KHÔNG ghi ngay — chỉ gửi cho coach duyệt, " +
+      "coach bấm đồng ý thì mới lưu. Khoá buổi bắt buộc SessionA, SessionB… " +
+      "Gọi get_program trước để biết giáo án cũ, và nói rõ đổi những gì.",
+    parameters: {
+      type: "object",
+      properties: {
+        clientId: { type: "string" },
+        program: {
+          type: "object",
+          description:
+            "{ SessionA: { label, phases: [ { name, tag, exercises: " +
+            "[ { name, setsReps, tempo, cue } ] } ] } }",
+        },
+        summary: { type: "string", description: "một câu nói rõ thay đổi gì so với giáo án cũ" },
+      },
+      required: ["clientId", "program"],
+    },
+  },
+  {
+    type: "function",
+    name: "propose_new_client",
+    description:
+      "Đề xuất tạo một khách mới. KHÔNG tạo ngay — chờ coach duyệt. " +
+      "Khách mới LUÔN bắt đầu không có email; muốn cho đăng nhập thì coach bổ sung sau. " +
+      "Có thể kèm giáo án luôn nếu coach đã nói rõ muốn tập gì.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        level: { type: "string", description: "Beginner | Intermediate | Advanced" },
+        goal: { type: "string" },
+        sessionsPerWeek: { type: "integer", description: "1–7" },
+        notes: { type: "string" },
+        healthConditions: { type: "string", description: "chấn thương, bệnh lý coach vừa kể" },
+        program: { type: "object", description: "giáo án ban đầu, cùng dạng propose_program" },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    type: "function",
     name: "get_recovery",
     description:
       "Dữ liệu hồi phục từ vòng Polar: giấc ngủ, HRV, nhịp tim nghỉ, tải tập. " +
@@ -274,7 +317,165 @@ async function runTool(name, args) {
     };
   }
 
+  // ── Hai tool "ghi" — thật ra KHÔNG ghi ────────────────────────────────
+  // Chúng chỉ kiểm dữ liệu rồi dựng một đề xuất để coach duyệt. Model không
+  // bao giờ chạm được vào Firestore; việc ghi nằm ở callable riêng, chỉ chạy
+  // khi coach đã bấm đồng ý. Model sai thì cùng lắm là một đề xuất xấu.
+  if (name === "propose_program") {
+    const v = validateProgram(a.program);
+    if (!v.ok) return { rejected: true, errors: v.errors, note: "Giáo án chưa hợp lệ, sửa rồi đề xuất lại." };
+    const c = await db.collection("clients").doc(a.clientId).get();
+    if (!c.exists) return { rejected: true, errors: [`Không có khách id '${a.clientId}'.`] };
+    const old = (c.data() || {}).program || {};
+    return {
+      needsConfirm: true,
+      action: { kind: "apply_program", clientId: a.clientId, program: a.program },
+      preview: {
+        client: (c.data() || {}).name || c.id,
+        summary: a.summary || "",
+        before: progSummary(old),
+        after: progSummary(a.program),
+        exercises: v.stats.exercises,
+      },
+      note: "Đã gửi cho coach duyệt. Nói cho coach biết thay đổi gì, rồi dừng — "
+        + "đừng gọi lại tool này.",
+    };
+  }
+
+  if (name === "propose_new_client") {
+    const v = validateNewClient(a);
+    if (!v.ok) return { rejected: true, errors: v.errors };
+    const id = makeClientId(a.name);
+    return {
+      needsConfirm: true,
+      action: {
+        kind: "create_client",
+        clientId: id,
+        name: String(a.name).trim(),
+        level: a.level || "Beginner",
+        goal: a.goal || "",
+        sessionsPerWeek: Number(a.sessionsPerWeek) || 3,
+        notes: a.notes || "",
+        healthConditions: a.healthConditions || "",
+        program: a.program || {},
+      },
+      preview: {
+        clientId: id,
+        name: String(a.name).trim(),
+        level: a.level || "Beginner",
+        goal: a.goal || "",
+        sessionsPerWeek: Number(a.sessionsPerWeek) || 3,
+        program: a.program ? progSummary(a.program) : [],
+        login: "chưa có email — khách này coach tự quản, bổ sung Gmail sau nếu cần",
+      },
+      note: "Đã gửi cho coach duyệt. Nói cho coach biết sẽ tạo gì, rồi dừng.",
+    };
+  }
+
   return { error: `Tool không tồn tại: ${name}` };
+}
+
+// ── KIỂM DỮ LIỆU TRƯỚC KHI GHI ──────────────────────────────────────────
+//
+// Model sinh ra JSON, và model thì sai được. Mấy hàm này là chỗ chặn: không
+// qua được đây thì không có gì chạm tới Firestore. Thuần, không I/O, test được.
+
+const LEVELS = ["Beginner", "Intermediate", "Advanced"];
+const DAY_KEY = /^Session[A-G]$/;
+const str = (v) => (typeof v === "string" ? v.trim() : "");
+
+/**
+ * Kiểm giáo án. Khoá PHẢI là SessionA..G.
+ *
+ * Mon/Wed/Fri là định dạng cũ và nó làm app TREO Ở MÀN LOADING — khách mở ra
+ * không thấy gì, không báo lỗi gì. Đó là lý do chỗ này chặn cứng chứ không
+ * tự đổi tên khoá giúp: đổi ngầm thì lần sau model lại sinh sai y như cũ.
+ *
+ * @returns {{ok:boolean, errors:string[], stats:object}}
+ */
+function validateProgram(prog) {
+  const e = [];
+  if (!prog || typeof prog !== "object" || Array.isArray(prog)) {
+    return { ok: false, errors: ["Giáo án phải là một object các buổi."], stats: {} };
+  }
+  const days = Object.keys(prog);
+  if (!days.length) e.push("Giáo án rỗng.");
+  if (days.length > 7) e.push(`Quá nhiều buổi (${days.length}), tối đa 7.`);
+
+  let nEx = 0;
+  for (const d of days) {
+    if (!DAY_KEY.test(d)) {
+      e.push(`Khoá buổi "${d}" sai định dạng — phải là SessionA…SessionG. `
+        + `Định dạng cũ Mon/Wed/Fri làm app treo ở màn hình tải.`);
+      continue;
+    }
+    const day = prog[d];
+    if (!day || typeof day !== "object") { e.push(`${d}: không phải object.`); continue; }
+    const phases = day.phases;
+    if (!Array.isArray(phases) || !phases.length) { e.push(`${d}: thiếu phases.`); continue; }
+    if (phases.length > 8) e.push(`${d}: ${phases.length} pha, tối đa 8.`);
+    phases.forEach((p, pi) => {
+      if (!p || typeof p !== "object") { e.push(`${d} pha ${pi + 1}: không phải object.`); return; }
+      if (!str(p.name)) e.push(`${d} pha ${pi + 1}: thiếu tên pha.`);
+      const ex = p.exercises;
+      if (!Array.isArray(ex) || !ex.length) { e.push(`${d} pha "${str(p.name)}": không có bài nào.`); return; }
+      if (ex.length > 20) e.push(`${d} pha "${str(p.name)}": ${ex.length} bài, tối đa 20.`);
+      ex.forEach((x, xi) => {
+        nEx++;
+        if (!x || typeof x !== "object") { e.push(`${d} pha ${pi + 1} bài ${xi + 1}: không phải object.`); return; }
+        if (!str(x.name)) e.push(`${d} pha ${pi + 1} bài ${xi + 1}: thiếu tên bài.`);
+        if (!str(x.setsReps)) e.push(`${d} — "${str(x.name) || "?"}": thiếu set×rep.`);
+      });
+    });
+  }
+  return {
+    ok: e.length === 0,
+    errors: e.slice(0, 12),
+    stats: { days: days.length, exercises: nEx },
+  };
+}
+
+/**
+ * Kiểm hồ sơ khách mới.
+ *
+ * email BẮT BUỘC rỗng. Khách coach tự quản mang `email: ''`, KHÔNG bao giờ
+ * mang địa chỉ giữ chỗ — hai khách cùng một địa chỉ là đọc ghi được dữ liệu
+ * của nhau, và chuyện đó đã xảy ra một lần. Muốn cho khách đăng nhập thì bổ
+ * sung sau bằng đường riêng đi qua chỉ mục /clientEmails.
+ */
+function validateNewClient(c) {
+  const e = [];
+  const o = c || {};
+  const name = str(o.name);
+  if (!name) e.push("Thiếu tên khách.");
+  if (name.length > 60) e.push("Tên khách quá dài.");
+  if (o.level && !LEVELS.includes(o.level)) {
+    e.push(`Trình độ "${o.level}" không hợp lệ — chỉ nhận ${LEVELS.join(", ")}.`);
+  }
+  const spw = Number(o.sessionsPerWeek);
+  if (o.sessionsPerWeek != null && (!Number.isInteger(spw) || spw < 1 || spw > 7)) {
+    e.push("Số buổi/tuần phải là số nguyên 1–7.");
+  }
+  if (str(o.email)) {
+    e.push("Không được đặt email khi tạo khách. Khách mới luôn bắt đầu với email rỗng; "
+      + "bổ sung sau bằng đường riêng để giữ luật một Gmail một khách.");
+  }
+  if (o.program) {
+    const v = validateProgram(o.program);
+    if (!v.ok) e.push(...v.errors);
+  }
+  return { ok: e.length === 0, errors: e.slice(0, 12) };
+}
+
+/** Id khách, cùng kiểu với nút Add Client trên giao diện. */
+function makeClientId(name, now) {
+  const slug = String(name || "client").toLowerCase().normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")        // bỏ dấu tiếng Việt
+    .replace(/đ/g, "d")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 24) || "client";
+  return slug + "_" + (now || Date.now());
 }
 
 // ── Chỉ dẫn hệ thống ─────────────────────────────────────────────────────
@@ -293,8 +494,18 @@ GIÁO ÁN
   làm app treo ở màn hình tải.
 - Mỗi bài có: name, setsReps ("3 × 8-10"), tempo ("3-1-1"), cue (ghi chú kỹ thuật và nghỉ bao lâu).
 - Chỉ gợi ý bài CÓ trong thư viện; không chắc thì gọi search_exercises để tra.
-- Bản này CHƯA ghi được vào dữ liệu. Soạn xong thì in ra bảng rõ ràng để coach tự dán vào, và nói rõ
-  là coach cần tự lưu.
+- Soạn xong giáo án thì in ra bảng cho coach xem, VÀ gọi propose_program để gửi duyệt.
+
+ĐỀ XUẤT THAY ĐỔI
+- Bạn KHÔNG ghi thẳng vào dữ liệu. Hai tool propose_program và propose_new_client chỉ gửi đề xuất;
+  coach bấm đồng ý thì app mới lưu.
+- Vì vậy TUYỆT ĐỐI không nói "đã lưu", "đã đẩy xong", "đã tạo khách". Nói đúng sự thật: "đã gửi cho
+  mày duyệt, bấm đồng ý là xong". Nói sai chỗ này là coach tưởng xong rồi bỏ đi, và không có gì được lưu.
+- Gọi tool đề xuất MỘT LẦN rồi dừng, kể cả khi chưa thấy kết quả cuối. Đừng gọi lại.
+- Trước khi đề xuất sửa giáo án, gọi get_program đọc bản cũ đã, rồi nói rõ đổi những gì và vì sao.
+- Tool trả về rejected kèm errors thì đọc lỗi, sửa, đề xuất lại — đừng lặp lại y nguyên.
+- Khách mới luôn bắt đầu KHÔNG có email. Coach muốn cho đăng nhập thì tự bổ sung sau; đừng tự đặt
+  địa chỉ nào, kể cả địa chỉ giữ chỗ.
 
 AN TOÀN
 - Khách dưới 18 tuổi (Antony 15, Sang 14, Rome, Kem): KHÔNG BAO GIỜ đề xuất ăn thâm hụt calo. Hạn chế
@@ -328,6 +539,7 @@ async function runAssistant({ client, model, messages, clientId }) {
   }
 
   const toolLog = [];
+  const pending = [];        // đề xuất chờ coach duyệt
   let usage = null;
   let steps = 0;
 
@@ -340,7 +552,7 @@ async function runAssistant({ client, model, messages, clientId }) {
 
     const calls = (interaction.steps || []).filter((s) => s.type === "function_call");
     if (!calls.length) {
-      return { text: interaction.output_text || "", toolLog, steps, usage };
+      return { text: interaction.output_text || "", toolLog, pending, steps, usage };
     }
 
     // Giữ nguyên các bước model sinh ra rồi mới nối kết quả — bỏ qua là model
@@ -356,6 +568,7 @@ async function runAssistant({ client, model, messages, clientId }) {
         result = { error: String(e.message || e).slice(0, 200) };
       }
       toolLog.push({ name: c.name, args: c.arguments || {}, empty: !!(result && (result.empty || result.error)) });
+      if (result && result.needsConfirm) pending.push({ action: result.action, preview: result.preview });
       input.push({
         type: "function_result",
         call_id: c.id,
@@ -369,8 +582,9 @@ async function runAssistant({ client, model, messages, clientId }) {
   return {
     text: "Câu này cần tra nhiều hơn mức cho phép trong một lượt. Hỏi hẹp lại giúp tao "
       + "(ví dụ nêu rõ tên khách, hoặc hỏi từng khách một).",
-    toolLog, steps, usage, hitLimit: true,
+    toolLog, pending, steps, usage, hitLimit: true,
   };
 }
 
-module.exports = { TOOLS, SYSTEM, MAX_STEPS, runTool, runAssistant, progSummary };
+module.exports = { TOOLS, SYSTEM, MAX_STEPS, runTool, runAssistant, progSummary,
+  validateProgram, validateNewClient, makeClientId, LEVELS };

@@ -3307,3 +3307,80 @@ exports.coachAssistant = onCall(
     }
   },
 );
+
+/**
+ * Thực thi một đề xuất của trợ lý, SAU KHI coach đã bấm đồng ý.
+ *
+ * Tách hẳn khỏi coachAssistant: model không bao giờ gọi được hàm này, nó chỉ
+ * dựng ra đề xuất. Và hàm này kiểm lại dữ liệu từ đầu chứ không tin máy khách
+ * — cái gì đi qua trình duyệt thì sửa được trên đường đi.
+ */
+exports.coachApply = onCall(
+  { region: "asia-southeast1", timeoutSeconds: 60 },
+  async (request) => {
+    const email = request.auth && request.auth.token && request.auth.token.email;
+    if (email !== COACH_EMAIL) throw new HttpsError("permission-denied", "Chỉ coach.");
+
+    const { validateProgram, validateNewClient } = require("./assistant.js");
+    const act = (request.data && request.data.action) || {};
+    const db = getFirestore();
+
+    if (act.kind === "apply_program") {
+      const v = validateProgram(act.program);
+      if (!v.ok) throw new HttpsError("invalid-argument", v.errors.join(" | "));
+      const ref = db.collection("clients").doc(String(act.clientId || ""));
+      const cur = await ref.get();
+      if (!cur.exists) throw new HttpsError("not-found", `Không có khách '${act.clientId}'.`);
+
+      // Giữ bản cũ trước khi ghi đè. Đẩy nhầm giáo án là mất cả kế hoạch tập
+      // của một người; không có bản lưu thì không có đường lùi.
+      // Subcollection này KHÔNG khai trong firestore.rules nên mặc định bị từ
+      // chối với máy khách — chỉ hàm nền (Admin SDK) đọc ghi được.
+      const old = (cur.data() || {}).program || {};
+      if (Object.keys(old).length) {
+        await ref.collection("programBackups").doc(new Date().toISOString()).set({
+          program: old, replacedAt: new Date().toISOString(), by: email,
+        }).catch((e) => console.warn("[coachApply] không lưu được bản cũ:", e.message));
+      }
+      await ref.set({ program: act.program }, { merge: true });
+      console.log(`[coachApply] giáo án -> ${act.clientId}: ${v.stats.days} buổi, ${v.stats.exercises} bài`);
+      return { ok: true, clientId: act.clientId, ...v.stats };
+    }
+
+    if (act.kind === "create_client") {
+      const v = validateNewClient(act);
+      if (!v.ok) throw new HttpsError("invalid-argument", v.errors.join(" | "));
+      const id = String(act.clientId || "");
+      if (!/^[a-z0-9_]{3,64}$/.test(id)) throw new HttpsError("invalid-argument", "Id khách không hợp lệ.");
+      const ref = db.collection("clients").doc(id);
+      if ((await ref.get()).exists) throw new HttpsError("already-exists", `Id '${id}' đã tồn tại.`);
+
+      // email LUÔN rỗng. Khách coach tự quản mang chuỗi rỗng, không bao giờ
+      // mang địa chỉ giữ chỗ — hai khách chung một địa chỉ là đọc ghi được dữ
+      // liệu của nhau. Muốn cho đăng nhập thì đi qua claimClientEmail sau.
+      await ref.set({
+        name: String(act.name).trim(),
+        email: "",
+        level: act.level || "Beginner",
+        goal: act.goal || "",
+        sessionsPerWeek: Number(act.sessionsPerWeek) || 3,
+        notes: act.notes || "",
+        program: act.program && Object.keys(act.program).length ? act.program : {},
+        coachUid: (request.auth && request.auth.uid) || null,
+        createdAt: new Date().toISOString(),
+        createdBy: "coachAssistant",
+      });
+      if (String(act.healthConditions || "").trim()) {
+        await ref.collection("profile").doc("data").set({
+          fullName: String(act.name).trim(),
+          healthConditions: String(act.healthConditions).trim(),
+          updatedAt: new Date().toISOString(),
+        }, { merge: true }).catch((e) => console.warn("[coachApply] profile:", e.message));
+      }
+      console.log(`[coachApply] tạo khách ${id}`);
+      return { ok: true, clientId: id };
+    }
+
+    throw new HttpsError("invalid-argument", `Loại thao tác không rõ: ${act.kind}`);
+  },
+);

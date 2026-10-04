@@ -8149,12 +8149,76 @@ function aiPaint() {
       + '</div></div>';
     return;
   }
-  log.innerHTML = _aiMsgs.map((m) => {
+  log.innerHTML = _aiMsgs.map((m, i) => {
     if (m.role === 'tool') return '<div class="ai-tools">' + escHtml(m.text) + '</div>';
+    if (m.role === 'confirm') return _aiCard(m, i);
     return '<div class="ai-msg ai-' + (m.role === 'user' ? 'u' : 'a') + '">'
       + (m.role === 'user' ? escHtml(m.text) : _aiFmt(m.text)) + '</div>';
   }).join('') + (_aiBusy ? '<div class="ai-wait">Đang tra dữ liệu…</div>' : '');
   log.scrollTop = log.scrollHeight;
+}
+
+/** Thẻ duyệt: hiện CHÍNH XÁC cái gì sẽ đổi, trước khi đổi. */
+function _aiCard(m, i) {
+  const p = m.preview || {}, a = m.action || {};
+  const rows = [];
+  if (a.kind === 'apply_program') {
+    const before = (p.before || []).map((x) => x.day + ' (' + x.exercises + ')').join(', ') || 'chưa có';
+    const after = (p.after || []).map((x) => x.day + ' (' + x.exercises + ')').join(', ');
+    rows.push(['Khách', p.client || a.clientId]);
+    rows.push(['Giáo án cũ', before]);
+    rows.push(['Giáo án mới', after]);
+    if (p.summary) rows.push(['Đổi gì', p.summary]);
+  } else if (a.kind === 'create_client') {
+    rows.push(['Tên', p.name]);
+    rows.push(['Id', p.clientId]);
+    rows.push(['Trình độ', p.level]);
+    if (p.goal) rows.push(['Mục tiêu', p.goal]);
+    rows.push(['Buổi/tuần', String(p.sessionsPerWeek)]);
+    rows.push(['Giáo án', (p.program || []).length
+      ? (p.program || []).map((x) => x.day + ' (' + x.exercises + ')').join(', ') : 'chưa có']);
+    rows.push(['Đăng nhập', p.login || '']);
+  }
+  const title = a.kind === 'apply_program' ? 'Đẩy giáo án' : 'Tạo khách mới';
+  const body = rows.map(([k, v]) =>
+    '<div class="ai-cf-r"><span>' + escHtml(k) + '</span><b>' + escHtml(v || '—') + '</b></div>').join('');
+  let foot;
+  if (m.state === 'xong') foot = '<div class="ai-cf-done">✓ Đã lưu</div>';
+  else if (m.state === 'huỷ') foot = '<div class="ai-cf-no">Đã bỏ qua</div>';
+  else if (m.state === 'đang') foot = '<div class="ai-cf-done">Đang lưu…</div>';
+  else if (m.state && m.state.indexOf('lỗi') === 0) foot = '<div class="ai-cf-no">' + escHtml(m.state) + '</div>';
+  else foot = '<div class="ai-cf-btns">'
+      + '<button type="button" class="ai-cf-yes" onclick="aiApprove(' + i + ')">Đồng ý</button>'
+      + '<button type="button" class="ai-cf-cancel" onclick="aiReject(' + i + ')">Bỏ qua</button></div>';
+  return '<div class="ai-cf"><div class="ai-cf-h">' + escHtml(title) + '</div>' + body + foot + '</div>';
+}
+
+async function aiApprove(i) {
+  const m = _aiMsgs[i];
+  if (!m || m.state !== 'chờ') return;
+  m.state = 'đang'; aiPaint();
+  try {
+    const fn = firebase.app().functions('asia-southeast1')
+      .httpsCallable('coachApply', { timeout: 60000 });
+    await fn({ action: m.action });
+    m.state = 'xong';
+    // Dữ liệu vừa đổi dưới Firestore — nạp lại để màn hình không còn bản cũ.
+    if (m.action.kind === 'apply_program' && activeClient
+        && activeClient.id === m.action.clientId) {
+      activeClient.program = m.action.program;
+      saveProgramCache(activeClient.id, m.action.program);
+      renderDayTabs(); renderExercises();
+    }
+    if (m.action.kind === 'create_client') await loadAllClients();
+  } catch (e) {
+    console.warn('[aiApprove]', e);
+    m.state = 'lỗi: ' + String(e.message || e).slice(0, 60);
+  }
+  aiPaint();
+}
+function aiReject(i) {
+  const m = _aiMsgs[i];
+  if (m && m.state === 'chờ') { m.state = 'huỷ'; aiPaint(); }
 }
 
 function aiAsk(q) {
@@ -8180,7 +8244,8 @@ async function aiSend(ev) {
     // Chỉ gửi lượt người và máy, bỏ dòng nhật ký tool — nó là thứ hiện cho
     // coach xem, không phải ngữ cảnh model cần đọc lại.
     const res = await fn({
-      messages: _aiMsgs.filter((m) => m.role !== 'tool').map((m) => ({ role: m.role, text: m.text })),
+      messages: _aiMsgs.filter((m) => m.role === 'user' || m.role === 'assistant')
+        .map((m) => ({ role: m.role, text: m.text })),
       clientId: activeClient ? activeClient.id : null,
     });
     const d = res.data || {};
@@ -8188,6 +8253,11 @@ async function aiSend(ev) {
       _aiMsgs.push({ role: 'tool', text: 'đã tra: ' + d.toolLog.map((t) => t.name).join(', ') });
     }
     _aiMsgs.push({ role: 'assistant', text: d.text || '(không có trả lời)' });
+    // Đề xuất thay đổi dữ liệu: dựng thẻ duyệt riêng. Trợ lý KHÔNG tự ghi —
+    // chưa bấm Đồng ý thì chưa có gì xuống Firestore.
+    for (const p of (d.pending || [])) {
+      _aiMsgs.push({ role: 'confirm', action: p.action, preview: p.preview, state: 'chờ' });
+    }
   } catch (e) {
     console.warn('[aiSend]', e);
     _aiMsgs.push({ role: 'assistant', text: '⚠ ' + (e.message || e) });
@@ -14711,6 +14781,22 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .ai-in:focus{outline:none;border-color:#8FDBFF;}
 .ai-go{padding:10px 17px;border-radius:999px;border:0;background:#1C90FF;color:#161111;
   font:inherit;font-size:13px;font-weight:700;cursor:pointer;flex:none;}
+/* Thẻ duyệt: trợ lý đề xuất, coach bấm mới ghi. Hiện rõ trước/sau chứ không
+   chỉ nói "đã cập nhật giáo án" — đẩy nhầm là mất cả kế hoạch tập của một người. */
+.ai-cf{align-self:stretch;border:1px solid rgba(143,219,255,.3);border-radius:12px;
+  background:rgba(143,219,255,.05);padding:11px 13px;font-size:12.5px;}
+.ai-cf-h{font-size:12px;font-weight:800;color:#8FDBFF;letter-spacing:.04em;
+  text-transform:uppercase;margin-bottom:8px;}
+.ai-cf-r{display:flex;gap:10px;justify-content:space-between;padding:3px 0;line-height:1.45;}
+.ai-cf-r span{color:var(--txt-muted,rgba(255,255,255,.5));flex:none;}
+.ai-cf-r b{color:#F4F1FB;font-weight:600;text-align:right;word-break:break-word;}
+.ai-cf-btns{display:flex;gap:8px;margin-top:11px;}
+.ai-cf-yes,.ai-cf-cancel{flex:1;padding:8px 0;border-radius:9px;font:inherit;font-size:12.5px;
+  font-weight:700;cursor:pointer;border:1px solid transparent;}
+.ai-cf-yes{background:#7ED9A0;color:#161111;}
+.ai-cf-cancel{background:transparent;color:rgba(255,255,255,.55);border-color:rgba(255,255,255,.18);}
+.ai-cf-done{margin-top:9px;font-size:12px;font-weight:700;color:#7ED9A0;}
+.ai-cf-no{margin-top:9px;font-size:12px;color:rgba(255,255,255,.42);}
 /* ── Healthspan ─────────────────────────────────────────────────────── */
 .hs-top{display:flex;align-items:center;gap:18px;margin-bottom:18px;}
 .hs-ring{position:relative;width:124px;height:124px;flex:none;}
