@@ -128,6 +128,30 @@ ok("moi duong dan Firestore deu la cua chinh khach", async () => {
   assert.strictEqual(la.length, 0, "co duong dan khong thuoc ve khach: " + JSON.stringify(la));
 });
 
+// ── Thanh tab: Dashboard dung dau ─────────────────────────────────────
+ok("hai the Dashboard nam dau thanh tab va deu an san", async () => {
+  const nav = s.slice(s.indexOf('<div class="nav">'), s.indexOf("</div>", s.indexOf('<div class="nav">') + 2000));
+  const tabs = [...nav.matchAll(/<div class="nav-tab[^"]*"([^>]*)>([^<]*)</g)]
+    .map((m) => ({ attrs: m[1], label: m[2].trim() }));
+  assert(tabs.length > 8, "doc duoc " + tabs.length + " tab, bo do hong");
+  assert.strictEqual(tabs[0].label, "Dashboard", "tab dau tien la " + tabs[0].label);
+  assert.strictEqual(tabs[1].label, "Dashboard", "tab thu hai la " + tabs[1].label);
+  assert(/id="cdash-nav-tab"/.test(tabs[0].attrs), "tab dau phai la cdash (cua khach)");
+  assert(/id="dash-nav-tab"/.test(tabs[1].attrs), "tab thu hai phai la dash (cua coach)");
+  for (const t of tabs.slice(0, 2))
+    assert(/display:none/.test(t.attrs), "the Dashboard phai an san, chi bat theo vai tro");
+  assert.strictEqual(tabs[2].label, "Workout", "sau hai the Dashboard phai la Workout");
+  // Chỉ một trong hai được bật, nếu không coach thấy hai tab cùng tên.
+  assert.strictEqual(tabs.filter((t) => t.label === "Dashboard").length, 2);
+});
+
+ok("moi the Dashboard chi duoc bat o dung mot cho", async () => {
+  for (const id of ["cdash-nav-tab", "dash-nav-tab"]) {
+    const n = (s.match(new RegExp("getElementById\\('" + id + "'\\)", "g")) || []).length;
+    assert.strictEqual(n, 1, id + " duoc dong vao " + n + " cho, de bat nham ca hai");
+  }
+});
+
 (async () => {
   for (const [n, f] of cases) {
     try { await f(); console.log("  OK   " + n); }
