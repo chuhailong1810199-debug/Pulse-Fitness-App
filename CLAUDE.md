@@ -1,5 +1,5 @@
 
-## Current clients (verified against Firestore 2026-09-20 — 19 clients)
+## Current clients (verified against Firestore 2026-10-04 — 19 clients, 11 tự đăng nhập)
 
 ### Self-login clients — each has their own Gmail
 | Name | Client ID | Gmail | Level | Sessions/wk | Days | Goal |
@@ -8,6 +8,7 @@
 | Cindy | cindy | dollykim1401@gmail.com | Intermediate | 3 | 3 | Strength & Fat Loss — Glutes/Back/Core |
 | Giao | giao | hqunhgiao.18@gmail.com | Beginner | 2 | 2 | HYROX / Hybrid — nền aerobic + kỹ thuật trạm |
 | Joost | joost | joost123@gmail.com | Beginner | 3 | 3 | Strength — tăng sức mạnh, full-body 3 buổi/tuần |
+| Kem | kem | ndqminh1705@gmail.com | Beginner | 3 | 3 | Phát triển thể chất — sức mạnh, sức bật, nền thể lực |
 | Lee | lee | kuanyu41@gmail.com | Intermediate | 3 | 2 | Strength & Hypertrophy — 2 block Anterior/Posterior, xoay A/B/A |
 | Long Chu | longchu | coach@fitwithlongchu.com | Advanced | 3 | 3 | Strength & Hypertrophy |
 | Nam | nam | namdoxuan0104@gmail.com | Intermediate | 3 | 3 | Tăng cơ giảm mỡ |
@@ -25,7 +26,6 @@
 | Chị Tâm | tam | Beginner | 2 | 2 | Tăng cơ + strength — dân chạy 35km/tuần, ưu tiên chân |
 | Rome | rome | Beginner | 2 | 2 | Tăng chiều cao, mật độ xương, hiệu suất thể thao |
 | Thai Son | thaison | Advanced | 4 | 3 | Shoulder Rehab → Strength + Boxing |
-| Kem | kem | Beginner | 3 | 3 | Phát triển thể chất — sức mạnh, sức bật, nền thể lực |
 | Trần Văn Tiến | tien | Beginner | 2 | 2 | Sức khỏe tổng quát, tăng cơ giảm mỡ tuổi 48 |
 
 A coach-managed client carries `email: ''`, **never** a placeholder address. The
@@ -36,6 +36,11 @@ shared placeholder reproduces it the moment a second client gets one.
 Removed 2026-07-31: **Vy**, **Ngọc Anh**, **Chị Nhi**, **Ngân** (client docs + orphaned user accounts deleted).
 Thai Son's email was cleared — `sonnguyen109992@gmail.com` belongs to Soobin. Thai Son needs his own
 address before he can log in.
+
+2026-10-04: **Kem** chuyển từ coach-managed sang tự đăng nhập (`ndqminh1705@gmail.com`). Đi đúng
+hai bước: tạo `/clientEmails/ndqminh1705@gmail.com` → `{clientId:'kem'}` TRƯỚC, rồi mới ghi
+`clients/kem.email`. Đã thử chiếm lại email đó cho khách khác và nhận `ALREADY_EXISTS` — chốt chặn
+còn nguyên.
 
 ---
 
