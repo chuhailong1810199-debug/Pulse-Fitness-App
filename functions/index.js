@@ -3235,3 +3235,75 @@ exports.pushTest = onCall(
     }, { role: "coach" });
   },
 );
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TRỢ LÝ COACH — hỏi đáp về khách và giáo án
+//
+// Bản 1 chỉ đọc; mọi tool nằm trong functions/assistant.js và không cái nào ghi.
+// ═══════════════════════════════════════════════════════════════════════════
+exports.coachAssistant = onCall(
+  {
+    region: "asia-southeast1",
+    secrets: [GEMINI_API_KEY],
+    // Một câu hỏi có thể gọi tool vài vòng, mỗi vòng là một lượt gọi model.
+    timeoutSeconds: 180,
+    memory: "512MiB",
+  },
+  async (request) => {
+    const email = request.auth && request.auth.token && request.auth.token.email;
+    // Trợ lý đọc được dữ liệu của MỌI khách, kể cả hồ sơ sức khoẻ. Giấu nút ở
+    // giao diện không phải là kiểm soát — chốt chặn thật nằm ở đây.
+    if (email !== COACH_EMAIL) {
+      throw new HttpsError("permission-denied", "Chỉ coach dùng được trợ lý.");
+    }
+
+    const messages = Array.isArray(request.data && request.data.messages)
+      ? request.data.messages.slice(-12)        // giữ 12 lượt gần nhất, đủ ngữ cảnh mà không phình token
+      : [];
+    if (!messages.length) throw new HttpsError("invalid-argument", "Chưa có câu hỏi nào.");
+
+    const apiKey = GEMINI_API_KEY.value();
+    if (!apiKey || apiKey.length < 10) {
+      throw new HttpsError("failed-precondition",
+        "GEMINI_API_KEY chưa cấu hình. Chạy: firebase functions:secrets:set GEMINI_API_KEY");
+    }
+
+    let client;
+    try {
+      const { GoogleGenAI } = require("@google/genai");
+      client = new GoogleGenAI({ apiKey });
+    } catch (err) {
+      throw new HttpsError("failed-precondition",
+        `Không khởi tạo được Gemini: ${err.message}`);
+    }
+
+    const { runAssistant } = require("./assistant.js");
+    try {
+      const r = await runAssistant({
+        client,
+        model: GEMINI_MODEL,
+        messages,
+        clientId: (request.data && request.data.clientId) || null,
+      });
+      const u = r.usage || {};
+      console.log(`[coachAssistant] ${r.steps} vòng, ${r.toolLog.length} tool `
+        + `(${r.toolLog.map((t) => t.name).join(", ") || "không"}), `
+        + `token vào ${u.input_tokens ?? "?"} ra ${u.output_tokens ?? "?"}`);
+      return { text: r.text, toolLog: r.toolLog, steps: r.steps, hitLimit: !!r.hitLimit };
+    } catch (err) {
+      // Dùng lại đúng cách phân loại lỗi của callGemini: hạn mức ngày, quá tải,
+      // khoá sai — mỗi thứ một câu đọc được, thay vì một chữ INTERNAL.
+      console.error(`[coachAssistant] hỏng — ${err.status || err.code || ""} ${err.message}`);
+      if (err instanceof HttpsError) throw err;
+      const msg = String(err.message || "");
+      if (/quota|rate|429|resource.?exhausted/i.test(msg)) {
+        const daily = /per day|\bdaily\b/i.test(msg);
+        throw new HttpsError("resource-exhausted", daily
+          ? "Hết hạn mức Gemini trong ngày. Gói free cho 20 lượt/ngày dùng chung cho cả "
+            + "phân tích giấc ngủ và ảnh món ăn — trợ lý cần bật gói trả phí."
+          : "Gemini đang quá tải, thử lại sau một phút.");
+      }
+      throw new HttpsError("internal", `Trợ lý lỗi: ${msg.slice(0, 160)}`);
+    }
+  },
+);

@@ -525,6 +525,7 @@ async function loadApp() {
     // Youth là công cụ của coach: khách không cần thấy pin test này.
     const youthTab = document.getElementById('youth-nav-tab');
     if (youthTab) youthTab.style.display = '';
+    aiMount();                       // nút trợ lý nổi, mọi tab, chỉ coach
     // Coach with no clients yet — show empty state
     if (clientsData.length === 0) {
       activeClient = null;
@@ -7057,6 +7058,18 @@ async function submitOnboarding() {
       program: sessionMap,
     }, { merge: true });
 
+    // Chấn thương khách vừa khai PHẢI được lưu lại. Trước đây nó chỉ được
+    // truyền sang hàm sinh giáo án rồi vứt, nên sau 19 khách vẫn không ai có
+    // một dòng bệnh lý nào trong hồ sơ — và đó là thứ cần nhất khi sửa giáo án
+    // hay khi trợ lý được hỏi "khách này có vấn đề gì không".
+    // Ghi vào đúng chỗ màn hình Hồ sơ khách đang đọc: profile/data.
+    if (injuries) {
+      try {
+        await setDoc(doc(db, 'clients', userClientId, 'profile', 'data'),
+          { healthConditions: injuries, updatedAt: serverTimestamp() }, { merge: true });
+      } catch (e) { console.warn('[onboarding] không lưu được chấn thương:', e.message); }
+    }
+
     // Update localStorage cache & reload app
     document.getElementById('onb-gen-text').textContent = 'Chương trình đã sẵn sàng! 🎉';
     await new Promise(r => setTimeout(r, 800));
@@ -8014,6 +8027,175 @@ function schedFindRender(q) {
   });
 }
 
+
+
+// ── TRỢ LÝ COACH — nút nổi + khung chat ─────────────────────────────────
+//
+// Nút tròn góc dưới phải, hiện trên mọi tab, CHỈ coach. Khung chat biết đang
+// mở hồ sơ khách nào nên hỏi "giáo án này nặng quá không" là nó hiểu ngay.
+//
+// Bản 1 chỉ đọc: trợ lý không ghi được gì vào dữ liệu. Giáo án nó soạn ra thì
+// coach tự dán vào — nói rõ chuyện đó trong câu chào, đừng để coach tưởng đã lưu.
+let _aiMsgs = [];          // [{role:'user'|'assistant', text}]
+let _aiBusy = false;
+
+function aiMount() {
+  if (userRole !== 'coach' || document.getElementById('ai-fab')) return;
+
+  const fab = document.createElement('button');
+  fab.id = 'ai-fab';
+  fab.type = 'button';
+  fab.setAttribute('aria-label', 'Trợ lý');
+  fab.setAttribute('data-i18n-skip', '');
+  fab.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">'
+    + '<path d="M12 3a9 9 0 0 0-9 9c0 1.6.42 3.1 1.15 4.4L3 21l4.7-1.1A9 9 0 1 0 12 3Z"'
+    + ' fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>'
+    + '<circle cx="8.5" cy="12" r="1.1" fill="currentColor"/>'
+    + '<circle cx="12" cy="12" r="1.1" fill="currentColor"/>'
+    + '<circle cx="15.5" cy="12" r="1.1" fill="currentColor"/></svg>';
+  fab.onclick = aiOpen;
+  document.body.appendChild(fab);
+
+  const sheet = document.createElement('div');
+  sheet.id = 'ai-sheet';
+  // Toàn bộ khung chat bỏ qua bộ dịch VI→EN: nội dung ở đây do model sinh ra,
+  // quét rồi thay chuỗi sẽ cắt xén câu trả lời theo cách không đoán trước được.
+  sheet.setAttribute('data-i18n-skip', '');
+  sheet.innerHTML =
+      '<div class="ai-head">'
+      + '<span class="ai-title">Trợ lý</span>'
+      + '<span class="ai-who" id="ai-who"></span>'
+      + '<button class="ai-x" type="button" aria-label="Đóng" onclick="aiClose()">✕</button>'
+    + '</div>'
+    + '<div class="ai-log" id="ai-log"></div>'
+    + '<form class="ai-bar" id="ai-bar" onsubmit="aiSend(event)">'
+      + '<input class="ai-in" id="ai-in" autocomplete="off" '
+      + 'placeholder="Hỏi về khách, giáo án, bài tập…">'
+      + '<button class="ai-go" type="submit" id="ai-go">Gửi</button>'
+    + '</form>';
+  document.body.appendChild(sheet);
+}
+
+function aiOpen() {
+  const s = document.getElementById('ai-sheet');
+  if (!s) return;
+  s.classList.add('open');
+  document.getElementById('ai-fab').classList.add('hidden');
+  const who = document.getElementById('ai-who');
+  if (who) who.textContent = activeClient ? ('đang xem: ' + (activeClient.name || activeClient.id)) : '';
+  if (!_aiMsgs.length) aiPaint();
+  setTimeout(() => { const i = document.getElementById('ai-in'); if (i) i.focus(); }, 220);
+}
+function aiClose() {
+  document.getElementById('ai-sheet').classList.remove('open');
+  document.getElementById('ai-fab').classList.remove('hidden');
+}
+
+/**
+ * Văn bản model trả về -> HTML an toàn.
+ *
+ * Bảng markdown phải dựng thành <table> thật. Bản đầu bọc mỗi dòng "|...|"
+ * vào một khối riêng: ra một đống dòng rời có cả hàng |---|---| lộ ra, lại bị
+ * cắt ngang ở màn hẹp. Mà in bảng giáo án chính là việc hay dùng nhất ở đây.
+ */
+function _aiFmt(t) {
+  const inline = (x) => escHtml(x).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  const cells = (row) => row.replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+  const isSep = (row) => /^\|[\s|:-]+\|$/.test(row.trim());
+
+  const lines = String(t || '').split('\n');
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const ln = lines[i];
+    if (/^\s*\|.*\|\s*$/.test(ln)) {
+      const block = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) block.push(lines[i].trim(), i++)[0];
+      const rows = block.filter((x) => typeof x === 'string' && !isSep(x));
+      if (rows.length) {
+        const head = cells(rows[0]);
+        const body = rows.slice(1).map(cells);
+        out.push('<table class="ai-tb"><thead><tr>'
+          + head.map((c) => '<th>' + inline(c) + '</th>').join('')
+          + '</tr></thead><tbody>'
+          + body.map((r) => '<tr>' + r.map((c) => '<td>' + inline(c) + '</td>').join('') + '</tr>').join('')
+          + '</tbody></table>');
+      }
+      continue;
+    }
+    out.push(inline(ln));
+    i++;
+  }
+  // Nối bằng <br>, nhưng không chèn <br> ngay cạnh bảng — thừa một dòng trống.
+  return out.reduce((acc, x, n) => {
+    if (!n) return x;
+    const tbl = x.startsWith('<table') || acc.endsWith('</table>');
+    return acc + (tbl ? '' : '<br>') + x;
+  }, '');
+}
+
+function aiPaint() {
+  const log = document.getElementById('ai-log');
+  if (!log) return;
+  if (!_aiMsgs.length) {
+    log.innerHTML = '<div class="ai-hi">'
+      + '<p>Hỏi gì về khách và giáo án cũng được. Tao tự tra dữ liệu thật trong app.</p>'
+      + '<p class="ai-hi-note">Bản này <b>chỉ đọc</b> — giáo án tao soạn thì mày tự dán vào, '
+      + 'tao chưa ghi được gì.</p>'
+      + '<div class="ai-eg">'
+        + '<button type="button" onclick="aiAsk(this.textContent)">Giáo án của Kem có hợp trình độ không</button>'
+        + '<button type="button" onclick="aiAsk(this.textContent)">Khách nào lâu chưa tập nhất</button>'
+        + '<button type="button" onclick="aiAsk(this.textContent)">Gợi ý bài thay cho Romanian Deadlift</button>'
+      + '</div></div>';
+    return;
+  }
+  log.innerHTML = _aiMsgs.map((m) => {
+    if (m.role === 'tool') return '<div class="ai-tools">' + escHtml(m.text) + '</div>';
+    return '<div class="ai-msg ai-' + (m.role === 'user' ? 'u' : 'a') + '">'
+      + (m.role === 'user' ? escHtml(m.text) : _aiFmt(m.text)) + '</div>';
+  }).join('') + (_aiBusy ? '<div class="ai-wait">Đang tra dữ liệu…</div>' : '');
+  log.scrollTop = log.scrollHeight;
+}
+
+function aiAsk(q) {
+  const i = document.getElementById('ai-in');
+  if (i) i.value = q;
+  aiSend();
+}
+
+async function aiSend(ev) {
+  if (ev) ev.preventDefault();
+  if (_aiBusy) return;
+  const input = document.getElementById('ai-in');
+  const q = (input.value || '').trim();
+  if (!q) return;
+  input.value = '';
+  _aiMsgs.push({ role: 'user', text: q });
+  _aiBusy = true;
+  aiPaint();
+
+  try {
+    const fn = firebase.app().functions('asia-southeast1')
+      .httpsCallable('coachAssistant', { timeout: 180000 });
+    // Chỉ gửi lượt người và máy, bỏ dòng nhật ký tool — nó là thứ hiện cho
+    // coach xem, không phải ngữ cảnh model cần đọc lại.
+    const res = await fn({
+      messages: _aiMsgs.filter((m) => m.role !== 'tool').map((m) => ({ role: m.role, text: m.text })),
+      clientId: activeClient ? activeClient.id : null,
+    });
+    const d = res.data || {};
+    if (d.toolLog && d.toolLog.length) {
+      _aiMsgs.push({ role: 'tool', text: 'đã tra: ' + d.toolLog.map((t) => t.name).join(', ') });
+    }
+    _aiMsgs.push({ role: 'assistant', text: d.text || '(không có trả lời)' });
+  } catch (e) {
+    console.warn('[aiSend]', e);
+    _aiMsgs.push({ role: 'assistant', text: '⚠ ' + (e.message || e) });
+  } finally {
+    _aiBusy = false;
+    aiPaint();
+  }
+}
 
 // ── THÔNG BÁO ĐẨY — nhắc giờ tập khách ──────────────────────────────────
 //
@@ -14479,6 +14661,56 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .rc-brief-why{display:block;margin-top:8px;font-size:12.5px;color:var(--rc-muted);line-height:1.55;}
 .rc-brief-cav{margin:14px 0 0;font-size:12px;line-height:1.55;color:var(--rc-muted);}
 .rc-brief-hint{margin:0;font-size:13px;line-height:1.55;color:var(--rc-muted);}
+/* ── Trợ lý coach ───────────────────────────────────────────────────── */
+.ai-fab-hidden,#ai-fab.hidden{opacity:0;pointer-events:none;transform:scale(.8);}
+#ai-fab{position:fixed;right:18px;bottom:calc(18px + env(safe-area-inset-bottom));z-index:90;
+  width:52px;height:52px;border-radius:50%;border:1px solid rgba(143,219,255,.4);
+  background:#1C90FF;color:#161111;display:flex;align-items:center;justify-content:center;
+  cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.45);
+  transition:opacity .2s,transform .2s;}
+#ai-fab:hover{transform:scale(1.06);}
+#ai-sheet{position:fixed;right:0;bottom:0;left:0;z-index:95;display:flex;flex-direction:column;
+  max-height:min(76vh,620px);background:#1B1717;border-top:1px solid rgba(255,255,255,.1);
+  border-radius:18px 18px 0 0;box-shadow:0 -14px 40px rgba(0,0,0,.6);
+  transform:translateY(102%);transition:transform .28s cubic-bezier(.4,0,.2,1);}
+#ai-sheet.open{transform:translateY(0);}
+@media(min-width:760px){#ai-sheet{left:auto;width:440px;right:18px;bottom:18px;
+  border-radius:18px;max-height:min(70vh,640px);}}
+.ai-head{display:flex;align-items:center;gap:10px;padding:13px 16px;
+  border-bottom:1px solid rgba(255,255,255,.08);flex:none;}
+.ai-title{font-size:14px;font-weight:800;color:#F4F1FB;}
+.ai-who{flex:1;font-size:11px;color:#8FDBFF;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.ai-x{background:none;border:0;color:rgba(255,255,255,.5);font-size:15px;cursor:pointer;padding:4px 6px;}
+.ai-log{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;
+  -webkit-overflow-scrolling:touch;}
+.ai-msg{max-width:88%;padding:9px 12px;border-radius:13px;font-size:13.5px;line-height:1.55;
+  white-space:normal;word-break:break-word;}
+.ai-u{align-self:flex-end;background:#1C90FF;color:#161111;font-weight:600;border-bottom-right-radius:4px;}
+.ai-a{align-self:flex-start;background:rgba(255,255,255,.055);color:#F4F1FB;border-bottom-left-radius:4px;}
+/* Bảng giáo án: cuộn ngang trong bong bóng chat chứ không đẩy rộng cả khung. */
+.ai-tb{display:block;overflow-x:auto;border-collapse:collapse;margin:8px 0;font-size:12px;
+  max-width:100%;}
+.ai-tb th,.ai-tb td{border:1px solid rgba(255,255,255,.12);padding:5px 8px;text-align:left;
+  white-space:nowrap;vertical-align:top;}
+.ai-tb th{color:#8FDBFF;font-weight:700;background:rgba(143,219,255,.07);}
+.ai-tb td{color:#F4F1FB;}
+.ai-tools{align-self:flex-start;font-size:10.5px;color:rgba(255,255,255,.38);padding-left:4px;}
+.ai-wait{align-self:flex-start;font-size:12px;color:#8FDBFF;}
+.ai-hi{color:var(--txt-muted,rgba(255,255,255,.55));font-size:13px;line-height:1.6;}
+.ai-hi p{margin:0 0 8px;}
+.ai-hi-note{font-size:12px;color:rgba(255,255,255,.4);}
+.ai-eg{display:flex;flex-direction:column;gap:6px;margin-top:12px;}
+.ai-eg button{text-align:left;padding:8px 11px;border-radius:9px;cursor:pointer;
+  border:1px solid rgba(143,219,255,.22);background:transparent;color:#8FDBFF;
+  font:inherit;font-size:12.5px;}
+.ai-eg button:hover{background:rgba(143,219,255,.08);}
+.ai-bar{display:flex;gap:8px;padding:12px 16px calc(12px + env(safe-area-inset-bottom));
+  border-top:1px solid rgba(255,255,255,.08);flex:none;}
+.ai-in{flex:1;min-width:0;padding:10px 13px;border-radius:999px;border:1px solid rgba(255,255,255,.12);
+  background:rgba(255,255,255,.04);color:#F4F1FB;font:inherit;font-size:16px;}
+.ai-in:focus{outline:none;border-color:#8FDBFF;}
+.ai-go{padding:10px 17px;border-radius:999px;border:0;background:#1C90FF;color:#161111;
+  font:inherit;font-size:13px;font-weight:700;cursor:pointer;flex:none;}
 /* ── Healthspan ─────────────────────────────────────────────────────── */
 .hs-top{display:flex;align-items:center;gap:18px;margin-bottom:18px;}
 .hs-ring{position:relative;width:124px;height:124px;flex:none;}

@@ -1,2 +1,4 @@
 .claude/
 public/
+firebase-debug.log
+firestore-debug.log
