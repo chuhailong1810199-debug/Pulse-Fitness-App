@@ -10,6 +10,9 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Pulse">
 <link rel="apple-touch-icon" href="/images/apple-touch-icon.png">
+<!-- SVG đứng trước: trình duyệt hiện đại lấy nó và nét ở mọi cỡ. PNG 32 là
+     đường lui cho Safari cũ và những chỗ chỉ đọc được ảnh raster. -->
+<link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32.png">
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
@@ -11772,7 +11775,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   <div class="splash-ring"></div>
   <div class="splash-ring"></div>
   <div class="splash-content">
-    <img src="images/pulse-mark.png" class="splash-logo" alt="Pulse">
+    <img src="images/pulse-mark.svg" class="splash-logo" alt="Pulse">
   </div>
 </div>
 
@@ -11836,7 +11839,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
         <div class="sp-body">
           <div class="sp-screen-content">
             <div class="sp-app-row">
-              <div class="sp-app-icon"><img src="images/pulse-mark.png" alt="Pulse"></div>
+              <div class="sp-app-icon"><img src="images/pulse-mark.svg" alt="Pulse"></div>
               <div class="sp-app-name">Pulse</div>
             </div>
           </div>
@@ -11909,7 +11912,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 
 <!-- PWA ONBOARDING SCREEN -->
 <div id="pwa-prompt-screen" class="pwa-screen hidden">
-  <div class="pwa-logo-wrap"><img src="images/pulse-logo.png" alt="Pulse"></div>
+  <div class="pwa-logo-wrap"><img src="images/pulse-logo.svg" alt="Pulse"></div>
   <div class="pwa-headline">Thêm Pulse vào màn hình chính</div>
   <div class="pwa-sub">Mở nhanh hơn · Không cần App Store · Như app thật</div>
   <div class="pwa-phone">
@@ -11923,7 +11926,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <div class="pwa-content">
       <div class="pwa-app-preview">
         <div class="pwa-icon-box">
-          <img src="images/pulse-mark.png" alt="Pulse" style="height:30px;width:auto;object-fit:contain;">
+          <img src="images/pulse-mark.svg" alt="Pulse" style="height:30px;width:auto;object-fit:contain;">
         </div>
         <div class="pwa-icon-label">Pulse</div>
       </div>
@@ -11969,7 +11972,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 <!-- LOGIN SCREEN -->
 <div id="login-screen" class="login-screen">
   <div class="login-logo" style="display:flex;align-items:center;justify-content:center;">
-    <img src="images/pulse-logo.png" alt="Pulse" style="height:72px;width:auto;object-fit:contain;">
+    <img src="images/pulse-logo.svg" alt="Pulse" style="height:72px;width:auto;object-fit:contain;">
   </div>
   <div class="login-card">
     <div class="login-title">Sign In</div>
@@ -12011,7 +12014,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     @keyframes onb-pulse{0%,100%{transform:scale(1);opacity:1;}50%{transform:scale(1.15);opacity:.7;}}
   </style>
   <div class="onb-wrap">
-    <div class="onb-logo"><img src="/images/pulse-mark.png" alt="Pulse"> Pulse</div>
+    <div class="onb-logo"><img src="/images/pulse-mark.svg" alt="Pulse"> Pulse</div>
     <div class="onb-title">Chào mừng! 👋</div>
     <div class="onb-sub">Cho Pulse biết thêm về bạn để tạo chương trình tập luyện cá nhân hóa.</div>
 
@@ -12143,7 +12146,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   <div class="header">
     <div class="user-bar">
       <div style="display:flex;align-items:center;gap:8px;flex:1">
-        <img src="images/pulse-mark.png" alt="Pulse" class="pulse-logo-anim" style="height:52px;width:auto;object-fit:contain;">
+        <img src="images/pulse-mark.svg" alt="Pulse" class="pulse-logo-anim" style="height:52px;width:auto;object-fit:contain;">
       </div>
       <span class="user-role-badge" id="role-badge"></span>
       <div class="user-avatar" id="user-avatar" title="Profile">?</div>

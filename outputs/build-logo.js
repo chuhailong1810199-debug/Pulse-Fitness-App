@@ -1,5 +1,15 @@
 #!/usr/bin/env node
 /**
+ * ĐÃ NGHỈ HƯU — 04/10/2026.
+ *
+ * Script này dựng bộ icon từ ảnh thiết kế logo CŨ (chữ P + nhịp tim tím), và
+ * nó cần images/pulse-mark.png, file đó đã bị xoá cùng lúc logo mới về.
+ * Logo mới (hành tinh + nhịp tim) do nhà thiết kế xuất sẵn đủ bộ: SVG cho
+ * web, PNG cho icon — không phải dựng lại gì nữa.
+ *
+ * Giữ lại vì phần giải mã/mã hoá PNG và cách xoay sắc màu trong này còn dùng
+ * được nếu sau này lại phải tự dựng icon. Chạy thẳng sẽ lỗi thiếu file.
+ *
  * Dựng bộ logo Pulse từ ảnh thiết kế gốc.
  *
  *   node outputs/build-logo.js <anh-goc.png>
