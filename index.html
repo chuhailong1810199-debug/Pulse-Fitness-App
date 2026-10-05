@@ -8034,8 +8034,9 @@ function schedFindRender(q) {
 // Nút tròn góc dưới phải, hiện trên mọi tab, CHỈ coach. Khung chat biết đang
 // mở hồ sơ khách nào nên hỏi "giáo án này nặng quá không" là nó hiểu ngay.
 //
-// Bản 1 chỉ đọc: trợ lý không ghi được gì vào dữ liệu. Giáo án nó soạn ra thì
-// coach tự dán vào — nói rõ chuyện đó trong câu chào, đừng để coach tưởng đã lưu.
+// Trợ lý KHÔNG tự ghi. Nó dựng đề xuất, app hiện thẻ có trước/sau, coach bấm
+// Đồng ý thì callable coachApply mới lưu. Câu chào phải nói đúng điều đó —
+// để coach tưởng đã lưu mà thật ra chưa, là kiểu hiểu nhầm tốn nhiều thời gian nhất.
 let _aiMsgs = [];          // [{role:'user'|'assistant', text}]
 let _aiBusy = false;
 
@@ -8062,7 +8063,9 @@ function aiMount() {
   // quét rồi thay chuỗi sẽ cắt xén câu trả lời theo cách không đoán trước được.
   sheet.setAttribute('data-i18n-skip', '');
   sheet.innerHTML =
-      '<div class="ai-head">'
+    // Vành sáng chạy quanh mép. Thuần trang trí nên ẩn khỏi máy đọc màn hình.
+      '<div class="ai-glow" aria-hidden="true"></div>'
+    + '<div class="ai-head">'
       + '<span class="ai-title">Trợ lý</span>'
       + '<span class="ai-who" id="ai-who"></span>'
       + '<button class="ai-x" type="button" aria-label="Đóng" onclick="aiClose()">✕</button>'
@@ -8140,13 +8143,14 @@ function aiPaint() {
   if (!_aiMsgs.length) {
     log.innerHTML = '<div class="ai-hi">'
       + '<p>Hỏi gì về khách và giáo án cũng được. Tao tự tra dữ liệu thật trong app.</p>'
-      + '<p class="ai-hi-note">Bản này <b>chỉ đọc</b> — giáo án tao soạn thì mày tự dán vào, '
-      + 'tao chưa ghi được gì.</p>'
-      + '<div class="ai-eg">'
-        + '<button type="button" onclick="aiAsk(this.textContent)">Giáo án của Kem có hợp trình độ không</button>'
-        + '<button type="button" onclick="aiAsk(this.textContent)">Khách nào lâu chưa tập nhất</button>'
-        + '<button type="button" onclick="aiAsk(this.textContent)">Gợi ý bài thay cho Romanian Deadlift</button>'
-      + '</div></div>';
+      + '<p class="ai-hi-note">Đẩy giáo án và tạo khách mới thì tao làm được, nhưng '
+      + '<b>không tự ghi</b> — tao dựng thẻ, mày bấm Đồng ý mới lưu.</p>'
+      + ['Giáo án của Kem có hợp trình độ không',
+          'Khách nào lâu chưa tập nhất',
+          'Gợi ý bài thay cho Romanian Deadlift']
+         .map((q) => '<button type="button" class="ai-eg" onclick="aiAsk(this.textContent)">'
+           + escHtml(q) + '</button>').join('')
+      + '</div>';
     return;
   }
   log.innerHTML = _aiMsgs.map((m, i) => {
@@ -8182,20 +8186,33 @@ function _aiCard(m, i) {
   const title = a.kind === 'apply_program' ? 'Đẩy giáo án' : 'Tạo khách mới';
   const body = rows.map(([k, v]) =>
     '<div class="ai-cf-r"><span>' + escHtml(k) + '</span><b>' + escHtml(v || '—') + '</b></div>').join('');
-  let foot;
-  if (m.state === 'xong') foot = '<div class="ai-cf-done">✓ Đã lưu</div>';
-  else if (m.state === 'huỷ') foot = '<div class="ai-cf-no">Đã bỏ qua</div>';
-  else if (m.state === 'đang') foot = '<div class="ai-cf-done">Đang lưu…</div>';
-  else if (m.state && m.state.indexOf('lỗi') === 0) foot = '<div class="ai-cf-no">' + escHtml(m.state) + '</div>';
-  else foot = '<div class="ai-cf-btns">'
+  // data-state lái màu, nhãn góc và việc ẩn nút — KHÔNG để CSS đoán qua sự có
+  // mặt của .ai-cf-done/.ai-cf-no. Đoán kiểu đó thì "Đang lưu…" ra xanh "Đã lưu",
+  // còn "Đã bỏ qua" ra đỏ "Lỗi" — hai thứ đều sai nghĩa.
+  let st = 'wait', foot;
+  if (m.state === 'xong') { st = 'done'; foot = '<div class="ai-cf-done">Đã lưu</div>'; }
+  else if (m.state === 'huỷ') { st = 'cancelled'; foot = '<div class="ai-cf-skip">Đã bỏ qua</div>'; }
+  else if (m.state === 'đang') { st = 'saving'; foot = ''; }
+  else if (m.state && m.state.indexOf('lỗi') === 0) {
+    st = 'error';
+    foot = '<div class="ai-cf-no">' + escHtml(m.state) + '</div>'
+      + '<div class="ai-cf-btns">'
+      + '<button type="button" class="ai-cf-yes" onclick="aiApprove(' + i + ')">Thử lại</button>'
+      + '<button type="button" class="ai-cf-cancel" onclick="aiReject(' + i + ')">Bỏ qua</button></div>';
+  } else {
+    foot = '<div class="ai-cf-btns">'
       + '<button type="button" class="ai-cf-yes" onclick="aiApprove(' + i + ')">Đồng ý</button>'
       + '<button type="button" class="ai-cf-cancel" onclick="aiReject(' + i + ')">Bỏ qua</button></div>';
-  return '<div class="ai-cf"><div class="ai-cf-h">' + escHtml(title) + '</div>' + body + foot + '</div>';
+  }
+  return '<div class="ai-cf" data-state="' + st + '"><div class="ai-cf-h">'
+    + escHtml(title) + '</div>' + body + foot + '</div>';
 }
 
 async function aiApprove(i) {
   const m = _aiMsgs[i];
-  if (!m || m.state !== 'chờ') return;
+  // Cho bấm lại sau khi lỗi: mạng rớt giữa chừng là chuyện thường, bắt coach
+  // hỏi lại trợ lý từ đầu chỉ để lấy lại đúng đề xuất cũ là vô lý.
+  if (!m || (m.state !== 'chờ' && String(m.state).indexOf('lỗi') !== 0)) return;
   m.state = 'đang'; aiPaint();
   try {
     const fn = firebase.app().functions('asia-southeast1')
@@ -8218,7 +8235,7 @@ async function aiApprove(i) {
 }
 function aiReject(i) {
   const m = _aiMsgs[i];
-  if (m && m.state === 'chờ') { m.state = 'huỷ'; aiPaint(); }
+  if (m && (m.state === 'chờ' || String(m.state).indexOf('lỗi') === 0)) { m.state = 'huỷ'; aiPaint(); }
 }
 
 function aiAsk(q) {
@@ -14731,72 +14748,443 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .rc-brief-why{display:block;margin-top:8px;font-size:12.5px;color:var(--rc-muted);line-height:1.55;}
 .rc-brief-cav{margin:14px 0 0;font-size:12px;line-height:1.55;color:var(--rc-muted);}
 .rc-brief-hint{margin:0;font-size:13px;line-height:1.55;color:var(--rc-muted);}
-/* ── Trợ lý coach ───────────────────────────────────────────────────── */
-.ai-fab-hidden,#ai-fab.hidden{opacity:0;pointer-events:none;transform:scale(.8);}
-#ai-fab{position:fixed;right:18px;bottom:calc(18px + env(safe-area-inset-bottom));z-index:90;
-  width:52px;height:52px;border-radius:50%;border:1px solid rgba(143,219,255,.4);
-  background:#1C90FF;color:#161111;display:flex;align-items:center;justify-content:center;
-  cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.45);
-  transition:opacity .2s,transform .2s;}
-#ai-fab:hover{transform:scale(1.06);}
-#ai-sheet{position:fixed;right:0;bottom:0;left:0;z-index:95;display:flex;flex-direction:column;
-  max-height:min(76vh,620px);background:#1B1717;border-top:1px solid rgba(255,255,255,.1);
-  border-radius:18px 18px 0 0;box-shadow:0 -14px 40px rgba(0,0,0,.6);
-  transform:translateY(102%);transition:transform .28s cubic-bezier(.4,0,.2,1);}
-#ai-sheet.open{transform:translateY(0);}
-@media(min-width:760px){#ai-sheet{left:auto;width:440px;right:18px;bottom:18px;
-  border-radius:18px;max-height:min(70vh,640px);}}
-.ai-head{display:flex;align-items:center;gap:10px;padding:13px 16px;
-  border-bottom:1px solid rgba(255,255,255,.08);flex:none;}
-.ai-title{font-size:14px;font-weight:800;color:#F4F1FB;}
-.ai-who{flex:1;font-size:11px;color:#8FDBFF;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.ai-x{background:none;border:0;color:rgba(255,255,255,.5);font-size:15px;cursor:pointer;padding:4px 6px;}
-.ai-log{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;
-  -webkit-overflow-scrolling:touch;}
-.ai-msg{max-width:88%;padding:9px 12px;border-radius:13px;font-size:13.5px;line-height:1.55;
-  white-space:normal;word-break:break-word;}
-.ai-u{align-self:flex-end;background:#1C90FF;color:#161111;font-weight:600;border-bottom-right-radius:4px;}
-.ai-a{align-self:flex-start;background:rgba(255,255,255,.055);color:#F4F1FB;border-bottom-left-radius:4px;}
-/* Bảng giáo án: cuộn ngang trong bong bóng chat chứ không đẩy rộng cả khung. */
-.ai-tb{display:block;overflow-x:auto;border-collapse:collapse;margin:8px 0;font-size:12px;
-  max-width:100%;}
-.ai-tb th,.ai-tb td{border:1px solid rgba(255,255,255,.12);padding:5px 8px;text-align:left;
-  white-space:nowrap;vertical-align:top;}
-.ai-tb th{color:#8FDBFF;font-weight:700;background:rgba(143,219,255,.07);}
-.ai-tb td{color:#F4F1FB;}
-.ai-tools{align-self:flex-start;font-size:10.5px;color:rgba(255,255,255,.38);padding-left:4px;}
-.ai-wait{align-self:flex-start;font-size:12px;color:#8FDBFF;}
-.ai-hi{color:var(--txt-muted,rgba(255,255,255,.55));font-size:13px;line-height:1.6;}
-.ai-hi p{margin:0 0 8px;}
-.ai-hi-note{font-size:12px;color:rgba(255,255,255,.4);}
-.ai-eg{display:flex;flex-direction:column;gap:6px;margin-top:12px;}
-.ai-eg button{text-align:left;padding:8px 11px;border-radius:9px;cursor:pointer;
-  border:1px solid rgba(143,219,255,.22);background:transparent;color:#8FDBFF;
-  font:inherit;font-size:12.5px;}
-.ai-eg button:hover{background:rgba(143,219,255,.08);}
-.ai-bar{display:flex;gap:8px;padding:12px 16px calc(12px + env(safe-area-inset-bottom));
-  border-top:1px solid rgba(255,255,255,.08);flex:none;}
-.ai-in{flex:1;min-width:0;padding:10px 13px;border-radius:999px;border:1px solid rgba(255,255,255,.12);
-  background:rgba(255,255,255,.04);color:#F4F1FB;font:inherit;font-size:16px;}
-.ai-in:focus{outline:none;border-color:#8FDBFF;}
-.ai-go{padding:10px 17px;border-radius:999px;border:0;background:#1C90FF;color:#161111;
-  font:inherit;font-size:13px;font-weight:700;cursor:pointer;flex:none;}
-/* Thẻ duyệt: trợ lý đề xuất, coach bấm mới ghi. Hiện rõ trước/sau chứ không
-   chỉ nói "đã cập nhật giáo án" — đẩy nhầm là mất cả kế hoạch tập của một người. */
-.ai-cf{align-self:stretch;border:1px solid rgba(143,219,255,.3);border-radius:12px;
-  background:rgba(143,219,255,.05);padding:11px 13px;font-size:12.5px;}
-.ai-cf-h{font-size:12px;font-weight:800;color:#8FDBFF;letter-spacing:.04em;
-  text-transform:uppercase;margin-bottom:8px;}
-.ai-cf-r{display:flex;gap:10px;justify-content:space-between;padding:3px 0;line-height:1.45;}
-.ai-cf-r span{color:var(--txt-muted,rgba(255,255,255,.5));flex:none;}
-.ai-cf-r b{color:#F4F1FB;font-weight:600;text-align:right;word-break:break-word;}
-.ai-cf-btns{display:flex;gap:8px;margin-top:11px;}
-.ai-cf-yes,.ai-cf-cancel{flex:1;padding:8px 0;border-radius:9px;font:inherit;font-size:12.5px;
-  font-weight:700;cursor:pointer;border:1px solid transparent;}
-.ai-cf-yes{background:#7ED9A0;color:#161111;}
-.ai-cf-cancel{background:transparent;color:rgba(255,255,255,.55);border-color:rgba(255,255,255,.18);}
-.ai-cf-done{margin-top:9px;font-size:12px;font-weight:700;color:#7ED9A0;}
-.ai-cf-no{margin-top:9px;font-size:12px;color:rgba(255,255,255,.42);}
+/* ═══════════════════════════════════════════════════════════════
+   PULSE — Trợ lý AI  (#ai-fab, #ai-sheet)
+   Thay toàn bộ CSS cũ của khung trợ lý bằng khối này.
+   Cần thêm 1 phần tử trang trí: <div class="ai-glow" aria-hidden="true"></div>
+   làm con ĐẦU TIÊN của #ai-sheet.
+   ═══════════════════════════════════════════════════════════════ */
+
+#ai-fab, #ai-sheet{
+  /* chỉ là bí danh cho token sẵn có của app; fallback để file chạy độc lập */
+  --ai-bg1: var(--bg-1, #161111);
+  --ai-bg2: var(--bg-2, #211E1D);
+  --ai-acc: var(--accent, #8FDBFF);
+  --ai-acc2: var(--accent-strong, #1C90FF);
+  --ai-on: var(--on-accent, #161111);
+  --ai-good: var(--good, #7ED9A0);
+  --ai-bad: var(--danger, #EE5A4F);
+  --ai-txt: var(--txt, #fff);
+  --ai-mut: var(--txt-muted, rgba(255,255,255,.55));
+  --ai-line: var(--line, rgba(255,255,255,.12));
+  /* đường cong kiểu bottom-sheet iOS: lao nhanh rồi hãm rất mềm → cảm giác "chất lỏng" */
+  --ai-ease: cubic-bezier(.32,.72,0,1);
+  font-family: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ── Nút nổi ─────────────────────────────────────────────────── */
+#ai-fab{
+  position: fixed; z-index: 900;
+  right: 16px; bottom: calc(16px + env(safe-area-inset-bottom));
+  width: 56px; height: 56px; border-radius: 50%;
+  display: grid; place-items: center;
+  color: var(--ai-txt); font-size: 15px; font-weight: 800;
+  cursor: pointer; touch-action: manipulation;
+  /* viền chuyển màu TĨNH, không tốn gì: lớp trong tô đến padding-box, lớp conic lộ ra ở phần border */
+  border: 1.5px solid transparent;
+  background:
+    linear-gradient(var(--ai-bg2), var(--ai-bg2)) padding-box,
+    conic-gradient(from 200deg, var(--ai-acc), var(--ai-acc2), var(--ai-good), var(--ai-acc)) border-box;
+  /* không dùng backdrop-filter ở đây: nút luôn hiện, blur sẽ tính lại mỗi lần app cuộn bên dưới */
+  box-shadow: 0 10px 28px -8px rgba(0,0,0,.65), 0 0 22px -6px rgba(143,219,255,.35);
+  transition: transform .35s var(--ai-ease), opacity .2s ease;
+}
+#ai-fab:active{ transform: scale(.92); }
+#ai-fab:focus-visible{ outline: 2px solid var(--ai-acc); outline-offset: 3px; }
+body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-events: none; }
+
+/* ── Khung ───────────────────────────────────────────────────── */
+#ai-sheet{
+  position: fixed; z-index: 1000;
+  left: 8px; right: 8px;
+  bottom: calc(8px + env(safe-area-inset-bottom));
+  height: 78vh;
+  height: min(78dvh, 680px);
+  display: flex; flex-direction: column;
+  border-radius: 28px; overflow: hidden; isolation: isolate;
+  color: var(--ai-txt);
+  /* kính mờ: --bg-2 trong suốt 74% + blur; vệt sáng tĩnh ở đỉnh tạo chiều sâu */
+  background:
+    radial-gradient(120% 55% at 50% 0%, rgba(143,219,255,.10), transparent 62%),
+    rgba(33,30,29,.74);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  backdrop-filter: blur(28px) saturate(160%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.08),
+    0 30px 80px -24px rgba(0,0,0,.75),
+    0 0 60px -20px rgba(143,219,255,.28);
+  /* trạng thái đóng: visibility:hidden sau khi trượt xong → blur và hiệu ứng thôi tốn tài nguyên */
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transform: translateY(28px) scale(.96);
+  transform-origin: 50% 100%;
+  transition: transform .28s cubic-bezier(.4,0,1,1), opacity .2s ease, visibility 0s linear .28s;
+}
+#ai-sheet.open{
+  opacity: 1; visibility: visible; pointer-events: auto;
+  transform: none;
+  transition: transform .55s var(--ai-ease), opacity .25s ease, visibility 0s;
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))){
+  #ai-sheet{
+    background:
+      radial-gradient(120% 55% at 50% 0%, rgba(143,219,255,.10), transparent 62%),
+      var(--ai-bg2);
+  }
+}
+
+/* ── Viền sáng chạy quanh mép ───────────────────────────────────
+   .ai-glow phủ kín khung nhưng mask đục lỗ giữa, chỉ chừa vành 2px.
+   ::before là một dải conic-gradient vuông, to hơn khung, CHỈ xoay bằng transform:
+   được vẽ một lần rồi GPU xoay → không vẽ lại mỗi khung hình. */
+#ai-sheet .ai-glow{
+  position: absolute; inset: 0; z-index: 3; pointer-events: none;
+  border-radius: inherit; padding: 2px; overflow: hidden;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  opacity: .55;
+  transition: opacity .6s ease;
+}
+#ai-sheet .ai-glow::before{
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: 250%; aspect-ratio: 1;               /* cạnh vuông ≥ đường chéo khung để không lộ góc khi xoay */
+  background: conic-gradient(from 0deg,
+    transparent 0deg,
+    var(--ai-acc) 55deg, var(--ai-acc2) 115deg, var(--ai-good) 175deg,
+    transparent 235deg, transparent 280deg,
+    rgba(143,219,255,.55) 325deg, transparent 360deg);
+  transform: translate(-50%,-50%);
+  animation: ai-spin 9s linear infinite;
+  will-change: transform;
+}
+#ai-sheet:not(.open) .ai-glow::before{ animation-play-state: paused; }
+/* lúc trợ lý đang tra dữ liệu, viền sáng hẳn lên — thay cho thanh loading */
+#ai-sheet:has(.ai-wait) .ai-glow{ opacity: 1; }
+
+/* ── Thanh đầu ───────────────────────────────────────────────── */
+#ai-sheet .ai-head{
+  position: relative; z-index: 1; flex: none;
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 12px 6px 20px;
+}
+#ai-sheet .ai-title{ flex: none; margin: 0; font-size: 17px; font-weight: 800; letter-spacing: -.01em; }
+#ai-sheet .ai-who{
+  flex: 1 1 auto; min-width: 0; display: block;
+  font-size: 12.5px; font-weight: 600; color: var(--ai-mut);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#ai-sheet .ai-who:empty{ display: none; }
+#ai-sheet .ai-who::before{
+  content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; vertical-align: 2px;
+  border-radius: 50%; background: var(--ai-acc); box-shadow: 0 0 8px var(--ai-acc);
+}
+#ai-sheet .ai-x{
+  flex: none; margin-left: auto;
+  width: 44px; height: 44px; border-radius: 50%; border: 0;
+  display: grid; place-items: center;
+  background: rgba(255,255,255,.07); color: var(--ai-txt);
+  font: inherit; font-size: 18px; line-height: 1;
+  cursor: pointer; touch-action: manipulation;
+  transition: background .2s ease;
+}
+#ai-sheet .ai-x:hover{ background: rgba(255,255,255,.12); }
+#ai-sheet .ai-x:focus-visible{ outline: 2px solid var(--ai-acc); outline-offset: 2px; }
+
+/* ── Hội thoại ───────────────────────────────────────────────── */
+#ai-sheet .ai-log{
+  position: relative; z-index: 1;
+  flex: 1 1 auto; min-height: 0;
+  overflow-y: auto; overflow-x: hidden;
+  overscroll-behavior: contain;               /* cuộn hết log không kéo app phía sau chạy theo */
+  -webkit-overflow-scrolling: touch;
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 8px 18px 16px;
+  scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.18) transparent;
+}
+/* log là cột flex cao cố định: không cho con nào co lại, để log cuộn thay vì bóp méo thẻ duyệt
+   (.ai-cf có overflow:hidden nên min-height tự về 0 và bị nén mất nút nếu để co) */
+#ai-sheet .ai-log > *{ flex-shrink: 0; }
+#ai-sheet .ai-tb{ flex-shrink: 0; }
+/* chỉ phần tử mới nhất trồi lên; nếu JS dựng lại cả log thì lịch sử cũ không nhảy lại */
+#ai-sheet .ai-log > :last-child{ animation: ai-rise .42s var(--ai-ease) both; }
+
+#ai-sheet .ai-msg{
+  max-width: 100%;
+  font-size: 15px; line-height: 1.55;
+  overflow-wrap: anywhere; text-wrap: pretty;
+}
+#ai-sheet .ai-msg p{ margin: 0 0 .6em; }
+#ai-sheet .ai-msg > :last-child{ margin-bottom: 0; }
+#ai-sheet .ai-msg ul, #ai-sheet .ai-msg ol{ margin: .2em 0 .6em; padding-left: 1.25em; }
+#ai-sheet .ai-msg strong, #ai-sheet .ai-msg b{ font-weight: 700; }
+/* coach: viên nhạt bên phải */
+#ai-sheet .ai-msg.ai-u{
+  align-self: flex-end; max-width: 84%;
+  padding: 10px 14px;
+  border-radius: 20px 20px 6px 20px;
+  background: rgba(143,219,255,.16);
+}
+/* trợ lý: KHÔNG có bong bóng — chữ nằm thẳng trên kính. Nhờ vậy thẻ duyệt (nền đặc, có viền) nổi hẳn lên. */
+#ai-sheet .ai-msg.ai-a{ align-self: stretch; padding: 2px; }
+
+#ai-sheet .ai-tools{
+  align-self: flex-start; margin: -4px 0 -2px 2px;
+  font-size: 12px; font-weight: 600; color: var(--ai-mut);
+}
+#ai-sheet .ai-tools::before{ content: "↳ "; }
+
+#ai-sheet .ai-wait{
+  align-self: flex-start;
+  display: inline-flex; align-items: center; gap: 10px; padding: 2px;
+  font-size: 14px; font-weight: 600; color: var(--ai-mut);
+  animation: ai-breathe 1.6s ease-in-out infinite;
+}
+#ai-sheet .ai-log > .ai-wait{ animation: ai-rise .42s var(--ai-ease) both, ai-breathe 1.6s ease-in-out .42s infinite; }
+#ai-sheet .ai-wait::before{
+  content: ""; flex: none; width: 14px; height: 14px; border-radius: 50%;
+  background: conic-gradient(var(--ai-acc), var(--ai-acc2), var(--ai-good), var(--ai-acc));
+  animation: ai-turn 1.1s linear infinite;
+}
+
+/* bảng giáo án: tự cuộn ngang trong chính nó (dùng được dù .ai-tb là <table> hay thẻ bọc) */
+#ai-sheet .ai-tb{
+  display: block; max-width: 100%; margin: 8px 0;
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  border-collapse: collapse; border-radius: 12px;
+  background: rgba(255,255,255,.04);
+  font-size: 13px; font-variant-numeric: tabular-nums;
+}
+#ai-sheet .ai-tb table{ border-collapse: collapse; min-width: 100%; }
+#ai-sheet .ai-tb th, #ai-sheet .ai-tb td{
+  padding: 8px 12px; text-align: left; white-space: nowrap;
+  border-bottom: 1px solid var(--ai-line);
+}
+#ai-sheet .ai-tb th{ font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ai-mut); }
+#ai-sheet .ai-tb tr:last-child td{ border-bottom: 0; }
+
+/* ── Màn chào ─────────────────────────────────────────────────── */
+#ai-sheet .ai-hi{
+  margin-top: auto;                           /* dồn xuống gần ô nhập, như một câu hỏi đang chờ */
+  display: flex; flex-direction: column; gap: 8px;
+  font-size: 24px; font-weight: 800; letter-spacing: -.02em; line-height: 1.15;
+}
+#ai-sheet .ai-hi-note{
+  margin: 0 0 6px;
+  font-size: 14.5px; font-weight: 500; letter-spacing: 0; line-height: 1.5; color: var(--ai-mut);
+}
+#ai-sheet .ai-eg{
+  display: flex; align-items: center; width: 100%; min-height: 48px;
+  padding: 12px 16px; border-radius: 16px;
+  border: 1px solid var(--ai-line); background: rgba(255,255,255,.05);
+  color: var(--ai-txt); font: inherit; font-size: 15px; font-weight: 600; letter-spacing: 0; line-height: 1.35;
+  text-align: left; cursor: pointer; touch-action: manipulation;
+  transition: background .2s ease, border-color .2s ease, transform .25s var(--ai-ease);
+}
+#ai-sheet .ai-eg:hover{ background: rgba(143,219,255,.10); border-color: rgba(143,219,255,.35); }
+#ai-sheet .ai-eg:active{ transform: scale(.98); }
+#ai-sheet .ai-eg:focus-visible{ outline: 2px solid var(--ai-acc); outline-offset: 2px; }
+
+/* ── THẺ DUYỆT ────────────────────────────────────────────────────
+   Khác bong bóng ở mọi mặt: nền ĐẶC (không phải kính), viền 1.5px + quầng 4px,
+   rộng hết dòng, có nhãn trạng thái ở góc phải.
+   Trạng thái chỉ đổi biến (--cf…), không đổi bố cục → không giật khi chuyển. */
+#ai-sheet .ai-cf{
+  --cf: var(--ai-acc);
+  --cf-halo: rgba(143,219,255,.12);
+  --cf-label: "Chờ duyệt";
+  position: relative; overflow: hidden; align-self: stretch;
+  padding: 14px 16px 16px; border-radius: 18px;
+  background: var(--ai-bg2);
+  border: 1.5px solid var(--cf);
+  box-shadow: 0 0 0 4px var(--cf-halo), 0 14px 34px -14px rgba(0,0,0,.7);
+  transition: border-color .3s ease, box-shadow .3s ease;
+}
+/* ĐANG LƯU — đặt data-state="saving", hoặc tự bật khi JS disable nút Đồng ý */
+#ai-sheet .ai-cf[data-state="saving"],
+#ai-sheet .ai-cf:not(:has(.ai-cf-done, .ai-cf-no)):has(.ai-cf-yes:disabled){
+  --cf: rgba(255,255,255,.55);
+  --cf-halo: rgba(255,255,255,.05);
+  --cf-label: "Đang lưu…";
+  --cf-bar: 1; --cf-play: running; --cf-dim: .6;
+}
+/* ĐÃ LƯU — data-state="done", hoặc khi có dòng .ai-cf-done */
+#ai-sheet .ai-cf[data-state="done"],
+#ai-sheet .ai-cf:has(.ai-cf-done){
+  --cf: var(--ai-good);
+  --cf-halo: rgba(126,217,160,.12);
+  --cf-label: "Đã lưu";
+  --cf-btns: none;
+}
+/* LỖI — data-state="error", hoặc khi có dòng .ai-cf-no. Nút vẫn giữ để thử lại. */
+#ai-sheet .ai-cf[data-state="error"],
+#ai-sheet .ai-cf:has(.ai-cf-no){
+  --cf: var(--ai-bad);
+  --cf-halo: rgba(238,90,79,.14);
+  --cf-label: "Lỗi";
+}
+
+/* vạch quét 2px ở mép trên khi đang lưu; mặc định tạm dừng để không chạy ngầm */
+#ai-sheet .ai-cf::after{
+  content: ""; position: absolute; left: 0; top: 0; width: 40%; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--ai-acc), transparent);
+  opacity: var(--cf-bar, 0);
+  animation: ai-scan 1.2s var(--ai-ease) infinite;
+  animation-play-state: var(--cf-play, paused);
+}
+
+#ai-sheet .ai-cf-h{
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 6px;
+  font-size: 15px; font-weight: 800; line-height: 1.3;
+}
+#ai-sheet .ai-cf-h::after{
+  content: var(--cf-label);
+  flex: none; padding: 4px 9px; border-radius: 999px;
+  border: 1px solid currentColor; background: var(--cf-halo); color: var(--cf);
+  font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+}
+
+#ai-sheet .ai-cf-r{
+  display: grid; grid-template-columns: minmax(84px, 32%) minmax(0, 1fr);
+  gap: 12px; align-items: baseline;
+  padding: 9px 0; border-top: 1px solid var(--ai-line);
+  font-size: 14.5px; line-height: 1.45;
+  opacity: var(--cf-dim, 1); transition: opacity .3s ease;
+}
+#ai-sheet .ai-cf-r > :first-child{
+  font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--ai-mut);
+}
+#ai-sheet .ai-cf-r > :last-child{ font-weight: 600; color: var(--ai-txt); overflow-wrap: anywhere; }
+#ai-sheet .ai-cf-r > :only-child{ grid-column: 1 / -1; }
+
+/* Hai nút bằng hệt nhau về kích thước — Đồng ý không có lợi thế vị trí hay diện tích */
+#ai-sheet .ai-cf-btns{
+  display: var(--cf-btns, grid); grid-template-columns: 1fr 1fr; gap: 10px;
+  margin-top: 14px;
+}
+#ai-sheet .ai-cf-yes, #ai-sheet .ai-cf-cancel{
+  min-height: 48px; padding: 12px; border-radius: 14px;
+  font: inherit; font-size: 15px; font-weight: 800;
+  cursor: pointer; touch-action: manipulation;
+  transition: transform .15s ease, opacity .2s ease, background .2s ease;
+}
+#ai-sheet .ai-cf-yes{
+  border: 1.5px solid var(--ai-acc2);
+  background: var(--ai-acc2); color: var(--ai-on);
+  /* chống bấm nhầm: 0,7s đầu sau khi thẻ hiện, nút chưa nhận chạm (ngón tay đang cuộn/gõ có thể đáp trúng) */
+  animation: ai-arm .7s step-end both;
+}
+#ai-sheet .ai-cf-cancel{
+  border: 1.5px solid rgba(255,255,255,.28);
+  background: transparent; color: var(--ai-txt);
+}
+#ai-sheet .ai-cf-cancel:hover{ background: rgba(255,255,255,.06); }
+#ai-sheet .ai-cf-yes:active, #ai-sheet .ai-cf-cancel:active{ transform: scale(.97); }
+#ai-sheet .ai-cf-yes:focus-visible, #ai-sheet .ai-cf-cancel:focus-visible{ outline: 2px solid var(--ai-acc); outline-offset: 2px; }
+#ai-sheet .ai-cf-yes:disabled, #ai-sheet .ai-cf-cancel:disabled{ opacity: .45; cursor: progress; pointer-events: none; }
+
+#ai-sheet .ai-cf-done, #ai-sheet .ai-cf-no{
+  display: flex; align-items: center; gap: 9px; margin-top: 12px;
+  font-size: 14px; font-weight: 700; line-height: 1.4;
+}
+#ai-sheet .ai-cf-done{ color: var(--ai-good); }
+#ai-sheet .ai-cf-no{ color: var(--ai-bad); }
+#ai-sheet .ai-cf-done::before, #ai-sheet .ai-cf-no::before{
+  flex: none; width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 12px; font-weight: 900; color: var(--ai-bg2);
+}
+#ai-sheet .ai-cf-done::before{ content: "✓"; background: var(--ai-good); }
+#ai-sheet .ai-cf-no::before{ content: "!"; background: var(--ai-bad); }
+
+/* ── Ô nhập ───────────────────────────────────────────────────── */
+#ai-sheet .ai-bar{
+  position: relative; z-index: 1; flex: none;
+  display: flex; align-items: flex-end; gap: 8px;
+  padding: 8px 10px 10px;
+}
+#ai-sheet .ai-in{
+  flex: 1 1 auto; min-width: 0; min-height: 46px; max-height: 132px;
+  padding: 12px 16px; border-radius: 23px;
+  border: 1px solid rgba(255,255,255,.10); background: rgba(255,255,255,.07);
+  color: var(--ai-txt);
+  font: inherit; font-size: 16px;             /* dưới 16px Safari iOS sẽ tự phóng to trang khi chạm vào */
+  line-height: 1.35; resize: none;
+  outline: none; -webkit-appearance: none; appearance: none;
+  transition: border-color .2s ease, background .2s ease, box-shadow .2s ease;
+}
+#ai-sheet .ai-in::placeholder{ color: var(--ai-mut); opacity: 1; }
+#ai-sheet .ai-in:focus{
+  border-color: rgba(143,219,255,.6); background: rgba(255,255,255,.09);
+  box-shadow: 0 0 0 3px rgba(143,219,255,.15);
+}
+#ai-sheet .ai-go{
+  flex: none; min-width: 46px; height: 46px; padding: 0 14px; border-radius: 23px; border: 0;
+  background: var(--ai-acc2); color: var(--ai-on);
+  font: inherit; font-size: 15px; font-weight: 800;
+  cursor: pointer; touch-action: manipulation;
+  transition: transform .15s ease, opacity .2s ease;
+}
+#ai-sheet .ai-go:active{ transform: scale(.94); }
+#ai-sheet .ai-go:focus-visible{ outline: 2px solid var(--ai-acc); outline-offset: 2px; }
+#ai-sheet .ai-go:disabled{ opacity: .4; cursor: default; }
+
+/* ── Desktop ──────────────────────────────────────────────────── */
+@media (min-width: 760px){
+  #ai-fab{ right: 24px; bottom: calc(24px + env(safe-area-inset-bottom)); }
+  #ai-sheet{
+    left: auto; right: 24px;
+    bottom: calc(24px + env(safe-area-inset-bottom));
+    width: 400px;
+    height: min(640px, calc(100vh - 48px));
+    border-radius: 26px;
+    transform-origin: 100% 100%;
+  }
+}
+
+/* ── Keyframes ────────────────────────────────────────────────── */
+@keyframes ai-spin{ to{ transform: translate(-50%,-50%) rotate(1turn); } }
+@keyframes ai-turn{ to{ transform: rotate(1turn); } }
+@keyframes ai-rise{ from{ opacity: 0; transform: translateY(8px) scale(.98); } }
+@keyframes ai-breathe{ 50%{ opacity: .55; } }
+@keyframes ai-scan{ from{ transform: translateX(-100%); } to{ transform: translateX(250%); } }
+@keyframes ai-arm{ from{ pointer-events: none; opacity: .5; } }
+
+/* ── Giảm chuyển động ─────────────────────────────────────────────
+   Tắt mọi thứ trượt/xoay/nhấp nháy. Giữ lại ai-arm (khoá chạm 0,7s) vì đó là
+   chốt an toàn, không phải chuyển động. */
+@media (prefers-reduced-motion: reduce){
+  #ai-sheet, #ai-sheet.open{ transform: none; transition: opacity .15s linear, visibility 0s linear; }
+  #ai-fab{ transition: opacity .15s linear; }
+  #ai-fab:active, body:has(#ai-sheet.open) #ai-fab{ transform: none; }
+  #ai-sheet .ai-glow::before{ animation: none; transform: translate(-50%,-50%) rotate(35deg); }
+  #ai-sheet .ai-log > :last-child,
+  #ai-sheet .ai-log > .ai-wait,
+  #ai-sheet .ai-wait,
+  #ai-sheet .ai-wait::before{ animation: none; }
+  #ai-sheet .ai-cf::after{ animation: none; width: 100%; background: var(--ai-acc); }
+  #ai-sheet .ai-eg:active,
+  #ai-sheet .ai-cf-yes:active,
+  #ai-sheet .ai-cf-cancel:active,
+  #ai-sheet .ai-go:active{ transform: none; }
+  #ai-sheet .ai-glow, #ai-sheet .ai-cf, #ai-sheet .ai-cf-r{ transition: none; }
+}
+/* ── Đã bỏ qua ────────────────────────────────────────────────────
+   Thiếu trong bản thiết kế vì prompt của tao kể bốn trạng thái, app có năm.
+   Bỏ qua KHÔNG phải lỗi: xám và lặng, không dùng màu đỏ của --danger. */
+#ai-sheet .ai-cf[data-state="cancelled"]{
+  --cf: rgba(255,255,255,.3);
+  --cf-halo: rgba(255,255,255,.04);
+  --cf-label: "Đã bỏ qua";
+  --cf-btns: none;
+  --cf-dim: .5;
+}
+#ai-sheet .ai-cf[data-state="cancelled"] .ai-cf-skip{
+  display:flex; align-items:center; gap:9px; margin-top:12px;
+  font-size:14px; font-weight:600; color:var(--ai-mut);
+}
+
 /* ── Healthspan ─────────────────────────────────────────────────────── */
 .hs-top{display:flex;align-items:center;gap:18px;margin-bottom:18px;}
 .hs-ring{position:relative;width:124px;height:124px;flex:none;}
