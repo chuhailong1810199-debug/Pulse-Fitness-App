@@ -15197,6 +15197,67 @@ body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-even
   font-size:14px; font-weight:600; color:var(--ai-mut);
 }
 
+/* ══ CẢM GIÁC CHẠM TOÀN APP ═══════════════════════════════════════════
+   Lấy đúng mấy thứ làm bộ chọn khách bấm thấy đã, rải ra cả app.
+
+   Chia bốn lớp theo mức rủi ro, KHÔNG quét bằng dấu sao:
+     1-2  không đụng gì tới bố cục  -> rải rộng
+     3    có transform              -> CHỈ trên <button> và vài lớp đã biết
+     4    tắt sạch khi hệ thống xin giảm chuyển động
+
+   Vì sao lớp 3 phải hẹp: transform biến phần tử thành khung chứa mới cho mọi
+   con position:fixed bên trong, nên quét bừa là popup nhảy lung tung. Đã dò
+   24 selector position:fixed của app, không cái nào nằm trong <button> — nên
+   giới hạn ở button là an toàn, còn mở rộng ra div thì phải dò lại.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Nền: bỏ vệt xám khi chạm, bỏ độ trễ 300ms ────────────────────── */
+button, [role="button"], [onclick], label, summary,
+a, select, input, textarea,
+.nav-tab, .day-tab, .exercise-node{
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* ── 2. Vòng lấy nét bàn phím ─────────────────────────────────────────
+   :focus-visible chỉ hiện khi đi bằng bàn phím, không hiện khi bấm chuột —
+   nên không làm xấu lúc dùng tay. outline không chiếm chỗ nên không xô bố cục. */
+button:focus-visible, [role="button"]:focus-visible, [onclick]:focus-visible,
+a:focus-visible, select:focus-visible, textarea:focus-visible,
+input:focus-visible, .nav-tab:focus-visible, .day-tab:focus-visible{
+  outline: 2px solid var(--accent, #8FDBFF);
+  outline-offset: 2px;
+  border-radius: inherit;
+}
+
+/* ── 3. Phản hồi khi bấm ──────────────────────────────────────────────
+   Nhún nhẹ rồi bật lại. .96 là đủ thấy mà không giật.
+   :not(:disabled) để nút đang khoá không giả vờ bấm được. */
+button, .nav-tab, .day-tab{
+  transition: transform .13s cubic-bezier(.4,0,.2,1),
+              background-color .16s ease, border-color .16s ease, color .16s ease;
+}
+button:not(:disabled):active,
+.nav-tab:active, .day-tab:active{ transform: scale(.96); }
+/* Nút trải hết chiều ngang mà thu nhỏ cả khối thì trông như trang bị rung.
+   Mấy nút này chỉ mờ đi. */
+.finish-btn:not(:disabled):active,
+.onb-submit:not(:disabled):active,
+.cp-trigger:active{ transform: none; opacity: .88; }
+
+/* ── 4. Rê chuột: đổi trạng thái có đà, không nhảy phắt ───────────────
+   Chỉ trên máy có chuột thật. Trên cảm ứng, :hover dính lại sau khi chạm. */
+@media (hover: hover) and (pointer: fine){
+  .nav-tab:not(.active):hover{ color: var(--txt, #fff); background: rgba(255,255,255,.05); }
+  .exercise-node:hover{ border-color: rgba(143,219,255,.3); }
+  .dcs-chip:hover{ background: rgba(255,255,255,.07); }
+}
+
+@media (prefers-reduced-motion: reduce){
+  button, .nav-tab, .day-tab{ transition: none; }
+  button:not(:disabled):active, .nav-tab:active, .day-tab:active{ transform: none; }
+}
+
 /* ══ BỘ CHỌN KHÁCH — thay <select> gốc ══════════════════════════════ */
 /* ═══ Pulse — client picker (replaces the native <select id="client-select">) ═══
    Paste after the app's own CSS. Uses existing tokens with fallbacks.
