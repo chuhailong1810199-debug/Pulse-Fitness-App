@@ -15187,6 +15187,181 @@ body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-even
   font-size:14px; font-weight:600; color:var(--ai-mut);
 }
 
+/* ══ BỘ CHỌN KHÁCH — thay <select> gốc ══════════════════════════════ */
+/* ═══ Pulse — client picker (replaces the native <select id="client-select">) ═══
+   Paste after the app's own CSS. Uses existing tokens with fallbacks.
+   Panel background is --bg-1 on purpose: red reason text stays ≥4.5:1 on the hovered row,
+   which it does not on --bg-2. Selection is shown with a check + accent ring, not a tint,
+   for the same reason. */
+
+.cp, .cp-panel, .cp-scrim{
+  --cp-bg: var(--bg-1, #161111);
+  --cp-bg2: var(--bg-2, #211E1D);
+  --cp-surface: var(--surface, rgba(255,255,255,.06));
+  --cp-accent: var(--accent, #8FDBFF);
+  --cp-on: var(--on-accent, #161111);
+  --cp-line: var(--line, rgba(255,255,255,.12));
+  --cp-txt: var(--txt, #fff);
+  --cp-muted: var(--txt-muted, rgba(255,255,255,.55));
+  --cp-red: var(--danger, #EE5A4F);
+  --cp-amber: #E6B34A;
+}
+
+/* old <select> stays in the DOM (old code still writes .value / innerHTML) but is invisible and unfocusable */
+#client-bar .cp-native{
+  position:absolute !important; width:1px !important; height:1px !important; margin:-1px !important;
+  padding:0 !important; border:0 !important; overflow:hidden !important; clip:rect(0 0 0 0) !important;
+  opacity:0 !important; pointer-events:none !important; flex:none !important;
+}
+
+/* ── trigger (lives in .client-bar) ── */
+.cp{ position:relative; flex:1 1 auto; min-width:0; font-family:'Figtree',sans-serif; }
+/* .client-bar là dải CUỘN NGANG: mọi con để flex:0 0 auto, thanh tự cuộn khi
+   chật. Để .cp co được (min-width:0) thì nó thành thứ DUY NHẤT co, và ở khổ
+   điện thoại bị bóp còn mỗi mũi tên — tên khách biến mất.
+   Sàn 170px: hẹp thì thanh cuộn như mọi nút khác, đúng thiết kế sẵn có. */
+#client-bar .cp{ min-width:170px; max-width:min(62vw, 340px); }
+.cp-trigger{
+  display:flex; align-items:center; gap:8px; width:100%; min-width:0; min-height:44px;
+  padding:0 10px 0 12px; border-radius:12px; cursor:pointer; text-align:left;
+  background:var(--cp-surface); border:1px solid var(--cp-line); color:var(--cp-txt);
+  font:700 15px/1.2 'Figtree',sans-serif; -webkit-tap-highlight-color:transparent;
+  transition:border-color .15s ease;
+}
+.cp-trigger:hover{ border-color:rgba(255,255,255,.24); }
+.cp-trigger:focus-visible{ outline:2px solid var(--cp-accent); outline-offset:2px; }
+.cp-trigger[aria-expanded="true"]{ border-color:var(--cp-accent); }
+.cp-trigger[aria-busy="true"] .cp-t-name{ opacity:.6; }
+.cp-t-dot{ flex:none; width:8px; height:8px; border-radius:50%; }
+.cp-t-dot[data-sev="red"]{ background:var(--cp-red); }
+.cp-t-dot[data-sev="amber"]{ background:var(--cp-amber); }
+.cp-t-dot:not([data-sev="red"]):not([data-sev="amber"]){ display:none; }
+.cp-t-name{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* roster-wide count: solid chip + dark ink, because tinted red text fails contrast at 12px */
+.cp-t-alerts{
+  flex:none; min-width:22px; height:22px; padding:0 7px; border-radius:999px;
+  display:inline-flex; align-items:center; justify-content:center;
+  font-size:12px; font-weight:800; font-variant-numeric:tabular-nums;
+  background:var(--cp-red); color:var(--cp-on);
+}
+.cp-t-alerts[data-sev="amber"]{ background:var(--cp-amber); }
+.cp-t-alerts[hidden]{ display:none; }
+.cp-t-chev{ flex:none; width:16px; height:16px; color:var(--cp-muted); transition:transform .15s ease; }
+.cp-trigger[aria-expanded="true"] .cp-t-chev{ transform:rotate(180deg); }
+
+/* ── panel (moved to <body> by JS, so no ancestor transform/filter can break position:fixed) ── */
+.cp-panel{
+  position:fixed; z-index:1201; display:flex; flex-direction:column;
+  width:min(420px, calc(100vw - 24px)); max-height:min(560px, 70vh);
+  background:var(--cp-bg); color:var(--cp-txt); font-family:'Figtree',sans-serif;
+  border:1px solid var(--cp-line); border-radius:16px; overflow:hidden; outline:none;
+  box-shadow:0 24px 60px -14px rgba(0,0,0,.75), 0 0 0 1px rgba(0,0,0,.35);
+  opacity:0; transform:translateY(-4px); transition:opacity .14s ease, transform .14s ease;
+}
+.cp-panel.is-open{ opacity:1; transform:none; }
+.cp-panel[hidden], .cp-scrim[hidden]{ display:none; }
+.cp-scrim{ display:none; position:fixed; inset:0; z-index:1200; background:rgba(0,0,0,.55); opacity:0; transition:opacity .18s ease; }
+.cp-scrim.is-open{ opacity:1; }
+
+.cp-head{ display:none; }
+
+.cp-search{
+  flex:none; display:flex; align-items:center; gap:6px; padding:6px 6px 6px 14px;
+  border-bottom:1px solid var(--cp-line); transition:box-shadow .15s ease;
+}
+.cp-search:focus-within{ box-shadow:inset 0 -2px 0 var(--cp-accent); }
+.cp-search-ic{ flex:none; width:18px; height:18px; color:var(--cp-muted); }
+.cp-in{
+  flex:1; min-width:0; height:44px; padding:0 4px; border:0; outline:0; background:transparent;
+  color:var(--cp-txt); font:500 16px/1 'Figtree',sans-serif; /* 16px: below this iOS Safari zooms the page */
+  -webkit-appearance:none; appearance:none;
+}
+.cp-in::placeholder{ color:var(--cp-muted); }
+.cp-clear{
+  flex:none; width:44px; height:44px; border:0; border-radius:10px; background:transparent;
+  color:var(--cp-muted); font:600 20px/1 'Figtree',sans-serif; cursor:pointer;
+}
+.cp-clear:hover{ color:var(--cp-txt); }
+.cp-clear:focus-visible{ outline:2px solid var(--cp-accent); outline-offset:-4px; }
+.cp-clear[hidden]{ display:none; }
+
+.cp-list{ position:relative; flex:1 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; padding:4px 6px 8px; }
+.cp-list[hidden]{ display:none; }
+.cp-gh{
+  display:flex; align-items:center; gap:8px; padding:12px 10px 6px;
+  font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; color:var(--cp-muted);
+}
+.cp-gh b{ color:var(--cp-txt); font-weight:800; font-variant-numeric:tabular-nums; }
+
+/* one client row */
+.cp-opt{
+  position:relative; display:flex; align-items:center; gap:12px; min-height:56px;
+  padding:8px 10px 8px 16px; border-radius:12px; cursor:pointer; -webkit-tap-highlight-color:transparent;
+}
+.cp-opt::before{ content:''; position:absolute; left:5px; top:11px; bottom:11px; width:3px; border-radius:2px; }
+.cp-opt[data-sev="red"]::before{ background:var(--cp-red); }
+.cp-opt[data-sev="amber"]::before{ background:var(--cp-amber); }
+.cp-opt.is-active{ background:rgba(255,255,255,.07); }
+.cp-panel.is-kbd .cp-opt.is-active{ box-shadow:inset 0 0 0 1.5px var(--cp-accent); }
+@media (hover:none){ .cp-opt:active{ background:rgba(255,255,255,.07); } }
+
+.cp-av{
+  flex:none; width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+  background:var(--cp-surface); border:1px solid var(--cp-line); font-size:13px; font-weight:800; color:var(--cp-muted);
+}
+.cp-opt[aria-selected="true"] .cp-av{ border:1.5px solid var(--cp-accent); color:var(--cp-accent); }
+.cp-main{ flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+.cp-name{ display:flex; align-items:center; gap:6px; min-width:0; font-size:15px; font-weight:700; color:var(--cp-txt); }
+.cp-name-t{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cp-name mark{ background:none; color:inherit; box-shadow:inset 0 -2px 0 rgba(255,255,255,.65); }
+.cp-check{ flex:none; width:15px; height:15px; color:var(--cp-accent); }
+.cp-meta{ font-size:12.5px; font-weight:500; color:var(--cp-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cp-side{ flex:none; max-width:46%; min-width:0; display:flex; flex-direction:column; align-items:flex-end; gap:3px; text-align:right; }
+.cp-reason{ max-width:100%; font-size:13px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cp-opt[data-sev="red"] .cp-reason{ color:var(--cp-red); }
+.cp-opt[data-sev="amber"] .cp-reason{ color:var(--cp-amber); }
+.cp-mag{ font-size:12px; font-weight:600; color:var(--cp-muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.cp-ago{ font-size:12.5px; font-weight:500; color:var(--cp-muted); white-space:nowrap; }
+
+.cp-empty{ padding:30px 18px; text-align:center; font-size:14px; line-height:1.5; color:var(--cp-muted); }
+.cp-empty[hidden]{ display:none; }
+.cp-foot{
+  flex:none; display:flex; flex-wrap:wrap; gap:6px 14px; padding:9px 14px;
+  border-top:1px solid var(--cp-line); font-size:12px; color:var(--cp-muted);
+}
+.cp-foot kbd{
+  display:inline-block; margin-right:3px; padding:2px 6px; border-radius:5px; font:600 11px/1.4 'Figtree',sans-serif;
+  background:var(--cp-surface); border:1px solid var(--cp-line); color:var(--cp-txt);
+}
+@media (pointer:coarse){ .cp-foot{ display:none; } }
+.cp-sr{ position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+
+/* ── phone: bottom sheet. JS keeps it above the iOS keyboard via --cp-kb / --cp-maxh ── */
+@media (max-width:640px){
+  .cp-scrim{ display:block; }
+  .cp-panel{
+    left:0; right:0; top:auto; bottom:var(--cp-kb, 0px); width:auto;
+    max-height:var(--cp-maxh, 80vh); border-radius:20px 20px 0 0; border-bottom:0;
+    padding-bottom:var(--cp-pad, env(safe-area-inset-bottom, 0px));
+    transform:translateY(18px);
+  }
+  .cp-panel.is-open{ transform:none; }
+  .cp-head{ position:relative; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 6px 2px 18px; }
+  .cp-grab{ position:absolute; left:50%; top:6px; width:36px; height:4px; margin-left:-18px; border-radius:3px; background:rgba(255,255,255,.22); }
+  .cp-head-t{ font-size:17px; font-weight:800; }
+  .cp-close{
+    min-width:44px; height:44px; padding:0 12px; border:0; border-radius:10px; background:transparent;
+    color:var(--cp-accent); font:700 15px/1 'Figtree',sans-serif; cursor:pointer;
+  }
+  .cp-opt{ min-height:60px; }
+}
+html.cp-lock, html.cp-lock body{ overflow:hidden; }
+
+@media (prefers-reduced-motion:reduce){
+  .cp-trigger, .cp-t-chev, .cp-panel, .cp-scrim, .cp-search{ transition:none; }
+  .cp-panel{ transform:none; }
+}
+
 /* ── Healthspan ─────────────────────────────────────────────────────── */
 .hs-top{display:flex;align-items:center;gap:18px;margin-bottom:18px;}
 .hs-ring{position:relative;width:124px;height:124px;flex:none;}
@@ -16190,6 +16365,437 @@ document.addEventListener('DOMContentLoaded', () => {
   i18nWatch();
 });
 
+</script>
+
+<!-- Bộ chọn khách. Phải nằm SAU script chính: nó đọc clientsData,
+     activeClient, clientAlert(), _schFold() và window._switchClient. -->
+<script>
+/* ═══ Pulse — client picker ═══
+   Load AFTER the app script (end of <body>). Zero edits to existing code:
+   - reads clientsData / activeClient, calls clientAlert(c), _schFold(s), switchClient(id) if present
+   - keeps <select id="client-select"> hidden in place; a MutationObserver re-syncs when old code refills it
+   - wraps switchClient so calls from Edit/Add flows also update the trigger
+
+   STRUCTURE (JS-built)
+   div#client-bar.client-bar
+     select#client-select.client-select.cp-native        kept, hidden, tabindex=-1, aria-hidden
+     div.cp                                               inserted right after the select
+       button.cp-trigger [aria-haspopup=listbox][aria-expanded][aria-controls=cp-list]
+         span.cp-t-dot[data-sev]  span.cp-t-name  span.cp-t-alerts[data-sev]  svg.cp-t-chev
+     span#client-level.client-badge, buttons …            untouched
+   body
+     div.cp-scrim                                         phone only
+     div#cp-panel.cp-panel [tabindex=-1]
+       div.cp-head > span.cp-grab + span.cp-head-t + button.cp-close            phone only
+       div.cp-search > svg.cp-search-ic + input.cp-in[role=combobox] + button.cp-clear
+       div#cp-list.cp-list[role=listbox]
+         div[role=group][aria-labelledby]
+           div.cp-gh  "Cần chú ý" <b>5</b>
+           div.cp-opt[role=option][aria-selected][data-sev=red|amber]           ← one row
+             span.cp-av                         initial
+             span.cp-main
+               span.cp-name > span.cp-name-t (<mark> on search match) + svg.cp-check (selected)
+               span.cp-meta                     level · 4×/tuần · giáo án 12 buổi · goal
+             span.cp-side
+               span.cp-reason + span.cp-mag     when clientAlert(c) returns something
+               span.cp-ago                      otherwise ("Tập hôm qua")
+       div.cp-empty
+       div.cp-foot                              keyboard hints, hidden on touch
+       div.cp-sr[aria-live=polite]              result count for screen readers
+*/
+(function () {
+  'use strict';
+  if (window.ClientPicker) return;
+
+  var MOBILE = matchMedia('(max-width: 640px)');
+  var COARSE = matchMedia('(pointer: coarse)');
+  var HONOR = { chi: 1, anh: 1, co: 1, chu: 1, em: 1, bac: 1, ong: 1, ba: 1, thay: 1 };
+  var CHECK = '<svg class="cp-check" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  // ── adapters: the only place that knows the app's names ──
+  function clients() { try { return Array.isArray(clientsData) ? clientsData : []; } catch (e) { return []; } }
+  function currentId() { try { return activeClient ? activeClient.id : null; } catch (e) { return null; } }
+  function alertOf(c) { try { return typeof clientAlert === 'function' ? (clientAlert(c) || null) : null; } catch (e) { return null; } }
+  function sessionsOf(c) {
+    var p = c.program || c.programDays;
+    if (p && typeof p === 'object') return Object.keys(p).filter(function (k) { return p[k]; }).length;
+    return typeof c.sessionCount === 'number' ? c.sessionCount : null;
+  }
+  function fold(s) {
+    s = String(s == null ? '' : s);
+    try { if (typeof _schFold === 'function') return String(_schFold(s)).toLowerCase(); } catch (e) {}
+    return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[đĐ]/g, 'd').toLowerCase();
+  }
+  // window.switchClient là LỚP VỎ HÀNG ĐỢI (_q) và nó VỨT giá trị trả về, nên
+  // .then() không bao giờ chạy — khách đổi xong mà nút vẫn đứng tên cũ, lại
+  // không báo lỗi gì. Gọi thẳng bản gốc window._switchClient để await được;
+  // openClientDash trong app cũng làm đúng vậy.
+  function callSwitch(id) {
+    try {
+      var sw = window._switchClient
+        || (typeof switchClient === 'function' ? switchClient : null);
+      if (sw) return sw(id);
+    } catch (e) { syncTrigger(); throw e; }
+  }
+
+  // ── helpers ──
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (ch) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]; }); }
+  function bare(name) { var w = String(name || '').trim().split(/\s+/); if (w.length > 1 && HONOR[fold(w[0])]) w = w.slice(1); return w.join(' '); }
+  function initial(name) { var b = bare(name); return b ? b.charAt(0).toUpperCase() : '?'; }
+  function sevOf(a) { return a ? (a.sev === 'red' ? 'red' : 'amber') : ''; }
+  function weight(a) { var v = parseFloat(a.mag); v = isNaN(v) ? 0 : v; return a.unit === 'tuần' ? v * 7 : v; }
+  function ms(v) {
+    if (v == null || v === '') return null;
+    if (typeof v === 'number') return v < 1e12 ? v * 1000 : v;
+    if (typeof v.toMillis === 'function') return v.toMillis();
+    if (typeof v.seconds === 'number') return v.seconds * 1000;
+    var t = Date.parse(v); return isNaN(t) ? null : t;
+  }
+  function agoText(c) {
+    var t = ms(c.lastWorkoutAt);
+    if (t == null) return 'Chưa tập buổi nào';
+    var a = new Date(); a.setHours(0, 0, 0, 0);
+    var b = new Date(t); b.setHours(0, 0, 0, 0);
+    var d = Math.round((a - b) / 864e5);
+    return d <= 0 ? 'Tập hôm nay' : d === 1 ? 'Tập hôm qua' : 'Tập ' + d + ' ngày trước';
+  }
+  // highlight the match in the ORIGINAL (accented) name: fold char by char and keep an index map
+  function markName(name, fq) {
+    if (!fq) return esc(name);
+    var folded = '', map = [];
+    for (var i = 0; i < name.length; i++) { var f = fold(name[i]); for (var k = 0; k < f.length; k++) map.push(i); folded += f; }
+    var at = folded.indexOf(fq) === 0 ? 0 : folded.indexOf(' ' + fq);
+    at = at > 0 ? at + 1 : at === 0 ? 0 : folded.indexOf(fq);
+    if (at < 0 || map[at] == null) return esc(name);
+    var s = map[at], e = map[Math.min(at + fq.length - 1, map.length - 1)] + 1;
+    return esc(name.slice(0, s)) + '<mark>' + esc(name.slice(s, e)) + '</mark>' + esc(name.slice(e));
+  }
+
+  // ── state + nodes ──
+  var S = { open: false, q: '', active: -1, list: [], opts: [], kbd: false };
+  var nativeSel, root, trigger, tDot, tName, tAlerts, panel, scrim, input, clearBtn, listEl, emptyEl, live, annT;
+
+  function build(q) {
+    var fq = fold(q).trim();
+    var items = clients().map(function (c) {
+      var a = alertOf(c);
+      return { c: c, a: a, f: fold(c.name), k: fold(bare(c.name)), r: a ? (a.sev === 'red' ? 0 : 1) : 2 };
+    });
+    var byName = function (x, y) { return x.k.localeCompare(y.k); };
+    if (fq) {
+      items = items.filter(function (it) { return it.f.indexOf(fq) > -1; });
+      items.forEach(function (it) { it.s = (it.f.indexOf(fq) === 0 || it.f.indexOf(' ' + fq) > -1) ? 0 : 1; });
+      items.sort(function (x, y) { return x.s - y.s || x.r - y.r || byName(x, y); });
+      return { fq: fq, groups: [{ key: 'q', label: '', items: items }] };
+    }
+    var hot = items.filter(function (it) { return it.a; })
+      .sort(function (x, y) { return x.r - y.r || weight(y.a) - weight(x.a) || byName(x, y); });
+    var calm = items.filter(function (it) { return !it.a; }).sort(byName);
+    return { fq: '', groups: [
+      { key: 'hot', label: 'Cần chú ý', items: hot },
+      { key: 'calm', label: hot.length ? 'Còn lại' : 'Tất cả khách', items: calm }
+    ] };
+  }
+
+  function optionHTML(it, i, fq, cur) {
+    var c = it.c, a = it.a, sel = cur != null && String(c.id) === String(cur), n = sessionsOf(c);
+    var meta = [c.level, c.sessionsPerWeek ? c.sessionsPerWeek + '×/tuần' : '', n != null ? 'giáo án ' + n + ' buổi' : '', c.goal]
+      .filter(Boolean).join(' · ');
+    var side = a
+      ? '<span class="cp-reason" title="' + esc(a.reason) + '">' + esc(a.reason) + '</span>'
+        + (a.mag != null && a.mag !== '' ? '<span class="cp-mag">' + esc(a.mag) + (a.unit ? ' ' + esc(a.unit) : '') + '</span>' : '')
+      : '<span class="cp-ago">' + agoText(c) + '</span>';
+    return '<div class="cp-opt" role="option" id="cp-o-' + i + '" data-i="' + i + '"'
+      + (a ? ' data-sev="' + sevOf(a) + '"' : '') + ' aria-selected="' + sel + '">'
+      + '<span class="cp-av" aria-hidden="true">' + esc(initial(c.name)) + '</span>'
+      + '<span class="cp-main"><span class="cp-name"><span class="cp-name-t">' + markName(String(c.name || ''), fq) + '</span>' + (sel ? CHECK : '') + '</span>'
+      + (meta ? '<span class="cp-meta">' + esc(meta) + '</span>' : '') + '</span>'
+      + '<span class="cp-side">' + side + '</span></div>';
+  }
+
+  function render() {
+    var b = build(S.q), cur = currentId(), html = '', i = 0, flat = [];
+    b.groups.forEach(function (g) {
+      if (!g.items.length) return;
+      var rows = g.items.map(function (it) { flat.push(it.c); return optionHTML(it, i++, b.fq, cur); }).join('');
+      html += g.label
+        ? '<div role="group" aria-labelledby="cp-g-' + g.key + '"><div class="cp-gh" id="cp-g-' + g.key + '">' + g.label + ' <b>' + g.items.length + '</b></div>' + rows + '</div>'
+        : rows;
+    });
+    listEl.innerHTML = html;
+    S.list = flat;
+    S.opts = listEl.querySelectorAll('.cp-opt');
+    S.active = -1;
+    listEl.hidden = !flat.length;
+    emptyEl.hidden = !!flat.length;
+    if (!flat.length) emptyEl.textContent = 'Không có khách nào khớp “' + S.q.trim() + '”';
+    clearBtn.hidden = !S.q;
+    if (b.fq) listEl.scrollTop = 0;
+    var start = b.fq ? 0 : Math.max(0, flat.findIndex(function (c) { return String(c.id) === String(cur); }));
+    setActive(flat.length ? start : -1, false);
+    announce(b.fq ? flat.length + ' khách' : '');
+  }
+
+  function setActive(i, scroll) {
+    if (S.opts[S.active]) S.opts[S.active].classList.remove('is-active');
+    S.active = i;
+    var el = S.opts[i];
+    if (el) { el.classList.add('is-active'); input.setAttribute('aria-activedescendant', el.id); if (scroll) scrollActive(false); }
+    else input.setAttribute('aria-activedescendant', '');
+  }
+
+  // manual scrolling (no scrollIntoView: it can scroll the whole app behind the panel)
+  function scrollActive(center) {
+    var el = S.opts[S.active]; if (!el) return;
+    var head = el.previousElementSibling && el.previousElementSibling.classList.contains('cp-gh') ? el.previousElementSibling : null;
+    var top = (head || el).offsetTop - 4, bot = el.offsetTop + el.offsetHeight + 4, v = listEl.scrollTop, h = listEl.clientHeight;
+    if (center) listEl.scrollTop = Math.max(0, el.offsetTop - h / 2 + el.offsetHeight / 2);
+    else if (top < v) listEl.scrollTop = top;
+    else if (bot > v + h) listEl.scrollTop = bot - h;
+  }
+
+  function announce(t) { clearTimeout(annT); annT = setTimeout(function () { live.textContent = t; }, 300); }
+  function kbdOn() { S.kbd = true; if (panel) panel.classList.add('is-kbd'); }
+
+  function syncTrigger() {
+    if (!root) return;
+    var cur = currentId(), list = clients(), c = null, red = 0, amber = 0;
+    for (var i = 0; i < list.length; i++) {
+      if (cur != null && String(list[i].id) === String(cur)) c = list[i];
+      var a = alertOf(list[i]); if (a) { if (a.sev === 'red') red++; else amber++; }
+    }
+    var mine = c ? alertOf(c) : null, total = red + amber;
+    tName.textContent = c ? c.name : (list.length ? 'Chọn khách' : 'Chưa có khách');
+    tDot.setAttribute('data-sev', sevOf(mine));
+    tAlerts.hidden = !total;
+    tAlerts.textContent = total;
+    tAlerts.setAttribute('data-sev', red ? 'red' : 'amber');
+    trigger.title = total ? total + ' khách cần chú ý' : '';
+    trigger.setAttribute('aria-label', 'Khách đang xem: ' + (c ? c.name : 'chưa chọn') + (mine ? ', ' + mine.reason : '')
+      + (total ? '. ' + total + ' khách cần chú ý' : ''));
+    trigger.removeAttribute('aria-busy');
+  }
+
+  // ── open / close / place ──
+  function open(ch) {
+    if (S.open || !root) return;
+    S.open = true;
+    S.q = ch || '';
+    input.value = S.q;
+    panel.classList.toggle('is-kbd', S.kbd);
+    panel.hidden = false;
+    scrim.hidden = !MOBILE.matches;
+    if (MOBILE.matches) document.documentElement.classList.add('cp-lock');
+    trigger.setAttribute('aria-expanded', 'true');
+    render();
+    place();
+    scrollActive(true);
+    void panel.offsetWidth; // flush the hidden→shown change so the open transition runs
+    panel.classList.add('is-open');
+    scrim.classList.add('is-open');
+    // on touch, don't pop the keyboard unless the person started typing
+    if (S.kbd || !COARSE.matches) {
+      input.focus({ preventScroll: true });
+      try { input.setSelectionRange(input.value.length, input.value.length); } catch (e) {}
+    } else panel.focus({ preventScroll: true });
+  }
+
+  function close(restoreFocus) {
+    if (!S.open) return;
+    S.open = false;
+    S.kbd = false;
+    panel.classList.remove('is-open', 'is-kbd');
+    scrim.classList.remove('is-open');
+    panel.hidden = true;
+    scrim.hidden = true;
+    document.documentElement.classList.remove('cp-lock');
+    trigger.setAttribute('aria-expanded', 'false');
+    input.setAttribute('aria-activedescendant', '');
+    if (restoreFocus) trigger.focus({ preventScroll: true });
+  }
+
+  function place() {
+    var st = panel.style;
+    if (MOBILE.matches) { st.top = st.left = st.bottom = st.width = st.maxHeight = ''; fitKeyboard(); return; }
+    st.removeProperty('--cp-kb'); st.removeProperty('--cp-maxh'); st.removeProperty('--cp-pad');
+    var r = trigger.getBoundingClientRect(), W = Math.min(420, innerWidth - 24);
+    var below = innerHeight - r.bottom - 16, above = r.top - 16, up = below < 280 && above > below;
+    st.width = W + 'px';
+    st.left = Math.min(Math.max(12, r.left), innerWidth - W - 12) + 'px';
+    st.maxHeight = Math.max(200, Math.min(560, (up ? above : below) - 6)) + 'px';
+    if (up) { st.top = ''; st.bottom = (innerHeight - r.top + 6) + 'px'; }
+    else { st.bottom = ''; st.top = (r.bottom + 6) + 'px'; }
+  }
+
+  // iOS keeps position:fixed;bottom:0 behind the keyboard — lift the sheet by the keyboard height
+  function fitKeyboard() {
+    var vv = window.visualViewport, kb = 0, h = innerHeight;
+    if (vv) { kb = Math.max(0, innerHeight - vv.height - vv.offsetTop); h = vv.height; }
+    panel.style.setProperty('--cp-kb', kb + 'px');
+    panel.style.setProperty('--cp-maxh', Math.round(kb > 0 ? h - 12 : h * 0.8) + 'px');
+    panel.style.setProperty('--cp-pad', kb > 0 ? '0px' : 'env(safe-area-inset-bottom, 0px)');
+  }
+
+  function choose(i, viaKey) {
+    var c = S.list[i];
+    close(!!viaKey);
+    if (!c || String(c.id) === String(currentId())) return;
+    tName.textContent = c.name; // optimistic: the name changes before Firestore answers
+    trigger.setAttribute('aria-busy', 'true');
+    if (nativeSel) nativeSel.value = c.id;
+    var r = callSwitch(c.id);
+    if (r && typeof r.then === 'function') r.then(syncTrigger, syncTrigger); else syncTrigger();
+  }
+
+  // Tab leaves the picker like it would leave a <select>: to the element after (or before) the trigger
+  function focusFrom(from, dir) {
+    var q = 'a[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),[tabindex]';
+    var all = Array.prototype.filter.call(document.querySelectorAll(q), function (x) {
+      return x.tabIndex >= 0 && !panel.contains(x) && x.offsetParent !== null;
+    });
+    var next = all[all.indexOf(from) + dir];
+    (next || from).focus();
+  }
+
+  function onKey(e) {
+    if (e.isComposing || e.keyCode === 229) return; // Vietnamese IME (Telex/VNI) is mid-composition
+    var n = S.opts.length, k = e.key, onBtn = e.target && e.target.tagName === 'BUTTON';
+    function mv(to) { e.preventDefault(); kbdOn(); if (n) setActive(Math.max(0, Math.min(n - 1, to)), true); }
+    if (k === 'ArrowDown') mv(S.active < 0 ? 0 : S.active + 1);
+    else if (k === 'ArrowUp') mv(S.active - 1);
+    else if (k === 'PageDown') mv(S.active + 6);
+    else if (k === 'PageUp') mv(S.active - 6);
+    else if ((k === 'Home' || k === 'End') && (e.target !== input || !input.value)) mv(k === 'Home' ? 0 : n - 1);
+    else if (k === 'Enter' && !onBtn) { e.preventDefault(); if (S.active > -1) choose(S.active, true); }
+    else if (k === 'Escape') {
+      e.preventDefault(); e.stopPropagation();
+      if (input.value) { input.value = ''; S.q = ''; render(); input.focus(); } else close(true);
+    }
+    else if (k === 'Tab') { e.preventDefault(); close(false); focusFrom(trigger, e.shiftKey ? -1 : 1); }
+  }
+
+  function mount() {
+    nativeSel = document.getElementById('client-select');
+    if (!nativeSel || root) return;
+    nativeSel.classList.add('cp-native');
+    nativeSel.tabIndex = -1;
+    nativeSel.setAttribute('aria-hidden', 'true');
+
+    root = document.createElement('div');
+    root.className = 'cp';
+    root.innerHTML = '<button type="button" class="cp-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="cp-list">'
+      + '<span class="cp-t-dot" aria-hidden="true"></span><span class="cp-t-name">—</span>'
+      + '<span class="cp-t-alerts" aria-hidden="true" hidden></span>'
+      + '<svg class="cp-t-chev" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+      + '</button>';
+    nativeSel.parentNode.insertBefore(root, nativeSel.nextSibling);
+    trigger = root.querySelector('.cp-trigger');
+    tDot = root.querySelector('.cp-t-dot');
+    tName = root.querySelector('.cp-t-name');
+    tAlerts = root.querySelector('.cp-t-alerts');
+
+    var mac = /Mac|iPhone|iPad/.test(navigator.platform || '');
+    scrim = document.createElement('div');
+    scrim.className = 'cp-scrim';
+    scrim.hidden = true;
+    panel = document.createElement('div');
+    panel.className = 'cp-panel';
+    panel.id = 'cp-panel';
+    panel.tabIndex = -1;
+    panel.hidden = true;
+    panel.innerHTML = '<div class="cp-head"><span class="cp-grab" aria-hidden="true"></span><span class="cp-head-t">Chọn khách</span>'
+      + '<button type="button" class="cp-close">Xong</button></div>'
+      + '<div class="cp-search"><svg class="cp-search-ic" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="6.5" stroke="currentColor" stroke-width="2"/><path d="M16 16l4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>'
+      + '<input class="cp-in" type="text" inputmode="search" enterkeyhint="go" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"'
+      + ' role="combobox" aria-expanded="true" aria-controls="cp-list" aria-autocomplete="list" aria-activedescendant="" aria-label="Tìm khách" placeholder="Tìm khách…">'
+      + '<button type="button" class="cp-clear" aria-label="Xoá tìm kiếm" hidden>×</button></div>'
+      + '<div class="cp-list" id="cp-list" role="listbox" aria-label="Danh sách khách"></div>'
+      + '<div class="cp-empty" hidden></div>'
+      + '<div class="cp-foot" aria-hidden="true"><span><kbd>↑</kbd><kbd>↓</kbd>chọn</span><span><kbd>Enter</kbd>mở</span><span><kbd>Esc</kbd>đóng</span>'
+      + '<span><kbd>' + (mac ? '⌘' : 'Ctrl') + '</kbd><kbd>K</kbd>mở nhanh</span></div>'
+      + '<div class="cp-sr" aria-live="polite"></div>';
+    document.body.appendChild(scrim);
+    document.body.appendChild(panel);
+    input = panel.querySelector('.cp-in');
+    clearBtn = panel.querySelector('.cp-clear');
+    listEl = panel.querySelector('.cp-list');
+    emptyEl = panel.querySelector('.cp-empty');
+    live = panel.querySelector('.cp-sr');
+
+    trigger.addEventListener('click', function (e) { if (S.open) { close(e.detail === 0); return; } S.kbd = e.detail === 0; open(''); });
+    trigger.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); S.kbd = true; open(''); }
+      else if (e.key.length === 1 && e.key !== ' ' && !e.ctrlKey && !e.metaKey && !e.altKey && !S.open) { e.preventDefault(); S.kbd = true; open(e.key); }
+    });
+    input.addEventListener('input', function () { S.q = input.value; render(); });
+    input.addEventListener('keydown', onKey);
+    panel.addEventListener('keydown', function (e) { if (e.target !== input) onKey(e); });
+    clearBtn.addEventListener('click', function () { input.value = ''; S.q = ''; render(); input.focus(); });
+    panel.querySelector('.cp-close').addEventListener('click', function (e) { close(e.detail === 0); });
+    scrim.addEventListener('click', function () { close(false); });
+    listEl.addEventListener('mousedown', function (e) { e.preventDefault(); }); // keep focus in the search box
+    listEl.addEventListener('click', function (e) { var o = e.target.closest('.cp-opt'); if (o) choose(+o.dataset.i, e.detail === 0); });
+    listEl.addEventListener('pointermove', function (e) {
+      if (e.pointerType !== 'mouse') return;
+      var o = e.target.closest('.cp-opt'); if (!o) return;
+      var i = +o.dataset.i;
+      if (i !== S.active) { S.kbd = false; panel.classList.remove('is-kbd'); setActive(i, false); }
+    });
+    document.addEventListener('pointerdown', function (e) {
+      if (S.open && e.target !== scrim && !panel.contains(e.target) && !root.contains(e.target)) close(false);
+    }, true);
+    panel.addEventListener('focusout', function () {
+      if (COARSE.matches) return; // iOS "Done" blurs the input; the sheet must stay open
+      setTimeout(function () {
+        var a = document.activeElement;
+        if (S.open && !panel.contains(a) && a !== trigger) close(false);
+      }, 0);
+    });
+    document.addEventListener('keydown', function (e) {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'k' || e.key === 'K') && root.offsetParent !== null) {
+        e.preventDefault();
+        if (S.open) { input.focus(); input.select(); } else { S.kbd = true; open(''); }
+      }
+    });
+    addEventListener('resize', function () { if (S.open) place(); });
+    addEventListener('scroll', function (e) { if (S.open && !MOBILE.matches && !panel.contains(e.target)) place(); }, true);
+    if (window.visualViewport) {
+      var vvFit = function () { if (S.open && MOBILE.matches) fitKeyboard(); };
+      visualViewport.addEventListener('resize', vvFit);
+      visualViewport.addEventListener('scroll', vvFit);
+    }
+    var onMQ = function () { if (!S.open) return; scrim.hidden = !MOBILE.matches; scrim.classList.toggle('is-open', MOBILE.matches); place(); };
+    if (MOBILE.addEventListener) MOBILE.addEventListener('change', onMQ); else MOBILE.addListener(onMQ);
+
+    // old code refills the <select> after loading clients → re-sync the trigger
+    new MutationObserver(syncTrigger).observe(nativeSel, { childList: true });
+    // switchClient() cập nhật #client-level khi đã đổi xong. Đó là tín hiệu
+    // "xong" đáng tin duy nhất: đổi khách còn được gọi từ dashboard, từ lịch,
+    // từ form Edit — những chỗ picker không nhìn thấy.
+    var lvl = document.getElementById('client-level');
+    if (lvl) new MutationObserver(syncTrigger).observe(lvl, { childList: true, characterData: true, subtree: true });
+    // Edit / Add flows call switchClient(...) directly → keep the trigger in step
+    var f = window.switchClient;
+    if (typeof f === 'function' && !f.__cp) {
+      var wrapped = function () {
+        var r = f.apply(this, arguments);
+        if (r && typeof r.then === 'function') r.then(syncTrigger, syncTrigger); else syncTrigger();
+        return r;
+      };
+      wrapped.__cp = true;
+      window.switchClient = wrapped;
+    }
+    syncTrigger();
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount); else mount();
+
+  window.ClientPicker = {
+    open: function () { open(''); },
+    close: function () { close(false); },
+    refresh: function () { syncTrigger(); if (S.open) render(); }  // call after alerts change (payment, InBody…)
+  };
+})();
 </script>
 </body>
 </html>
