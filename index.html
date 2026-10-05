@@ -4641,11 +4641,16 @@ async function loadNutritionData() {
   if (!activeClient) return;
   const db = firebase.firestore();
 
+  // Xoá "ăn lại" NGAY, đồng bộ. renderNutritionMonth() nạp lại nó nhưng chạy
+  // không chờ, nên giữa lúc đổi khách và lúc truy vấn 30 ngày trả về, danh
+  // sách vẫn là món của khách trước — mở sheet đúng lúc đó là thấy nhầm người.
+  if (typeof nlSetRecent === 'function') nlSetRecent([]);
+
   // Date title
-  const titleEl = document.getElementById('nutrition-date-title');
+  const titleEl = document.getElementById('nl-page-date');
   if (titleEl) {
-    titleEl.textContent = new Date().toLocaleDateString('en-AU', {
-      weekday: 'long', day: 'numeric', month: 'short'
+    titleEl.textContent = new Date().toLocaleDateString('vi-VN', {
+      weekday: 'long', day: 'numeric', month: 'numeric'
     });
   }
 
@@ -4668,103 +4673,51 @@ async function loadNutritionData() {
 }
 
 function renderNutritionCard() {
-  const noTarget  = document.getElementById('nutrition-no-target');
-  const macrosEl  = document.getElementById('nutrition-macros');
-  const actionsEl = document.getElementById('nutrition-actions');
-  const recPanel  = document.getElementById('nrec-panel');
-  const recBody   = document.getElementById('nrec-body');
-  if (!noTarget) return;
+  const wrap = document.getElementById('nutrition-targets');
+  if (!wrap) return;
 
   const isCoach = userRole === 'coach';
+  const t   = _macroTargets;
+  const m   = _macroMeta;
+  const tot = (_nutritionData || {}).totals || { calories: 0, protein: 0, carbs: 0, fat: 0 };
 
-  // Coach-only action buttons
-  if (actionsEl) actionsEl.classList.toggle('hidden', !isCoach);
+  let html = '';
 
-  if (!_macroTargets) {
-    noTarget.classList.remove('hidden');
-    macrosEl.classList.add('hidden');
-    recPanel && recPanel.classList.add('hidden');
-    noTarget.textContent = isCoach
-      ? 'No macro targets set. Calculate them from this client\'s InBody data below.'
-      : 'Macro targets not set yet — your coach will add them soon.';
-    return;
+  // Cảnh báo dưới 18 đứng TRÊN mọi con số, và cả hai vai đều thấy. Bản thiết
+  // kế đề nghị chỉ coach thấy; không theo, vì trước nay khách vẫn thấy và thu
+  // hẹp một cảnh báo an toàn là thay đổi theo chiều sai.
+  if (m && m.isMinor && m.medicalNote) html += nlMedicalHTML(m);
+
+  if (t && t.calories) {
+    html += '<div class="nl-card">'
+      + nlMacroRowHTML('cal',     'Calo',     tot.calories, t.calories)
+      + nlMacroRowHTML('protein', 'Đạm',      tot.protein,  t.protein)
+      + nlMacroRowHTML('carbs',   'Tinh bột', tot.carbs,    t.carbs)
+      + nlMacroRowHTML('fat',     'Chất béo', tot.fat,      t.fat)
+      + '</div>';
+    // nlRecHTML kèm .nutrition-actions (tính lại / chỉnh tay) nên CHỈ coach.
+    if (m) html += isCoach ? nlRecHTML(m) : nlRecClientHTML(m);
+  } else {
+    html += nlNoTargetHTML(isCoach ? 'coach' : 'client', m && m.basis, m && m.generatedAt)
+          + nlEatenHTML(tot);
   }
 
-  noTarget.classList.add('hidden');
-  macrosEl.classList.remove('hidden');
+  wrap.innerHTML = html;
+}
 
-  const totals = (_nutritionData || {}).totals || { calories: 0, protein: 0, carbs: 0, fat: 0 };
-  const t = _macroTargets;
+/** Bản rút gọn cho khách: giữ phần diễn giải, bỏ nút của coach và dòng InBody. */
+function nlRecClientHTML(m) {
+  const bits = [m.reasoning, m.proteinNote, m.adjustmentNote].filter(Boolean);
+  if (!bits.length) return '';
+  return '<div class="nl-card nrec">'
+    + '<div class="nrec-head"><span class="nl-sec-t">Vì sao có mục tiêu này</span></div>'
+    + bits.map(x => '<p class="nrec-reason">' + nlEsc(x) + '</p>').join('')
+    + '</div>';
+}
 
-  function macroRow(label, key, barClass) {
-    const cur = Math.round(totals[key] || 0);
-    const tgt = t[key] || 0;
-    const pct = tgt > 0 ? Math.min(100, Math.round((cur / tgt) * 100)) : 0;
-    const over = tgt > 0 && cur > tgt;
-    const left = tgt - cur;
-    return `<div class="macro-row">
-      <div class="macro-label">${label}</div>
-      <div class="macro-bar-wrap"><div class="macro-bar ${barClass}${over ? ' over' : ''}" style="width:${pct}%"></div></div>
-      <div class="macro-val">${cur}<span>/${tgt}${key === 'calories' ? '' : 'g'}</span>
-        <div class="macro-left${over ? ' over' : ''}">${over ? '+' + Math.abs(left) + ' over' : left + ' left'}</div>
-      </div>
-    </div>`;
-  }
-
-  macrosEl.innerHTML =
-    macroRow('🔥 Calories', 'calories', 'cal') +
-    macroRow('💪 Protein',  'protein',  'protein') +
-    macroRow('🍚 Carbs',    'carbs',    'carbs') +
-    macroRow('🧈 Fat',      'fat',      'fat');
-
-  // Reasoning panel
-  const recSource = document.getElementById('nrec-source');
-  if (recPanel && recBody && _macroMeta) {
-    recPanel.classList.remove('hidden');
-    const m = _macroMeta;
-    const isManual = m.source === 'manual';
-    const dateStr = m.generatedAt
-      ? new Date(m.generatedAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })
-      : '';
-
-    if (recSource) {
-      recSource.textContent = isManual ? 'Set by coach' : 'Calculated from InBody';
-    }
-
-    let html = '';
-    if (isManual) {
-      html = `<p class="nrec-text">These targets were entered manually by your coach.</p>`;
-    } else {
-      if (m.bmr || m.tdee) {
-        html += `<div class="nrec-stats">
-          ${m.bmr  ? `<div class="nrec-stat"><div class="nrec-stat-val">${m.bmr}</div><div class="nrec-stat-lbl">BMR</div></div>` : ''}
-          ${m.tdee ? `<div class="nrec-stat"><div class="nrec-stat-val">${m.tdee}</div><div class="nrec-stat-lbl">TDEE</div></div>` : ''}
-          <div class="nrec-stat"><div class="nrec-stat-val">${t.calories}</div><div class="nrec-stat-lbl">Target</div></div>
-        </div>`;
-      }
-      if (m.isMinor && m.medicalNote) {
-        html += `<div class="nrec-medical">${m.medicalNote}</div>`;
-      }
-      // Show the InBody inputs these numbers came from — LBM and SMM are
-      // different measurements and are easy to confuse when cross-checking.
-      const b = m.basis;
-      if (b) {
-        const parts = [];
-        if (b.weight) parts.push(`Weight ${b.weight}kg`);
-        if (b.pbf != null) parts.push(`Body fat ${b.pbf}%`);
-        if (b.lbm != null) parts.push(`LBM ${b.lbm}kg`);
-        if (b.smm != null) parts.push(`SMM ${b.smm}kg`);
-        if (parts.length) html += `<div class="nrec-basis">${parts.join(' &nbsp;·&nbsp; ')}</div>`;
-      }
-      if (m.reasoning)      html += `<p class="nrec-text">${m.reasoning}</p>`;
-      if (m.proteinNote)    html += `<p class="nrec-text">${m.proteinNote}</p>`;
-      if (m.adjustmentNote) html += `<p class="nrec-text nrec-adjust">${m.adjustmentNote}</p>`;
-    }
-    if (dateStr) html += `<div class="nrec-date">Updated ${dateStr}</div>`;
-    recBody.innerHTML = html;
-  } else if (recPanel) {
-    recPanel.classList.add('hidden');
-  }
+function nlEsc(x) {
+  return String(x == null ? '' : x).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 function renderNutritionMeals() {
@@ -4772,56 +4725,20 @@ function renderNutritionMeals() {
   if (!mealsEl) return;
   const meals = (_nutritionData || {}).meals || [];
 
-  if (meals.length === 0) {
-    mealsEl.innerHTML = '<div class="nutrition-empty">No meals logged yet today.</div>';
-    return;
-  }
+  const countEl = document.getElementById('nl-meals-count');
+  if (countEl) countEl.textContent = meals.length ? meals.length + ' bữa' : '';
 
-  const conf = { low: 'Low confidence', medium: 'Medium confidence', high: 'High confidence' };
-
-  mealsEl.innerHTML = meals.map((m, i) => {
-    const time = m.timestamp
-      ? new Date(m.timestamp).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })
-      : '';
-    const badge = m.source === 'ai' ? '<span class="nmi-badge">AI</span>' : '';
-    const items = m.items || [];
-    const toggle = items.length
-      ? `<button class="nmi-expand" onclick="toggleMealItems(${i})" id="nmi-tog-${i}">${items.length} items ▾</button>`
-      : '';
-    const rows = items.map(it => `
-      <div class="nmi-item">
-        <div class="nmi-item-name">${it.name}${it.portion ? ` <span>${it.portion}</span>` : ''}</div>
-        <div class="nmi-item-macros">${it.calories} kcal · ${it.protein}p · ${it.carbs}c · ${it.fat}f</div>
-      </div>`).join('');
-    const detail = items.length
-      ? `<div class="nmi-items hidden" id="nmi-items-${i}">${rows}
-           ${m.confidence ? `<div class="nmi-conf">${conf[m.confidence] || m.confidence}${m.aiNote ? ' — ' + m.aiNote : ''}</div>` : ''}
-         </div>`
-      : '';
-
-    return `<div class="nutrition-meal-item-wrap">
-      <div class="nutrition-meal-item">
-        <div style="min-width:0;flex:1">
-          <div class="nmi-name">${m.name || 'Meal'} ${badge}</div>
-          <div class="nmi-macros">${Math.round(m.protein||0)}p · ${Math.round(m.carbs||0)}c · ${Math.round(m.fat||0)}f${time ? ' · ' + time : ''}</div>
-          ${toggle}
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
-          <div class="nmi-kcal">${Math.round(m.calories || 0)}</div>
-          <button class="nmi-delete" onclick="deleteMealLog(${i})" title="Delete">×</button>
-        </div>
-      </div>
-      ${detail}
-    </div>`;
-  }).join('');
+  mealsEl.innerHTML = meals.length
+    ? meals.map((m, i) => nlMealItemHTML(m, i)).join('')
+    : '<p class="nl-meals-empty">Chưa ghi bữa nào hôm nay.</p>';
 }
 
 function toggleMealItems(i) {
   const el = document.getElementById('nmi-items-' + i);
-  const tg = document.getElementById('nmi-tog-' + i);
+  const b  = document.getElementById('nmi-tog-' + i);
   if (!el) return;
-  const open = el.classList.toggle('hidden') === false;
-  if (tg) tg.textContent = tg.textContent.replace(open ? '▾' : '▴', open ? '▴' : '▾');
+  const open = !el.classList.toggle('hidden');
+  if (b) b.setAttribute('aria-expanded', String(open));
 }
 
 // Nutrition history is kept for 30 days only — long enough to judge a training
@@ -4862,6 +4779,9 @@ async function renderNutritionMonth() {
     .where('date', '>=', since).orderBy('date', 'desc').get();
 
   const days = snap.docs.map(d => d.data());
+  // Trước mọi lần return: danh sách "ăn lại" là trạng thái dùng chung, không
+  // nạp lại là khách này thấy món của khách trước.
+  if (typeof nlSetRecent === 'function') nlSetRecent(nlBuildRecent(days));
   if (days.length === 0) {
     wrap.innerHTML = '<div class="nutrition-empty">No history yet — log a few days to see whether targets are being met.</div>';
     return;
@@ -5072,6 +4992,7 @@ async function handleMealPhoto(input) {
   const file = input.files[0];
   if (!file) return;
 
+  window._nlCancelled = false;
   showNlogStep('analyzing');
 
   try {
@@ -5106,6 +5027,9 @@ async function handleMealPhoto(input) {
       { imageBase64: base64, mimeType: 'image/jpeg' },
       e => { if (sub) sub.textContent = String(e && e.code || '').includes('unavailable')
         ? 'Server đang khởi động — đang thử lại…' : 'Mạng chập chờn — đang thử lại…'; });
+    // Huỷ chỉ bỏ qua kết quả, không dừng được request đang chạy — thiếu dòng
+    // này thì câu trả lời về muộn vẫn bật màn kết quả lên sau khi khách thoát.
+    if (window._nlCancelled) return;
     _aiMealResult = result.data;
     renderAiResults(_aiMealResult);
     showNlogStep('results');
@@ -5146,36 +5070,17 @@ async function reanalyseMeal() {
 }
 
 function renderAiResults(data, hint) {
+  const foods = data.foods || [];
+  const tot   = data.total || {};
+
   const foodsList = document.getElementById('nlog-foods-list');
-  const totalRow  = document.getElementById('nlog-total-row');
-  const confEl    = document.getElementById('nlog-confidence');
-  const noteEl    = document.getElementById('nlog-note');
+  if (foodsList) foodsList.innerHTML = foods.map(nlFoodRowHTML).join('');
 
-  if (foodsList) {
-    foodsList.innerHTML = (data.foods || []).map(f => `
-      <div class="nlog-food-row">
-        <div class="nlog-food-name">${f.name} <span style="color:rgba(176,169,160,.45);font-weight:500;font-size:11px">${f.portion || ''}</span></div>
-        <div class="nlog-food-macros">
-          <div class="nlog-macro-chip"><div class="nlog-macro-chip-val">${f.calories}</div><div class="nlog-macro-chip-lbl">kcal</div></div>
-          <div class="nlog-macro-chip"><div class="nlog-macro-chip-val">${f.protein}g</div><div class="nlog-macro-chip-lbl">protein</div></div>
-          <div class="nlog-macro-chip"><div class="nlog-macro-chip-val">${f.carbs}g</div><div class="nlog-macro-chip-lbl">carbs</div></div>
-          <div class="nlog-macro-chip"><div class="nlog-macro-chip-val">${f.fat}g</div><div class="nlog-macro-chip-lbl">fat</div></div>
-        </div>
-      </div>`).join('');
-  }
+  const totalRow = document.getElementById('nlog-total-row');
+  if (totalRow) totalRow.innerHTML = nlTotalRowHTML(tot);
 
-  const tot = data.total || {};
-  if (totalRow) {
-    totalRow.innerHTML = `
-      <div class="nlog-total-chip"><div class="nlog-total-chip-val">${tot.calories || 0}</div><div class="nlog-total-chip-lbl">kcal</div></div>
-      <div class="nlog-total-chip"><div class="nlog-total-chip-val">${tot.protein || 0}g</div><div class="nlog-total-chip-lbl">protein</div></div>
-      <div class="nlog-total-chip"><div class="nlog-total-chip-val">${tot.carbs || 0}g</div><div class="nlog-total-chip-lbl">carbs</div></div>
-      <div class="nlog-total-chip"><div class="nlog-total-chip-val">${tot.fat || 0}g</div><div class="nlog-total-chip-lbl">fat</div></div>`;
-  }
-
-  const confMap = { low: 'Low confidence', medium: 'Medium confidence', high: 'High confidence' };
-  if (confEl) confEl.textContent = confMap[data.confidence] || '';
-  if (noteEl) noteEl.textContent = data.note || '';
+  // Gộp độ chắc chắn, ghi chú, số món và dòng "sau bữa này còn…" về một chỗ.
+  nlShowReview(data.confidence, data.note, foods.length, tot);
 }
 
 async function saveNutritionLog(source) {
@@ -12693,45 +12598,29 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   </div>
 
   <!-- NUTRITION PAGE -->
-  <div id="nutrition-page">
-    <!-- Today's macros hero -->
-    <div class="nutrition-header">
-      <div class="nutrition-title" id="nutrition-date-title">🥗 Today</div>
-      <button class="nlog-add-btn" onclick="openNutritionModal()">+ Log Meal</button>
+<section id="nutrition-page" class="nl nl-page">
+  <header class="nl-page-head">
+    <div>
+      <h1 class="nl-page-title">Hôm nay</h1>
+      <div class="nl-page-date" id="nl-page-date"></div>
     </div>
+    <button class="nl-btn nl-btn-pri nl-log-btn" onclick="openNutritionModal()">
+      <svg class="nl-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Ghi bữa ăn
+    </button>
+  </header>
 
-    <div class="nutrition-card" id="nutrition-card">
-      <div class="nutrition-no-target" id="nutrition-no-target">Loading…</div>
-      <div class="macro-rows hidden" id="nutrition-macros"></div>
-    </div>
+  <!-- targets area: macro card / no-target card / InBody recommendation / medical note -->
+  <div id="nutrition-targets" class="nl-targets"></div>
 
-    <!-- Recommendation panel -->
-    <div class="nrec-panel hidden" id="nrec-panel">
-      <div class="nrec-head">
-        <div class="nrec-title">Macro Targets</div>
-        <div class="nrec-source" id="nrec-source"></div>
-      </div>
-      <div class="nrec-body" id="nrec-body"></div>
-    </div>
-
-    <!-- Coach controls -->
-    <div class="nutrition-actions hidden" id="nutrition-actions">
-      <button class="nrec-btn" id="nrec-generate-btn" onclick="generateMacroRecommendation()">
-        Calculate from InBody
-      </button>
-      <button class="macro-target-btn" onclick="openMacroTargetsModal()">Adjust manually</button>
-    </div>
-
-    <!-- Meals logged today -->
-    <div class="section-title" style="margin-top:24px">Meals Today</div>
-    <div class="nutrition-meals" id="nutrition-meals">
-      <div class="nutrition-empty" id="nutrition-meals-empty">No meals logged yet today.</div>
-    </div>
-
-    <!-- 7-day history -->
-    <div class="section-title" style="margin-top:24px">Last 30 Days</div>
-    <div id="nutrition-week"><div class="nutrition-empty">Loading…</div></div>
-  </div>
+  <section class="nl-card nl-meals" aria-labelledby="nl-meals-t">
+    <div class="nl-sec-h"><span class="nl-sec-t" id="nl-meals-t">Đã ăn hôm nay</span><span class="nl-sec-s" id="nl-meals-count"></span></div>
+    <div id="nutrition-meals"></div>
+  </section>
+  <section class="nl-card" style="padding-top:16px">
+    <div class="nl-sec-h" style="margin-bottom:10px"><span class="nl-sec-t">30 ngày gần đây</span></div>
+    <div id="nutrition-week"><div class="nutrition-empty">Đang tải…</div></div>
+  </section>
+</section>
 
   <!-- PROGRESS PAGE -->
   <div class="modal-overlay" id="bill-set-modal">
@@ -12815,98 +12704,105 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 </div>
 
 <!-- ── NUTRITION LOG MODAL ─────────────────────────────────────────────── -->
-<div class="nlog-overlay hidden" id="nlog-overlay">
-  <div class="nlog-sheet">
-    <div class="nlog-handle"></div>
-    <div class="nlog-head">
-      <div class="nlog-title" id="nlog-title">Log a Meal</div>
-      <button class="nlog-close" onclick="closeNutritionModal()">✕</button>
+<div id="nlog-overlay" class="nl hidden" onclick="if(event.target===this)closeNutritionModal()">
+  <div class="nlog-sheet" role="dialog" aria-modal="true" aria-labelledby="nlog-title">
+    <div class="nl-sheet-head">
+      <span class="nl-grab" aria-hidden="true"></span>
+      <h2 id="nlog-title">Ghi bữa ăn</h2>
+      <button class="nl-x" onclick="closeNutritionModal()" aria-label="Đóng">
+        <svg class="nl-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
     </div>
-    <div class="nlog-body">
 
-      <!-- Step 0: Choose input method -->
-      <div class="nlog-step active" id="nlog-step-0">
-        <div class="nlog-option-row nlog-option-row-3">
-          <div class="nlog-option" onclick="document.getElementById('nlog-photo-input').click()">
-            <div class="nlog-option-icon">📷</div>
-            <div class="nlog-option-label">Camera</div>
-            <div class="nlog-option-sub">Take a photo</div>
-          </div>
-          <div class="nlog-option" onclick="document.getElementById('nlog-library-input').click()">
-            <div class="nlog-option-icon">🖼️</div>
-            <div class="nlog-option-label">Library</div>
-            <div class="nlog-option-sub">From gallery</div>
-          </div>
-          <div class="nlog-option" onclick="showNlogStep('manual')">
-            <div class="nlog-option-icon">✏️</div>
-            <div class="nlog-option-label">Manual</div>
-            <div class="nlog-option-sub">Type numbers</div>
-          </div>
-        </div>
-        <!-- Two inputs on purpose: `capture` forces the camera and hides the
-             gallery, so one element cannot offer both paths reliably. -->
-        <input type="file" id="nlog-photo-input" accept="image/*" capture="environment" style="display:none" onchange="handleMealPhoto(this)">
-        <input type="file" id="nlog-library-input" accept="image/*" style="display:none" onchange="handleMealPhoto(this)">
+    <!-- landing -->
+    <div id="nlog-step-0" class="nlog-step active">
+      <div class="nl-ctx" id="nl-ctx"></div>
+
+      <input class="nl-vh nl-file" type="file" id="nlog-photo-input" accept="image/*" capture="environment" onchange="handleMealPhoto(this)">
+      <label class="nl-cam" for="nlog-photo-input">
+        <span class="nl-cam-ic"><svg class="nl-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2.3l1.4-2h5.6l1.4 2h2.3A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/><circle cx="12" cy="13" r="3.5"/></svg></span>
+        <span><span class="nl-cam-t">Chụp món ăn</span><span class="nl-cam-s">Pulse tính calo từ ảnh, thường khoảng 10 giây</span></span>
+      </label>
+
+      <div class="nl-alt">
+        <input class="nl-vh nl-file" type="file" id="nlog-library-input" accept="image/*" onchange="handleMealPhoto(this)">
+        <label class="nl-alt-b" for="nlog-library-input">
+          <svg class="nl-i" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M20 16l-4.5-4.5L7 19"/></svg>Ảnh có sẵn
+        </label>
+        <button class="nl-alt-b" type="button" onclick="showNlogStep('manual')">
+          <svg class="nl-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>Nhập tay
+        </button>
       </div>
 
-      <!-- Step 1: Analyzing -->
-      <div class="nlog-step" id="nlog-step-analyzing">
-        <div class="nlog-analyzing">
-          <div class="nlog-analyzing-spinner">🔍</div>
-          <div class="nlog-analyzing-text" id="nlog-analyzing-sub">Analyzing your meal…</div>
+      <div class="nl-rep-wrap">
+        <div class="nl-sec-h"><span class="nl-sec-t">Ăn lại món gần đây</span><span class="nl-sec-s" id="nl-rep-hint">Chạm là ghi, không cần chụp</span></div>
+        <div id="nl-repeat"></div>
+      </div>
+    </div>
+
+    <!-- analysing -->
+    <div id="nlog-step-analyzing" class="nlog-step">
+      <div class="nl-wait" id="nl-wait" role="status" aria-live="polite">
+        <div class="nl-wait-time nl-num" id="nl-wait-time" aria-hidden="true">0:00</div>
+        <div class="nl-wait-track" aria-hidden="true"></div>
+        <div class="nl-wait-line">
+          <svg class="nl-i nl-wait-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4.5h-4.5"/></svg>
+          <span id="nlog-analyzing-sub">Đang nhận món và ước lượng khẩu phần</span>
+        </div>
+        <p class="nl-wait-hint" id="nl-wait-hint">Thường xong trong khoảng 10 giây.</p>
+        <div class="nl-wait-acts">
+          <button class="nl-btn nl-btn-sec" type="button" onclick="nlCancelAnalysis(true)">Nhập tay</button>
+          <button class="nl-btn nl-btn-sec" type="button" onclick="nlCancelAnalysis(false)">Huỷ</button>
         </div>
       </div>
+    </div>
 
-      <!-- Step 2: AI Results Review -->
-      <div class="nlog-step" id="nlog-step-results">
-        <button class="nlog-back-btn" onclick="showNlogStep('0')">← Back</button>
-        <div class="nlog-section-label">Detected Items</div>
-        <div class="nlog-foods-list" id="nlog-foods-list"></div>
-        <div class="nlog-confidence" id="nlog-confidence"></div>
-        <div class="nlog-section-label">Total</div>
-        <div class="nlog-total-row" id="nlog-total-row"></div>
-        <div class="nlog-note" id="nlog-note"></div>
-
-        <div class="nlog-fix">
-          <div class="nlog-fix-head">Pulse nhận sai món?</div>
-          <div class="nlog-fix-sub">Ghi rõ món gì, bao nhiêu, có nhiều dầu mỡ hay nước dùng không.</div>
-          <textarea class="nlog-fix-input" id="nlog-hint" rows="3"
-            placeholder="VD: Miến vịt, khoảng 1 tô lớn, có 5 miếng thịt vịt và nhiều mỡ hành"></textarea>
-          <button class="nlog-fix-btn" id="nlog-fix-btn" onclick="reanalyseMeal()">Tính lại</button>
-        </div>
-
-        <button class="nlog-save-btn" onclick="saveNutritionLog('ai')">Save to Log</button>
+    <!-- review -->
+    <div id="nlog-step-results" class="nlog-step nl-has-foot">
+      <div class="nl-sum">
+        <div id="nlog-total-row"></div>
+        <p class="nl-after" id="nl-after"></p>
+        <p id="nlog-confidence"></p>
+        <p id="nlog-note"></p>
       </div>
 
-      <!-- Step 3: Manual Entry -->
-      <div class="nlog-step" id="nlog-step-manual">
-        <button class="nlog-back-btn" onclick="showNlogStep('0')">← Back</button>
-        <div class="nlog-section-label">Meal Name</div>
-        <div class="nlog-field" style="margin-bottom:12px">
-          <input type="text" id="nlog-meal-name" placeholder="e.g. Cơm bò, Salad, Protein shake…" style="width:100%;box-sizing:border-box">
-        </div>
-        <div class="nlog-section-label">Macros</div>
-        <div class="nlog-manual-grid">
-          <div class="nlog-field">
-            <label>Calories (kcal)</label>
-            <input type="number" id="nlog-cal" placeholder="0" min="0" max="5000">
-          </div>
-          <div class="nlog-field">
-            <label>Protein (g)</label>
-            <input type="number" id="nlog-prot" placeholder="0" min="0" max="500">
-          </div>
-          <div class="nlog-field">
-            <label>Carbs (g)</label>
-            <input type="number" id="nlog-carbs" placeholder="0" min="0" max="1000">
-          </div>
-          <div class="nlog-field">
-            <label>Fat (g)</label>
-            <input type="number" id="nlog-fat" placeholder="0" min="0" max="500">
-          </div>
-        </div>
-        <button class="nlog-save-btn" onclick="saveNutritionLog('manual')">Save to Log</button>
+      <details class="nl-items" id="nl-items">
+        <summary><span id="nl-items-sum">Từng món</span><svg class="nl-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></summary>
+        <div id="nlog-foods-list"></div>
+      </details>
+
+      <div class="nl-fix">
+        <p class="nl-fix-t">Chưa đúng?</p>
+        <p class="nl-fix-s">Ghi món hoặc khẩu phần thật, Pulse sẽ tính lại từ cùng tấm ảnh.</p>
+        <textarea id="nlog-hint" rows="2" placeholder="VD: cơm nửa chén, ức gà bỏ da"></textarea>
+        <button id="nlog-fix-btn" type="button" onclick="reanalyseMeal()">Tính lại</button>
       </div>
 
+      <div class="nl-foot">
+        <button class="nl-btn nl-btn-sec" type="button" onclick="showNlogStep('0')">Chụp lại</button>
+        <button class="nl-btn nl-btn-pri" type="button" onclick="saveNutritionLog('ai')">Lưu bữa này</button>
+      </div>
+    </div>
+
+    <!-- manual -->
+    <div id="nlog-step-manual" class="nlog-step nl-has-foot">
+      <div class="nl-field">
+        <label for="nlog-meal-name">Tên món</label>
+        <input class="nl-in" id="nlog-meal-name" type="text" autocomplete="off" placeholder="VD: Bún chả, 1 phần">
+      </div>
+      <div class="nl-field">
+        <label for="nlog-cal">Calo</label>
+        <div class="nl-in-wrap"><input class="nl-in nl-num" id="nlog-cal" type="number" inputmode="numeric" min="0" placeholder="0"><span class="nl-unit">kcal</span></div>
+      </div>
+      <div class="nl-grid3">
+        <div class="nl-field"><label for="nlog-prot">Đạm</label><div class="nl-in-wrap"><input class="nl-in nl-num" id="nlog-prot" type="number" inputmode="decimal" min="0" placeholder="0"><span class="nl-unit">g</span></div></div>
+        <div class="nl-field"><label for="nlog-carbs">Tinh bột</label><div class="nl-in-wrap"><input class="nl-in nl-num" id="nlog-carbs" type="number" inputmode="decimal" min="0" placeholder="0"><span class="nl-unit">g</span></div></div>
+        <div class="nl-field"><label for="nlog-fat">Chất béo</label><div class="nl-in-wrap"><input class="nl-in nl-num" id="nlog-fat" type="number" inputmode="decimal" min="0" placeholder="0"><span class="nl-unit">g</span></div></div>
+      </div>
+      <div class="nl-foot">
+        <button class="nl-btn nl-btn-sec" type="button" onclick="showNlogStep('0')">Quay lại</button>
+        <button class="nl-btn nl-btn-pri" type="button" onclick="saveNutritionLog('manual')">Lưu bữa này</button>
+      </div>
     </div>
   </div>
 </div>
@@ -14173,8 +14069,10 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .sch-empty{font-size:12px;color:rgba(176,169,160,.4);text-align:center;padding:8px 0;margin:0;}
 
 /* ── Nutrition Page ─────────────────────────────────────────────────────── */
-#nutrition-page{display:none;padding:12px 0 48px;--ac:#161111;--ac-lo:rgba(255,255,255,0.75);--ac-hi:#8FDBFF;}
-#nutrition-page.active{display:block;}
+#nutrition-page{display:none;--ac:#161111;--ac-lo:rgba(255,255,255,0.75);--ac-hi:#8FDBFF;}
+/* flex, khong phai block: .nl.nl-page dung flex column + gap, ma luat id nay
+   thang ve do uu tien nen block se nuot ca gap lan huong. */
+#nutrition-page.active{display:flex;}
 #nutrition-page.switching{opacity:0;transition:opacity .18s ease;}
 #nutrition-page .section-title{font-size:13px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:rgba(176,169,160,.6);margin-bottom:10px;}
 #nutrition-page .section-title::after{content:'';display:block;height:1px;background:rgba(63,63,61,.16);margin-top:6px;}
@@ -14182,8 +14080,6 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .nutrition-section{margin:0 0 1.5rem;}
 .nutrition-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:12px;}
 .nutrition-title{font-size:15px;font-weight:800;color:#F4F1FB;letter-spacing:.2px;}
-.nlog-add-btn{background:rgba(63,63,61,.15);border:1px solid rgba(63,63,61,.3);color:#8FDBFF;font-size:12px;font-weight:700;border-radius:20px;padding:5px 14px;cursor:pointer;letter-spacing:.5px;}
-.nlog-add-btn:active{background:rgba(63,63,61,.25);}
 .nutrition-card{background:rgba(29,27,25,.6);border:1px solid rgba(63,63,61,.14);border-radius:16px;padding:16px;}
 .nutrition-no-target{font-size:13px;color:rgba(176,169,160,.45);text-align:center;padding:8px 0;}
 .macro-rows{display:flex;flex-direction:column;gap:10px;}
@@ -14266,16 +14162,6 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 
 /* correction box in the review step */
 .nlog-fix{background:rgba(63,63,61,.06);border:1px solid rgba(63,63,61,.16);border-radius:13px;padding:12px;margin-bottom:16px;}
-.nlog-fix-head{font-size:13px;font-weight:700;color:#F4F1FB;}
-.nlog-fix-sub{font-size:11px;color:rgba(176,169,160,.5);margin:3px 0 9px;line-height:1.45;}
-.nlog-fix-input{
-  width:100%;box-sizing:border-box;background:rgba(255,255,255,.05);
-  border:1px solid rgba(63,63,61,.25);border-radius:10px;padding:9px 11px;
-  color:#F4F1FB;font-size:13px;font-family:'Figtree',sans-serif;line-height:1.5;
-  outline:none;resize:vertical;
-}
-.nlog-fix-input:focus{border-color:rgba(63,63,61,.6);}
-.nlog-fix-input::placeholder{color:rgba(176,169,160,.32);}
 .nlog-fix-btn{
   width:100%;margin-top:9px;background:rgba(63,63,61,.16);
   border:1px solid rgba(63,63,61,.34);border-radius:10px;padding:10px;
@@ -14299,22 +14185,11 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 /* Step 1 — choose input */
 .nlog-step{display:none;}
 .nlog-step.active{display:block;}
-.nlog-option-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;}
 /* three-up needs tighter gutters to keep the sub-labels on one line at 360px */
-.nlog-option-row-3{grid-template-columns:1fr 1fr 1fr;gap:8px;}
-.nlog-option-row-3 .nlog-option{padding:16px 6px;}
-.nlog-option-row-3 .nlog-option-sub{font-size:10px;line-height:1.25;}
-.nlog-option{background:rgba(63,63,61,.1);border:1.5px solid rgba(63,63,61,.25);border-radius:14px;padding:20px 12px;text-align:center;cursor:pointer;transition:background .15s,border .15s;}
-.nlog-option:active{background:rgba(63,63,61,.2);}
-.nlog-option-icon{font-size:28px;margin-bottom:6px;}
-.nlog-option-label{font-size:13px;font-weight:700;color:#F4F1FB;}
-.nlog-option-sub{font-size:11px;color:rgba(176,169,160,.5);margin-top:2px;}
 .nlog-section-label{font-size:12px;font-weight:700;letter-spacing:1px;color:rgba(176,169,160,.5);text-transform:uppercase;margin:0 0 10px;}
 /* Step 2a — analyzing */
 .nlog-analyzing{text-align:center;padding:32px 0;}
-.nlog-analyzing-spinner{font-size:40px;animation:spin 1.5s linear infinite;display:inline-block;margin-bottom:12px;}
 @keyframes spin{to{transform:rotate(360deg);}}
-.nlog-analyzing-text{color:rgba(176,169,160,.7);font-size:14px;}
 /* Step 2b — review results */
 .nlog-foods-list{display:flex;flex-direction:column;gap:8px;margin-bottom:16px;}
 .nlog-food-row{background:rgba(63,63,61,.08);border-radius:11px;padding:10px 12px;}
@@ -14330,20 +14205,266 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .nlog-total-chip-lbl{font-size:10px;color:rgba(176,169,160,.5);letter-spacing:.5px;text-transform:uppercase;}
 .nlog-note{font-size:11px;color:rgba(176,169,160,.4);margin-bottom:16px;font-style:italic;}
 /* Manual entry */
-.nlog-manual-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;}
 .nlog-field{display:flex;flex-direction:column;gap:4px;}
 .nlog-field label{font-size:11px;font-weight:700;letter-spacing:.5px;color:rgba(176,169,160,.6);text-transform:uppercase;}
 .nlog-field input{background:rgba(63,63,61,.1);border:1px solid rgba(63,63,61,.25);border-radius:10px;padding:10px 12px;color:#F4F1FB;font-size:15px;font-weight:700;outline:none;-webkit-appearance:none;}
 .nlog-field input:focus{border-color:rgba(63,63,61,.6);}
-.nlog-field-full{grid-column:1/-1;}
 .nlog-save-btn{width:100%;background:linear-gradient(135deg,rgba(255,255,255,0.75),#161111);border:none;border-radius:14px;padding:16px;color:#161111;font-size:16px;font-weight:800;cursor:pointer;letter-spacing:.5px;}
 .nlog-save-btn:disabled{opacity:.4;cursor:not-allowed;}
-.nlog-back-btn{background:none;border:none;color:rgba(176,169,160,.6);font-size:13px;cursor:pointer;padding:0 0 12px;display:flex;align-items:center;gap:4px;}
 /* Coach macro target panel */
 .macro-target-btn{flex:1;text-align:center;background:none;border:1px solid rgba(63,63,61,.18);border-radius:12px;padding:13px;color:rgba(176,169,160,.55);font-size:13px;font-weight:600;cursor:pointer;transition:background .15s;}
 .macro-target-btn:hover{background:rgba(63,63,61,.08);}
 .macro-target-btn:active{background:rgba(63,63,61,.14);}
 .nlog-target-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;}
+
+/* ══ GHI BUA AN — giao dien moi (Claude Design, 2026-10-05) ════════════
+   Moi selector nam duoi .nl (tren #nlog-overlay va container tab dinh duong)
+   nen khong lan sang 11 tab khac. Luat .nlog-* cu ben tren VAN GIU vi
+   #ntarget-overlay (modal dat muc tieu) khong co .nl va con dung chung. */
+.nl{font-family:'Figtree',sans-serif;color:var(--txt);-webkit-font-smoothing:antialiased}
+.nl *{box-sizing:border-box}
+.nl.hidden,.nl .hidden{display:none !important}
+.nl .nl-i{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.nl .nl-num{font-variant-numeric:tabular-nums}
+.nl .nl-of{font-weight:600;color:var(--txt-muted)}
+/* visually hidden but still focusable: the file inputs stay real <input>s so keyboard + iOS both work */
+.nl .nl-vh{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.nl .nl-sec-t{font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--txt-muted)}
+.nl .nl-sec-h{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.nl .nl-sec-s{font-size:12.5px;color:var(--txt-muted)}
+.nl .nl-portion{display:block;margin-top:2px;font-size:12.5px;font-weight:500;color:var(--txt-muted)}
+
+/* ── buttons ── */
+.nl .nl-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:50px;padding:0 18px;border-radius:14px;border:0;font:800 15.5px 'Figtree',sans-serif;cursor:pointer;-webkit-tap-highlight-color:transparent}
+/* accent-strong is for the primary action only; ink is --on-accent because white fails on it (3.6:1) */
+.nl .nl-btn-pri{background:var(--accent-strong);color:var(--on-accent)}
+.nl .nl-btn-sec{background:var(--surface);border:1px solid var(--line);color:var(--txt)}
+.nl .nl-btn:focus-visible,.nl button:focus-visible,.nl .nl-cam:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.nl .nl-file:focus-visible + .nl-cam,.nl .nl-file:focus-visible + .nl-alt-b{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ── overlay + sheet ── */
+#nlog-overlay{position:fixed;inset:0;z-index:1000;display:flex;align-items:flex-end;justify-content:center;background:rgba(0,0,0,.6)}
+#nlog-overlay .nlog-sheet{
+  width:100%;max-width:520px;max-height:92vh;max-height:92dvh;overflow-y:auto;overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;background:var(--bg-2);border:1px solid var(--line);border-bottom:0;
+  border-radius:22px 22px 0 0;animation:nl-up .26s cubic-bezier(.2,.8,.2,1);
+}
+/* height follows content: no fixed tall sheet, so no dead space */
+@keyframes nl-up{from{transform:translateY(28px);opacity:0}to{transform:none;opacity:1}}
+@keyframes nl-fade{from{opacity:0}to{opacity:1}}
+.nl .nl-sheet-head{position:sticky;top:0;z-index:3;display:flex;align-items:center;gap:8px;padding:18px 8px 8px 20px;background:var(--bg-2)}
+.nl .nl-grab{position:absolute;left:50%;top:7px;width:36px;height:4px;margin-left:-18px;border-radius:3px;background:rgba(255,255,255,.22)}
+.nl #nlog-title{flex:1;margin:0;font-size:19px;font-weight:800;letter-spacing:-.01em}
+.nl .nl-x{width:44px;height:44px;border:0;border-radius:12px;background:transparent;color:var(--txt-2);display:flex;align-items:center;justify-content:center;cursor:pointer}
+
+/* steps: showNlogStep() toggles .active on these ids */
+.nl [id^="nlog-step-"]{display:none;flex-direction:column;gap:18px;padding:6px 20px calc(22px + env(safe-area-inset-bottom))}
+.nl [id^="nlog-step-"].active{display:flex;animation:nl-fade .18s ease}
+.nl [id^="nlog-step-"].nl-has-foot{padding-bottom:0}
+/* sticky footer carries the safe-area inset itself (home indicator on PWA) */
+.nl .nl-foot{position:sticky;bottom:0;z-index:2;display:flex;gap:10px;margin:2px -20px 0;padding:12px 20px calc(12px + env(safe-area-inset-bottom));background:var(--bg-2);border-top:1px solid var(--line)}
+.nl .nl-foot .nl-btn-pri{flex:1}
+
+/* ── landing: context ── */
+.nl .nl-ctx{display:flex;flex-direction:column;gap:9px;padding:15px 16px;border-radius:16px;background:var(--surface)}
+.nl .nl-ctx-main{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 14px}
+.nl .nl-ctx-big{font-size:30px;font-weight:800;letter-spacing:-.02em;line-height:1}
+.nl .nl-ctx-big small{font-size:15px;font-weight:700;color:var(--txt-2);letter-spacing:0}
+.nl .nl-ctx-side{font-size:15px;font-weight:700;color:var(--txt-2)}
+.nl .nl-ctx-bar{height:6px;border-radius:4px;background:rgba(255,255,255,.1);overflow:hidden}
+.nl .nl-ctx-bar span{display:block;height:100%;border-radius:4px;background:var(--accent)}
+.nl .nl-ctx-bar.is-over span{background:var(--danger)}
+.nl .nl-ctx-sub{font-size:13px;line-height:1.5;color:var(--txt-muted)}
+.nl .nl-ctx-t{font-size:16px;font-weight:800}
+
+/* ── landing: camera hero + fallbacks ── */
+.nl .nl-cam{display:flex;align-items:center;gap:14px;min-height:78px;padding:15px 18px;border-radius:18px;background:var(--accent-strong);color:var(--on-accent);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.nl .nl-cam:active{transform:scale(.99)}
+.nl .nl-cam-ic{width:46px;height:46px;flex:none;border-radius:13px;background:rgba(22,17,17,.12);display:flex;align-items:center;justify-content:center}
+.nl .nl-cam-ic .nl-i{width:24px;height:24px;stroke-width:2}
+.nl .nl-cam-t{display:block;font-size:17.5px;font-weight:800}
+/* full-ink sub line: dimming --on-accent drops it under 4.5:1 on --accent-strong */
+.nl .nl-cam-s{display:block;margin-top:2px;font-size:13.5px;font-weight:600}
+.nl .nl-alt{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:-6px}
+.nl .nl-alt-b{display:flex;align-items:center;justify-content:center;gap:8px;min-height:48px;padding:0 10px;border-radius:14px;border:1px solid var(--line);background:transparent;color:var(--txt);font:700 14.5px 'Figtree',sans-serif;cursor:pointer}
+.nl .nl-alt-b .nl-i{width:18px;height:18px;color:var(--txt-2)}
+
+/* ── landing: repeat ── */
+.nl .nl-rep-wrap{display:flex;flex-direction:column;gap:10px}
+.nl .nl-rep-list{display:flex;flex-direction:column;border-radius:16px;background:var(--surface);overflow:hidden}
+.nl .nl-rep{display:flex;align-items:center;gap:12px;width:100%;min-height:60px;padding:10px 12px 10px 16px;border:0;background:transparent;color:var(--txt);text-align:left;font-family:'Figtree',sans-serif;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.nl .nl-rep + .nl-rep{border-top:1px solid var(--line)}
+.nl .nl-rep:active{background:rgba(255,255,255,.05)}
+.nl .nl-rep-main{flex:1;min-width:0}
+.nl .nl-rep-name{display:block;font-size:15px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nl .nl-rep-sub{display:block;margin-top:2px;font-size:12.5px;color:var(--txt-muted)}
+.nl .nl-rep-kcal{font-size:15px;font-weight:800;white-space:nowrap}
+.nl .nl-rep-add{width:32px;height:32px;flex:none;border-radius:50%;background:var(--accent-tint);color:var(--accent);display:flex;align-items:center;justify-content:center}
+.nl .nl-rep-add .nl-i{width:17px;height:17px;stroke-width:2.2}
+.nl .nl-rep.is-saving .nl-rep-add{background:var(--good);color:var(--on-accent)}
+.nl .nl-rep-empty{margin:0;padding:16px;border-radius:16px;border:1px dashed var(--line);font-size:14px;line-height:1.55;color:var(--txt-muted)}
+
+/* ── analysing ── */
+.nl .nl-wait{display:flex;flex-direction:column;align-items:center;gap:16px;padding:22px 0 4px;text-align:center}
+.nl .nl-wait-time{font-size:58px;font-weight:800;letter-spacing:-.03em;line-height:1}
+.nl .nl-wait-track{position:relative;width:100%;max-width:240px;height:4px;border-radius:3px;background:rgba(255,255,255,.1);overflow:hidden}
+.nl .nl-wait-track::after{content:'';position:absolute;top:0;bottom:0;left:-35%;width:35%;border-radius:3px;background:var(--accent);animation:nl-slide 1.5s ease-in-out infinite}
+@keyframes nl-slide{to{left:100%}}
+/* min-heights reserve two lines each, so the retry messages never move the buttons below */
+.nl .nl-wait-line{display:flex;align-items:flex-start;justify-content:center;gap:8px;min-height:2.9em;max-width:310px}
+.nl #nlog-analyzing-sub{font-size:15.5px;font-weight:700;line-height:1.45}
+.nl .nl-wait-ic{display:none;width:20px;height:20px;margin-top:1px;color:var(--accent)}
+.nl .nl-wait.is-retry .nl-wait-ic{display:block;animation:nl-spin 1.2s linear infinite}
+.nl .nl-wait.is-retry .nl-wait-track::after{background:var(--txt-2)}
+@keyframes nl-spin{to{transform:rotate(360deg)}}
+.nl .nl-wait-hint{min-height:2.9em;max-width:300px;margin:-8px 0 0;font-size:13.5px;line-height:1.45;color:var(--txt-muted)}
+.nl .nl-wait-acts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;width:100%}
+
+/* ── review ── */
+.nl .nl-sum{display:flex;flex-direction:column;gap:12px;padding-top:2px}
+.nl #nlog-total-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 16px}
+.nl .nlog-total-chip{display:flex;align-items:baseline;gap:5px}
+.nl .nlog-total-chip-val{font-size:17px;font-weight:800;font-variant-numeric:tabular-nums}
+.nl .nlog-total-chip-lbl{font-size:13.5px;font-weight:600;color:var(--txt-muted)}
+.nl .nlog-total-chip.is-kcal{flex-basis:100%;margin-bottom:2px}
+.nl .nlog-total-chip.is-kcal .nlog-total-chip-val{font-size:62px;letter-spacing:-.035em;line-height:.95}
+.nl .nlog-total-chip.is-kcal .nlog-total-chip-lbl{font-size:18px;font-weight:700;color:var(--txt-2)}
+.nl .nl-after{margin:0;font-size:14px;line-height:1.5;color:var(--txt-2)}
+.nl .nl-after b{color:var(--txt)}
+.nl .nl-after.is-over b{color:var(--danger)}
+.nl #nlog-confidence{margin:0;font-size:13.5px;line-height:1.5;color:var(--txt-muted)}
+/* low confidence gets a raised box; text there must use --txt / --txt-muted-raised, not .55 white */
+.nl #nlog-confidence[data-level="low"]{padding:12px 14px;border-radius:12px;background:var(--surface-2);color:var(--txt);font-size:14px;font-weight:600}
+.nl #nlog-note{margin:0;font-size:13.5px;line-height:1.55;color:var(--txt-muted)}
+.nl #nlog-confidence:empty,.nl #nlog-note:empty,.nl .nl-after:empty{display:none}
+
+.nl .nl-items{border-radius:16px;background:var(--surface)}
+.nl .nl-items>summary{list-style:none;display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:52px;padding:0 12px 0 16px;cursor:pointer;font-size:14.5px;font-weight:700;-webkit-tap-highlight-color:transparent}
+.nl .nl-items>summary::-webkit-details-marker{display:none}
+.nl .nl-items>summary .nl-i{color:var(--txt-muted);transition:transform .18s ease}
+.nl .nl-items[open]>summary .nl-i{transform:rotate(180deg)}
+.nl #nlog-foods-list{padding:0 16px 4px}
+.nl .nlog-food-row{display:flex;flex-direction:column;gap:6px;padding:12px 0;border-top:1px solid var(--line)}
+.nl .nlog-food-name{font-size:14.5px;font-weight:700}
+.nl .nlog-food-macros{display:flex;flex-wrap:wrap;gap:4px 12px}
+.nl .nlog-macro-chip{display:inline-flex;align-items:baseline;gap:4px;font-size:13px}
+.nl .nlog-macro-chip-val{font-weight:700;font-variant-numeric:tabular-nums;color:var(--txt-2)}
+.nl .nlog-macro-chip-lbl{color:var(--txt-muted)}
+.nl .nlog-macro-chip.is-kcal .nlog-macro-chip-val{color:var(--txt);font-weight:800}
+
+.nl .nl-fix{display:flex;flex-direction:column;gap:9px}
+.nl .nl-fix-t{margin:0;font-size:15px;font-weight:800}
+.nl .nl-fix-s{margin:-4px 0 0;font-size:13.5px;line-height:1.5;color:var(--txt-muted)}
+/* 16px: below this iOS Safari zooms the page on focus */
+.nl #nlog-hint{width:100%;min-height:78px;padding:12px 14px;border-radius:12px;border:1.5px solid transparent;background:var(--field);color:var(--txt);font:500 16px/1.45 'Figtree',sans-serif;resize:vertical;-webkit-appearance:none}
+/* placeholder on --field: .55 white is ~3.1:1 there, the raised muted token is 4.7:1 */
+.nl #nlog-hint::placeholder{color:var(--txt-muted-raised)}
+.nl #nlog-hint:focus{outline:0;border-color:var(--accent)}
+.nl #nlog-fix-btn{align-self:flex-start;min-height:44px;padding:0 16px;border-radius:12px;border:1px solid var(--line);background:transparent;color:var(--accent);font:700 14.5px 'Figtree',sans-serif;cursor:pointer}
+.nl #nlog-fix-btn:disabled{color:var(--txt-muted);cursor:progress}
+
+/* ── manual ── */
+.nl .nl-field{display:flex;flex-direction:column;gap:7px;min-width:0}
+.nl .nl-field label{font-size:13px;font-weight:700;color:var(--txt-2)}
+.nl .nl-in-wrap{position:relative}
+/* 16px floor again; the kcal field is bigger on purpose, it is the number that matters */
+.nl .nl-in{width:100%;height:50px;padding:0 14px;border-radius:12px;border:1.5px solid transparent;background:var(--field);color:var(--txt);font:600 16px 'Figtree',sans-serif;-webkit-appearance:none;appearance:none}
+.nl .nl-in::placeholder{color:var(--txt-muted-raised)}
+.nl .nl-in:focus{outline:0;border-color:var(--accent)}
+.nl .nl-in[type=number]::-webkit-inner-spin-button,.nl .nl-in[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.nl .nl-in-wrap .nl-in{padding-right:46px}
+.nl .nl-unit{position:absolute;right:14px;top:50%;transform:translateY(-50%);font-size:14px;font-weight:700;color:var(--txt-muted-raised);pointer-events:none}
+.nl #nlog-cal{height:66px;font-size:28px;font-weight:800;padding-right:58px}
+.nl .nl-grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+
+/* ── nutrition page ── */
+.nl.nl-page{display:flex;flex-direction:column;gap:18px;padding:22px 16px calc(32px + env(safe-area-inset-bottom))}
+.nl .nl-page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px}
+.nl .nl-page-title{margin:0;font-size:28px;font-weight:800;letter-spacing:-.02em;line-height:1.1}
+.nl .nl-page-date{margin-top:4px;font-size:13.5px;color:var(--txt-muted)}
+.nl .nl-log-btn{flex:none;min-height:46px;padding:0 16px 0 13px;border-radius:999px;font-size:14.5px}
+.nl .nl-log-btn .nl-i{stroke-width:2.2}
+.nl .nl-card{padding:18px 16px;border-radius:18px;background:var(--surface);border:1px solid var(--line)}
+.nl .nl-targets{display:flex;flex-direction:column;gap:12px}
+
+/* macro rows: grid areas so the layout holds whatever order macroRow() emits children in */
+.nl .macro-row{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"lbl val" "bar bar" "left left";gap:7px 12px}
+.nl .macro-row + .macro-row{margin-top:16px}
+.nl .macro-label{grid-area:lbl;align-self:end;font-size:14px;font-weight:700;color:var(--txt-2)}
+.nl .macro-val{grid-area:val;align-self:end;font-size:14.5px;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap}
+.nl .macro-bar-wrap{grid-area:bar;height:6px;border-radius:4px;background:rgba(255,255,255,.1);overflow:hidden}
+/* one fill for all four macros. Colour means state, not which macro: accent = progressing,
+   good = within 5% of target, danger = over. The label already says which macro it is. */
+.nl .macro-bar{height:100%;border-radius:4px;background:var(--accent);transition:width .4s ease}
+.nl .macro-bar.done{background:var(--good)}
+.nl .macro-bar.over{background:var(--danger)}
+.nl .macro-left{grid-area:left;font-size:12.5px;font-weight:600;color:var(--txt-muted)}
+.nl .macro-row.is-over .macro-left{color:var(--danger)}
+.nl .macro-row.is-done .macro-left{color:var(--good)}
+.nl .macro-row.is-cal{padding-bottom:16px;border-bottom:1px solid var(--line)}
+.nl .macro-row.is-cal .macro-bar-wrap{height:10px;border-radius:6px}
+.nl .macro-row.is-cal .macro-label{font-size:15px;color:var(--txt)}
+.nl .macro-row.is-cal .macro-val{font-size:26px;letter-spacing:-.02em}
+.nl .macro-row.is-cal .macro-left{font-size:13.5px}
+
+.nl .nl-eaten{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.nl .nl-eaten-v{display:block;font-size:20px;font-weight:800;font-variant-numeric:tabular-nums}
+.nl .nl-eaten-l{display:block;margin-top:3px;font-size:12px;color:var(--txt-muted)}
+
+.nl .nl-notarget{display:flex;flex-direction:column;gap:12px}
+.nl .nl-notarget-t{margin:0;font-size:17px;font-weight:800}
+.nl .nl-notarget-s{margin:-4px 0 0;font-size:14.5px;line-height:1.55;color:var(--txt-2)}
+.nl .nutrition-actions{display:flex;flex-wrap:wrap;gap:10px}
+.nl .nutrition-actions .nl-btn{flex:1 1 140px;min-height:48px;font-size:14.5px}
+
+.nl .nrec{display:flex;flex-direction:column;gap:12px}
+.nl .nrec-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.nl .nrec-reason{margin:0;font-size:14px;line-height:1.55;color:var(--txt-2)}
+/* InBody basis: kept as four labelled numbers so the coach can check it against the printout.
+   LBM and SMM are different measurements; never label LBM as muscle. */
+.nl .nrec-basis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;border-radius:12px;overflow:hidden;background:var(--line)}
+.nl .nrec-basis>div{padding:10px 10px 9px;background:var(--bg-2)}
+.nl .nrec-basis-v{display:block;font-size:15px;font-weight:800;font-variant-numeric:tabular-nums}
+.nl .nrec-basis-l{display:block;margin-top:2px;font-size:11.5px;line-height:1.35;color:var(--txt-muted)}
+@media (max-width:400px){.nl .nrec-basis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* safety note for under-18 clients: full card, full-size body text. Do not shrink. */
+.nl .nrec-medical{display:flex;gap:12px;padding:16px;border-radius:16px;background:rgba(238,90,79,.09);border:1.5px solid rgba(238,90,79,.5)}
+.nl .nrec-medical>.nl-i{width:24px;height:24px;color:var(--danger)}
+.nl .nrec-medical-t{margin:0 0 6px;font-size:16px;font-weight:800;color:var(--danger)}
+.nl .nrec-medical p{margin:0;font-size:15px;line-height:1.55;color:var(--txt)}
+
+/* today's meals */
+.nl .nl-meals{padding:16px 0 4px}
+.nl .nl-meals .nl-sec-h{padding:0 16px 6px}
+.nl .nutrition-meal-item-wrap{border-top:1px solid var(--line)}
+.nl .nutrition-meal-item{display:flex;align-items:center;gap:4px;min-height:64px;padding:8px 4px 8px 16px}
+.nl .nmi-main{flex:1;min-width:0}
+.nl .nmi-name{display:flex;align-items:center;gap:7px;font-size:15px;font-weight:700}
+.nl .nmi-name-t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nl .nmi-badge{display:inline-flex;flex:none;color:var(--accent)}
+.nl .nmi-badge .nl-i{width:15px;height:15px}
+.nl .nmi-macros{margin-top:3px;font-size:12.5px;color:var(--txt-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nl .nmi-kcal{padding:0 6px;font-size:15px;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap}
+.nl .nmi-expand,.nl .nmi-delete{flex:none;width:44px;height:44px;border:0;border-radius:12px;background:transparent;color:var(--txt-muted);display:flex;align-items:center;justify-content:center;cursor:pointer}
+.nl .nmi-expand .nl-i{transition:transform .18s ease}
+.nl .nmi-expand[aria-expanded="true"] .nl-i{transform:rotate(180deg)}
+.nl .nmi-delete:hover{color:var(--danger)}
+.nl .nmi-items{margin:0 16px 12px;padding:4px 12px;border-radius:12px;background:var(--surface)}
+.nl .nmi-item{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:9px 0;font-size:13.5px}
+.nl .nmi-item + .nmi-item{border-top:1px solid var(--line)}
+.nl .nmi-item-name{min-width:0;font-weight:600}
+.nl .nmi-item-macros{flex:none;font-weight:700;color:var(--txt-2);font-variant-numeric:tabular-nums}
+.nl .nmi-conf{padding:9px 0 6px;border-top:1px solid var(--line);font-size:12.5px;line-height:1.5;color:var(--txt-muted)}
+.nl .nl-meals-empty{margin:0;padding:18px 16px 14px;border-top:1px solid var(--line);font-size:14px;color:var(--txt-muted)}
+
+@media (prefers-reduced-motion:reduce){
+  #nlog-overlay .nlog-sheet,.nl [id^="nlog-step-"].active{animation:none}
+  .nl .nl-wait-track::after{animation:none;left:0;width:100%;opacity:.5}
+  .nl .nl-wait.is-retry .nl-wait-ic{animation:none}
+  .nl .macro-bar,.nl .nl-items>summary .nl-i,.nl .nmi-expand .nl-i{transition:none}
+  .nl .nl-cam:active{transform:none}
+}
 
 /* ── Youth development test battery ─────────────────────────────────────── */
 #youth-page{display:none;padding:0 16px 120px;}
@@ -16868,5 +16989,265 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 })();
 </script>
+
+<!-- ══ GHI BUA AN — JS giao dien moi (Claude Design, 2026-10-05) ═══════════
+     Phai nam SAU script chinh: no boc showNlogStep / openNutritionModal /
+     closeNutritionModal. Doc _macroTargets / _nutritionData / userRole qua
+     direct eval vi ba bien do khai bao bang `let` o pham vi script, khong
+     nam tren window — da kiem chung la doc duoc cross-block. -->
+<script id="nl-js">
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var fmt = function (n) { return Math.round(+n || 0).toLocaleString('vi-VN'); };
+  var dec = function (n) { return (+n || 0).toLocaleString('vi-VN', { maximumFractionDigits: 1 }); };
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]; }); };
+  var fold = function (s) {
+    try { if (typeof _schFold === 'function') return String(_schFold(s)).toLowerCase().trim(); } catch (e) {}
+    return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[đĐ]/g, 'd').toLowerCase().trim();
+  };
+  function g(name) { try { return window[name] !== undefined ? window[name] : eval(name); } catch (e) { return undefined; } }
+  function targets() { var t = g('_macroTargets'); return t && +t.calories ? t : null; }
+  function totals() { var d = g('_nutritionData'); return (d && d.totals) || { calories:0, protein:0, carbs:0, fat:0 }; }
+  function mealCount() { var d = g('_nutritionData'); return d && Array.isArray(d.meals) ? d.meals.length : 0; }
+  function role() { return g('userRole') === 'coach' ? 'coach' : 'client'; }
+
+  var P = {
+    camera: '<path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2.3l1.4-2h5.6l1.4 2h2.3A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/><circle cx="12" cy="13" r="3.5"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    check: '<path d="M5 12.5l4.2 4.2L19 7"/>',
+    chev: '<path d="M6 9l6 6 6-6"/>',
+    trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
+    shield: '<path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/><path d="M12 8v5M12 16.5v.01"/>'
+  };
+  function ic(n) { return '<svg class="nl-i" viewBox="0 0 24 24" aria-hidden="true">' + P[n] + '</svg>'; }
+
+  function slot(d) {
+    var h = (d || new Date()).getHours();
+    return h >= 4 && h < 10 ? 'bữa sáng' : h < 14 ? 'bữa trưa' : h < 17 ? 'bữa phụ chiều' : h < 21 ? 'bữa tối' : 'bữa khuya';
+  }
+  window.nlSlot = slot;
+
+  // ── landing: context strip ──
+  function renderContext() {
+    var el = $('nl-ctx'); if (!el) return;
+    var t = targets(), tot = totals(), n = mealCount();
+    if (t) {
+      var left = t.calories - tot.calories, pLeft = Math.max(0, (+t.protein || 0) - tot.protein), over = left < 0;
+      var pct = Math.min(100, tot.calories / t.calories * 100);
+      el.innerHTML = '<span class="nl-sec-t">' + (over ? 'Hôm nay đã vượt' : 'Còn lại hôm nay') + '</span>'
+        + '<div class="nl-ctx-main"><span class="nl-ctx-big nl-num">' + fmt(Math.abs(left)) + ' <small>kcal</small></span>'
+        + (!over && t.protein ? '<span class="nl-ctx-side nl-num">' + fmt(pLeft) + ' g đạm</span>' : '') + '</div>'
+        + '<div class="nl-ctx-bar' + (over ? ' is-over' : '') + '"><span style="width:' + pct.toFixed(1) + '%"></span></div>'
+        + '<span class="nl-ctx-sub nl-num">Đã ăn ' + fmt(tot.calories) + ' / ' + fmt(t.calories) + ' kcal' + (n ? ' · ' + n + ' bữa' : '') + '</span>';
+    } else {
+      var sub = role() === 'coach'
+        ? 'Khách này chưa có mục tiêu. Đặt ở trang Dinh dưỡng.'
+        : 'Coach sẽ đặt mục tiêu cho bạn sớm. Cứ ghi như bình thường, số đã ăn vẫn được cộng.';
+      el.innerHTML = n
+        ? '<span class="nl-sec-t">Đã ăn hôm nay</span><div class="nl-ctx-main"><span class="nl-ctx-big nl-num">' + fmt(tot.calories) + ' <small>kcal</small></span><span class="nl-ctx-side">' + n + ' bữa</span></div><span class="nl-ctx-sub">' + sub + '</span>'
+        : '<span class="nl-ctx-t">Bữa đầu tiên hôm nay</span><span class="nl-ctx-sub">' + sub + '</span>';
+    }
+  }
+
+  // ── landing: repeat list ──
+  var recent = [];
+  window.nlSetRecent = function (list) { recent = (list || []).slice(0, 6); renderRepeat(); };
+  // days: the 30-day docs you already fetch. Newest meal per name wins.
+  window.nlBuildRecent = function (days, limit) {
+    var all = [];
+    (days || []).forEach(function (d) { (d && d.meals || []).forEach(function (m) { if (m && m.name && +m.calories) all.push(m); }); });
+    all.sort(function (a, b) { return (b.timestamp || 0) - (a.timestamp || 0); });
+    var seen = {}, out = [];
+    for (var i = 0; i < all.length && out.length < (limit || 6); i++) {
+      var k = fold(all[i].name); if (seen[k]) continue; seen[k] = 1;
+      out.push({ name: all[i].name, calories: +all[i].calories || 0, protein: +all[i].protein || 0, carbs: +all[i].carbs || 0, fat: +all[i].fat || 0 });
+    }
+    return out;
+  };
+  function renderRepeat() {
+    var el = $('nl-repeat'), hint = $('nl-rep-hint'); if (!el) return;
+    if (hint) hint.hidden = !recent.length;
+    el.innerHTML = recent.length
+      ? '<div class="nl-rep-list">' + recent.map(function (m, i) {
+          return '<button type="button" class="nl-rep" onclick="nlRepeat(' + i + ',this)" aria-label="Ghi lại ' + esc(m.name) + ', ' + fmt(m.calories) + ' kcal">'
+            + '<span class="nl-rep-main"><span class="nl-rep-name">' + esc(m.name) + '</span>'
+            + '<span class="nl-rep-sub nl-num">' + fmt(m.protein) + ' g đạm · ' + fmt(m.carbs) + ' g tinh bột · ' + fmt(m.fat) + ' g béo</span></span>'
+            + '<span class="nl-rep-kcal nl-num">' + fmt(m.calories) + '</span>'
+            + '<span class="nl-rep-add">' + ic('plus') + '</span></button>';
+        }).join('') + '</div>'
+      : '<p class="nl-rep-empty">Các bữa bạn ghi sẽ nằm ở đây. Lần sau ăn lại món đó, chỉ cần một chạm.</p>';
+  }
+  // reuses the existing manual save path: no new Firestore code, saved with source:'manual'
+  window.nlRepeat = function (i, btn) {
+    var m = recent[i]; if (!m) return;
+    var set = function (id, v) { var e = $(id); if (e) e.value = v == null ? '' : Math.round(v * 10) / 10; };
+    var nm = $('nlog-meal-name'); if (nm) nm.value = m.name;
+    set('nlog-cal', m.calories); set('nlog-prot', m.protein); set('nlog-carbs', m.carbs); set('nlog-fat', m.fat);
+    if (btn) { btn.classList.add('is-saving'); btn.querySelector('.nl-rep-add').innerHTML = ic('check'); }
+    saveNutritionLog('manual');
+  };
+
+  // ── analysing: elapsed time, honest hint, retry styling ──
+  var W = { t0: 0, timer: 0 };
+  window.nlWait = W;
+  function tick() {
+    var s = Math.max(0, Math.floor((Date.now() - W.t0) / 1000));
+    var t = $('nl-wait-time'); if (t) t.textContent = Math.floor(s / 60) + ':' + (s % 60 < 10 ? '0' : '') + (s % 60);
+    var h = $('nl-wait-hint'); if (!h) return;
+    var msg = s < 20 ? 'Thường xong trong khoảng 10 giây.'
+      : s < 45 ? 'Lâu hơn bình thường. Có thể đợi thêm, hoặc nhập tay.'
+      : 'Máy chủ đang chậm. Nếu bạn đang vội, nhập tay sẽ nhanh hơn.';
+    if (h.textContent !== msg) h.textContent = msg;
+  }
+  function startWait() {
+    stopWait();
+    W.t0 = Date.now();
+    var sub = $('nlog-analyzing-sub'); if (sub) sub.textContent = 'Đang nhận món và ước lượng khẩu phần';
+    tick(); W.timer = setInterval(tick, 500);
+  }
+  function stopWait() { if (W.timer) clearInterval(W.timer); W.timer = 0; }
+  var subEl = $('nlog-analyzing-sub');
+  if (subEl && window.MutationObserver) {
+    new MutationObserver(function () {
+      var w = $('nl-wait'); if (w) w.classList.toggle('is-retry', /thử lại/i.test(subEl.textContent));
+    }).observe(subEl, { childList: true, characterData: true, subtree: true });
+  }
+  // Cancel needs one guard in handleMealPhoto (see notes), otherwise a late answer reopens results.
+  window.nlCancelAnalysis = function (toManual) {
+    window._nlCancelled = true;
+    stopWait();
+    showNlogStep(toManual ? 'manual' : '0');
+  };
+
+  // ── review helpers ──
+  var CONF = {
+    high: 'Ảnh rõ, số khá sát.',
+    medium: 'Số gần đúng, có thể lệch một ít so với thực tế.',
+    low: 'Ảnh khó nhìn nên số có thể lệch nhiều. Xem lại từng món trước khi lưu.'
+  };
+  window.nlConfidenceText = function (c) { return CONF[c] || ''; };
+  // call at the end of renderAiResults(): confidence + note + item count + "after this meal" line
+  window.nlShowReview = function (conf, note, itemCount, total) {
+    var c = $('nlog-confidence'); if (c) { c.textContent = CONF[conf] || ''; c.setAttribute('data-level', conf || ''); }
+    var n = $('nlog-note'); if (n) n.textContent = note || '';
+    var d = $('nl-items'); if (d) d.open = conf === 'low';
+    var s = $('nl-items-sum'); if (s) s.textContent = itemCount ? itemCount + ' món · xem từng món' : 'Từng món';
+    var a = $('nl-after'); if (!a) return;
+    a.classList.remove('is-over');
+    if (!total) { a.textContent = ''; return; }
+    var t = targets(), tot = totals(), kcal = tot.calories + (+total.calories || 0);
+    if (t) {
+      var left = t.calories - kcal, pLeft = Math.max(0, (+t.protein || 0) - tot.protein - (+total.protein || 0));
+      if (left < 0) { a.classList.add('is-over'); a.innerHTML = 'Bữa này đưa hôm nay vượt mục tiêu <b class="nl-num">' + fmt(-left) + ' kcal</b>.'; }
+      else a.innerHTML = 'Sau bữa này, hôm nay còn <b class="nl-num">' + fmt(left) + ' kcal</b>' + (t.protein ? ' và <b class="nl-num">' + fmt(pLeft) + ' g đạm</b>' : '') + '.';
+    } else a.innerHTML = 'Hôm nay sẽ là <b class="nl-num">' + fmt(kcal) + ' kcal</b> sau bữa này.';
+  };
+
+  // ── templates (use inside the existing render functions; classes unchanged) ──
+  window.nlTotalRowHTML = function (t) {
+    return '<div class="nlog-total-chip is-kcal"><span class="nlog-total-chip-val">' + fmt(t.calories) + '</span><span class="nlog-total-chip-lbl">kcal</span></div>'
+      + '<div class="nlog-total-chip"><span class="nlog-total-chip-val">' + fmt(t.protein) + ' g</span><span class="nlog-total-chip-lbl">đạm</span></div>'
+      + '<div class="nlog-total-chip"><span class="nlog-total-chip-val">' + fmt(t.carbs) + ' g</span><span class="nlog-total-chip-lbl">tinh bột</span></div>'
+      + '<div class="nlog-total-chip"><span class="nlog-total-chip-val">' + fmt(t.fat) + ' g</span><span class="nlog-total-chip-lbl">béo</span></div>';
+  };
+  window.nlFoodRowHTML = function (it) {
+    var chip = function (v, l, k) { return '<span class="nlog-macro-chip' + (k ? ' is-kcal' : '') + '"><span class="nlog-macro-chip-val">' + v + '</span><span class="nlog-macro-chip-lbl">' + l + '</span></span>'; };
+    return '<div class="nlog-food-row"><div class="nlog-food-name">' + esc(it.name) + (it.portion ? '<span class="nl-portion">' + esc(it.portion) + '</span>' : '') + '</div>'
+      + '<div class="nlog-food-macros">' + chip(fmt(it.calories), 'kcal', 1) + chip(fmt(it.protein) + ' g', 'đạm') + chip(fmt(it.carbs) + ' g', 'tinh bột') + chip(fmt(it.fat) + ' g', 'béo') + '</div></div>';
+  };
+  // key: 'cal'|'protein'|'carbs'|'fat'. If your macroRow used a tolerance for .over, keep it in `over`.
+  window.nlMacroRowHTML = function (key, label, val, target) {
+    val = +val || 0; target = +target || 0;
+    var unit = key === 'cal' ? 'kcal' : 'g', pct = target ? val / target : 0;
+    var over = target > 0 && val > target, done = !over && pct >= 0.95;
+    var left = !target ? '' : over ? 'Vượt ' + fmt(val - target) + ' ' + unit : done ? 'Đã đủ' : 'Còn ' + fmt(target - val) + ' ' + unit;
+    return '<div class="macro-row' + (key === 'cal' ? ' is-cal' : '') + (over ? ' is-over' : done ? ' is-done' : '') + '">'
+      + '<span class="macro-label">' + esc(label) + '</span>'
+      + '<span class="macro-val">' + fmt(val) + '<span class="nl-of"> / ' + fmt(target) + ' ' + unit + '</span></span>'
+      + '<div class="macro-bar-wrap"><div class="macro-bar ' + key + (over ? ' over' : done ? ' done' : '') + '" style="width:' + Math.min(100, pct * 100).toFixed(1) + '%"></div></div>'
+      + '<span class="macro-left">' + left + '</span></div>';
+  };
+  window.nlMealItemHTML = function (m, i) {
+    var time = m.timestamp ? new Date(m.timestamp).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '';
+    var ai = m.source === 'ai', items = ai && Array.isArray(m.items) && m.items.length;
+    var conf = ai ? [CONF[m.confidence] || '', m.userHint ? 'Bạn đã chỉnh: ' + esc(m.userHint) : '', m.aiNote ? esc(m.aiNote) : ''].filter(Boolean).join(' ') : '';
+    return '<div class="nutrition-meal-item-wrap"><div class="nutrition-meal-item">'
+      + '<div class="nmi-main"><div class="nmi-name"><span class="nmi-name-t">' + esc(m.name) + '</span>'
+      + (ai ? '<span class="nmi-badge" title="Ước lượng từ ảnh" aria-label="Ước lượng từ ảnh">' + ic('camera') + '</span>' : '') + '</div>'
+      + '<div class="nmi-macros nl-num">' + (time ? time + ' · ' : '') + fmt(m.protein) + ' g đạm · ' + fmt(m.carbs) + ' g tinh bột · ' + fmt(m.fat) + ' g béo</div></div>'
+      + '<span class="nmi-kcal">' + fmt(m.calories) + '<span class="nl-of"> kcal</span></span>'
+      + (items ? '<button type="button" class="nmi-expand" id="nmi-tog-' + i + '" onclick="toggleMealItems(' + i + ')" aria-expanded="false" aria-controls="nmi-items-' + i + '" aria-label="Xem từng món">' + ic('chev') + '</button>' : '')
+      + '<button type="button" class="nmi-delete" onclick="deleteMealLog(' + i + ')" aria-label="Xoá ' + esc(m.name) + '">' + ic('trash') + '</button></div>'
+      + (items ? '<div class="nmi-items hidden" id="nmi-items-' + i + '">' + m.items.map(function (it) {
+          return '<div class="nmi-item"><span class="nmi-item-name">' + esc(it.name) + (it.portion ? '<span class="nl-portion">' + esc(it.portion) + '</span>' : '') + '</span>'
+            + '<span class="nmi-item-macros">' + fmt(it.calories) + ' kcal</span></div>';
+        }).join('') + (conf ? '<div class="nmi-conf">' + conf + '</div>' : '') + '</div>' : '')
+      + '</div>';
+  };
+  function basisHTML(b) {
+    if (!b) return '';
+    var cell = function (v, l) { return '<div><span class="nrec-basis-v nl-num">' + v + '</span><span class="nrec-basis-l">' + l + '</span></div>'; };
+    return '<div class="nrec-basis">' + cell(dec(b.weight) + ' kg', 'Cân nặng') + cell(dec(b.pbf) + '%', 'Mỡ cơ thể')
+      + cell(dec(b.lbm) + ' kg', 'Khối nạc (LBM)') + cell(dec(b.smm) + ' kg', 'Cơ xương (SMM)') + '</div>';
+  }
+  function dmy(s) { var d = s ? new Date(s.seconds ? s.seconds * 1000 : s) : null; return d && !isNaN(d) ? d.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' }) : ''; }
+  // render only for coach; keep it ABOVE the macro card
+  window.nlMedicalHTML = function (meta) {
+    return '<div class="nrec-medical" role="note">' + ic('shield') + '<div><p class="nrec-medical-t">Khách dưới 18 tuổi</p><p>' + esc(meta.medicalNote) + '</p></div></div>';
+  };
+  // coach only (the .nutrition-actions inside must never render for userRole !== 'coach')
+  window.nlRecHTML = function (meta) {
+    var date = dmy(meta.generatedAt);
+    return '<div class="nl-card nrec"><div class="nrec-head"><span class="nl-sec-t">' + (meta.source === 'ai' ? 'Tính từ InBody' : 'Coach tự đặt') + '</span>'
+      + (date ? '<span class="nl-sec-s">' + date + '</span>' : '') + '</div>'
+      + basisHTML(meta.basis)
+      + (meta.reasoning ? '<p class="nrec-reason">' + esc(meta.reasoning) + '</p>' : '')
+      + '<div class="nutrition-actions"><button class="nl-btn nl-btn-sec" onclick="generateMacroRecommendation()">Tính lại từ InBody</button>'
+      + '<button class="nl-btn nl-btn-sec" onclick="openMacroTargetsModal()">Chỉnh tay</button></div></div>';
+  };
+  window.nlNoTargetHTML = function (who, basis, date) {
+    if (who !== 'coach') {
+      return '<div class="nl-card nl-notarget"><p class="nl-notarget-t">Chưa có mục tiêu</p>'
+        + '<p class="nl-notarget-s">Coach sẽ thêm mục tiêu calo và đạm cho bạn sớm. Trong lúc chờ, cứ ghi bữa như bình thường, số đã ăn vẫn được cộng ở dưới.</p></div>';
+    }
+    var d = dmy(date);
+    return '<div class="nl-card nl-notarget"><p class="nl-notarget-t">Khách này chưa có mục tiêu</p>'
+      + '<p class="nl-notarget-s">' + (basis ? 'Có thể tính từ InBody' + (d ? ' ngày ' + d : '') + '. So số dưới đây với bản in trước khi áp dụng.' : 'Chưa có InBody để tính. Bạn có thể tự đặt mục tiêu.') + '</p>'
+      + basisHTML(basis)
+      + '<div class="nutrition-actions">' + (basis ? '<button class="nl-btn nl-btn-pri" onclick="generateMacroRecommendation()">Tính từ InBody</button>' : '')
+      + '<button class="nl-btn nl-btn-sec" onclick="openMacroTargetsModal()">Tự đặt</button></div></div>';
+  };
+  window.nlEatenHTML = function (t) {
+    var c = function (v, l) { return '<div><span class="nl-eaten-v">' + v + '</span><span class="nl-eaten-l">' + l + '</span></div>'; };
+    return '<div class="nl-card"><div class="nl-sec-h" style="margin-bottom:12px"><span class="nl-sec-t">Đã ăn hôm nay</span></div><div class="nl-eaten">'
+      + c(fmt(t.calories), 'kcal') + c(fmt(t.protein) + ' g', 'đạm') + c(fmt(t.carbs) + ' g', 'tinh bột') + c(fmt(t.fat) + ' g', 'béo') + '</div></div>';
+  };
+
+  // ── hooks into existing functions (names and signatures unchanged) ──
+  var TITLES = { analyzing: 'Đang xem món', manual: 'Nhập tay' };
+  function onStep(step) {
+    var t = $('nlog-title');
+    if (t) t.textContent = step === '0' ? 'Ghi ' + slot() : step === 'results' ? (slot().charAt(0).toUpperCase() + slot().slice(1)) : (TITLES[step] || t.textContent);
+    if (step === 'analyzing') startWait(); else stopWait();
+    if (step === '0') { renderContext(); renderRepeat(); }
+    var sh = document.querySelector('#nlog-overlay .nlog-sheet'); if (sh) sh.scrollTop = 0;
+  }
+  function wrap(name, after) {
+    var f = window[name];
+    if (typeof f !== 'function' || f.__nl) return;
+    var w = function () { var r = f.apply(this, arguments); after.apply(this, arguments); return r; };
+    w.__nl = true; window[name] = w;
+  }
+  wrap('showNlogStep', function (step) { onStep(String(step)); });
+  wrap('openNutritionModal', function () { onStep('0'); });
+  wrap('closeNutritionModal', function () { stopWait(); window._nlCancelled = true; });
+  document.addEventListener('keydown', function (e) {
+    var o = $('nlog-overlay');
+    if (e.key === 'Escape' && o && !o.classList.contains('hidden')) closeNutritionModal();
+  });
+})();
+</script>
+
 </body>
 </html>
