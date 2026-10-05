@@ -49,8 +49,11 @@ ok("khong dung ten class trung voi modal Ho so khach", () => {
   const pickerCss = s.slice(cssStart, s.indexOf("/* ── Healthspan", cssStart));
   const pickerJs = pickerStart >= 0 ? s.slice(pickerStart) : "";
   const mine = new Set([...(pickerCss + pickerJs).matchAll(/cp-[a-z0-9-]+/g)].map((m) => m[0]));
-  // class cua modal Ho so khach, lay o phan con lai cua file
-  const rest = s.slice(0, cssStart);
+  // "Cua ho" = class cua modal Ho so khach. Phai cat TRUOC khoi cam-giac-cham,
+  // vi khoi do co quyen nhac toi class cua picker (.cp-trigger nam trong danh
+  // sach nut dai ngang) — tinh ca no vao la bao dong gia.
+  const feel = s.indexOf("══ CẢM GIÁC CHẠM TOÀN APP");
+  const rest = s.slice(0, feel > 0 && feel < cssStart ? feel : cssStart);
   const theirs = new Set([...rest.matchAll(/cp-[a-z0-9-]+/g)].map((m) => m[0]));
   const clash = [...mine].filter((x) => theirs.has(x));
   assert.strictEqual(clash.length, 0, "trung ten class voi modal Ho so khach: " + clash.join(", "));
