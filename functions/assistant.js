@@ -15,6 +15,9 @@ const { getFirestore } = require("firebase-admin/firestore");
 
 /** Trần số vòng gọi tool cho một câu hỏi. */
 const MAX_STEPS = 6;
+/** Mức suy luận: "minimal" | "low" | "medium" | "high". Xem chú thích ở vòng lặp. */
+const THINK_DISPATCH = "minimal";
+const THINK_COMPOSE = "low";
 /** Trần số bản ghi mỗi tool trả về, để một câu hỏi không kéo cả kho dữ liệu. */
 const CAP = 40;
 
@@ -166,6 +169,24 @@ function progSummary(prog) {
   });
 }
 
+/**
+ * Thư viện bài tập: 360 bài, ~175 KB, và nó gần như không đổi.
+ * Trước đây mỗi lần search_exercises là đọc lại toàn bộ kho. Giữ trong bộ nhớ
+ * của instance (Cloud Functions tái dùng instance giữa các lượt gọi) nên lượt
+ * thứ hai trở đi khỏi chạm Firestore.
+ */
+let _exCache = null, _exAt = 0;
+const EX_TTL_MS = 10 * 60 * 1000;
+
+async function exerciseLibrary(db) {
+  if (_exCache && Date.now() - _exAt < EX_TTL_MS) return _exCache;
+  const snap = await db.collection("exercises").get();
+  _exCache = snap.docs.map((d) => d.data() || {});
+  _exAt = Date.now();
+  console.log(`[assistant] nạp lại thư viện bài tập: ${_exCache.length} bài`);
+  return _exCache;
+}
+
 async function runTool(name, args) {
   const db = getFirestore();
   const a = args || {};
@@ -275,11 +296,11 @@ async function runTool(name, args) {
   }
 
   if (name === "search_exercises") {
-    const snap = await db.collection("exercises").get();
+    const lib = await exerciseLibrary(db);
     const q = (a.query || "").toLowerCase().trim();
     const mu = (a.muscle || "").toLowerCase().trim();
     const tl = (a.tool || "").toLowerCase().trim();
-    const hit = snap.docs.map((d) => d.data() || {}).filter((v) => {
+    const hit = lib.filter((v) => {
       const name2 = String(v.name || "").toLowerCase();
       const mus = JSON.stringify(v.muscles || "").toLowerCase();
       const tool = String(v.tool || "").toLowerCase();
@@ -545,8 +566,18 @@ async function runAssistant({ client, model, messages, clientId }) {
 
   while (steps < MAX_STEPS) {
     steps++;
+    // Gemini 3 mặc định suy luận dài. Chính chú thích trong callGemini ghi đó
+    // là thứ từng đẩy lời gọi ảnh món ăn vượt trần 60 giây.
+    //
+    // Lượt ĐẦU chỉ là chọn tool nào để gọi — gần như không cần nghĩ, để
+    // "minimal". Từ lượt hai trở đi dữ liệu đã về và model mới thật sự soạn
+    // câu trả lời, nên nới lên "low".
+    //
+    // Thấy giáo án nó soạn hời hợt thì nâng THINK_COMPOSE lên "medium"; đây là
+    // chỗ đánh đổi giữa nhanh và sâu, và nó nằm ở đúng một dòng.
     const interaction = await client.interactions.create({
       model, input, tools: TOOLS, system_instruction: SYSTEM,
+      generation_config: { thinking_level: steps === 1 ? THINK_DISPATCH : THINK_COMPOSE },
     });
     usage = interaction.usage || usage;
 
@@ -558,15 +589,21 @@ async function runAssistant({ client, model, messages, clientId }) {
     // Giữ nguyên các bước model sinh ra rồi mới nối kết quả — bỏ qua là model
     // mất dấu nó vừa hỏi gì, và sẽ gọi lại đúng tool đó mãi.
     input.push(...calls);
-    for (const c of calls) {
-      let result;
+    // Chạy SONG SONG. Model hay đòi 2–3 tool một lượt; chạy tuần tự thì thời
+    // gian cộng dồn, mà chúng độc lập với nhau — đọc giáo án không phải chờ
+    // đọc lịch sử tập xong.
+    const results = await Promise.all(calls.map(async (c) => {
       try {
-        result = await runTool(c.name, c.arguments);
+        return await runTool(c.name, c.arguments);
       } catch (e) {
         // Một tool hỏng không được làm chết cả câu trả lời: báo lỗi cho model,
         // để nó nói ra chỗ nào không đọc được thay vì im lặng bịa.
-        result = { error: String(e.message || e).slice(0, 200) };
+        return { error: String(e.message || e).slice(0, 200) };
       }
+    }));
+    // Nhét lại theo ĐÚNG THỨ TỰ model đã hỏi, không theo thứ tự chạy xong.
+    calls.forEach((c, k) => {
+      const result = results[k];
       toolLog.push({ name: c.name, args: c.arguments || {}, empty: !!(result && (result.empty || result.error)) });
       if (result && result.needsConfirm) pending.push({ action: result.action, preview: result.preview });
       input.push({
@@ -575,7 +612,7 @@ async function runAssistant({ client, model, messages, clientId }) {
         name: c.name,
         result: JSON.stringify(result).slice(0, 120000),
       });
-    }
+    });
   }
 
   // Hết vòng mà model vẫn đòi gọi tool: trả lời thật thà thay vì lặng thinh.
@@ -604,5 +641,5 @@ function shapeReply(r) {
   };
 }
 
-module.exports = { TOOLS, SYSTEM, MAX_STEPS, runTool, runAssistant, progSummary, shapeReply,
+module.exports = { TOOLS, SYSTEM, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, runTool, runAssistant, progSummary, shapeReply,
   validateProgram, validateNewClient, makeClientId, LEVELS };

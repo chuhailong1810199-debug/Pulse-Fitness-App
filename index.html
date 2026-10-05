@@ -8154,7 +8154,6 @@ function aiPaint() {
     return;
   }
   log.innerHTML = _aiMsgs.map((m, i) => {
-    if (m.role === 'tool') return '<div class="ai-tools">' + escHtml(m.text) + '</div>';
     if (m.role === 'confirm') return _aiCard(m, i);
     return '<div class="ai-msg ai-' + (m.role === 'user' ? 'u' : 'a') + '">'
       + (m.role === 'user' ? escHtml(m.text) : _aiFmt(m.text)) + '</div>';
@@ -8266,8 +8265,11 @@ async function aiSend(ev) {
       clientId: activeClient ? activeClient.id : null,
     });
     const d = res.data || {};
+    // Tên tool KHÔNG hiện lên màn hình nữa — coach không cần biết nó gọi hàm
+    // gì, và dòng đó làm loãng hội thoại. Vẫn ghi ra console để còn dò được
+    // khi câu trả lời sai: biết nó đã đọc gì là nửa đường tìm ra lỗi.
     if (d.toolLog && d.toolLog.length) {
-      _aiMsgs.push({ role: 'tool', text: 'đã tra: ' + d.toolLog.map((t) => t.name).join(', ') });
+      console.info('[trợ lý] đã tra:', d.toolLog.map((t) => t.name).join(', '));
     }
     _aiMsgs.push({ role: 'assistant', text: d.text || '(không có trả lời)' });
     // Đề xuất thay đổi dữ liệu: dựng thẻ duyệt riêng. Trợ lý KHÔNG tự ghi —

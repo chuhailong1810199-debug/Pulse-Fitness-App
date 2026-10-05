@@ -132,6 +132,60 @@ ok("progSummary dem dung so bai", () => {
   assert.deepStrictEqual(A.progSummary(null), []);
 });
 
+// ── Toc do ───────────────────────────────────────────────────────────
+ok("nhieu tool trong mot luot chay SONG SONG, khong cong don thoi gian", () => {
+  // Kiem tren ma nguon: runTool duoc goi ben trong runAssistant nen khong
+  // thay the tu ngoai duoc, ma do thoi gian that thi phep kiem se chap chon.
+  const src = fs.readFileSync(path.join(__dirname, "..", "functions", "assistant.js"), "utf8");
+  const i = src.indexOf("const calls = ");
+  assert(i >= 0, "khong tim thay vong lap tool");
+  const loop = src.slice(i, i + 2200);
+  assert(/Promise\.all\(calls\.map\(/.test(loop),
+    "cac tool van chay tuan tu — phai dung Promise.all(calls.map(...))");
+  assert(!/for \(const c of calls\)[\s\S]{0,200}await runTool/.test(loop),
+    "van con vong for-await goi runTool tuan tu");
+});
+
+ok("ket qua tool nhet lai dung THU TU model da hoi", async () => {
+  const c = fakeClient([
+    { calls: [{ name: "get_program" }, { name: "list_clients" }] },
+    { text: "xong" },
+  ]);
+  await A.runAssistant({ client: c, model: "m", messages: [{ role: "user", text: "x" }] });
+  const res = c.seen[1].input.filter((x) => x.type === "function_result");
+  assert.strictEqual(res.length, 2);
+  assert.strictEqual(res[0].name, "get_program", "sai thu tu — chay song song khong duoc lam loan thu tu");
+  assert.strictEqual(res[1].name, "list_clients");
+});
+
+ok("muc suy luan duoc dat, khong de mac dinh (Gemini 3 nghi rat dai)", async () => {
+  const c = fakeClient([{ calls: [{ name: "list_clients" }] }, { text: "xong" }]);
+  await A.runAssistant({ client: c, model: "m", messages: [{ role: "user", text: "x" }] });
+  for (const req of c.seen) {
+    assert(req.generation_config && req.generation_config.thinking_level,
+      "khong dat thinking_level — se dung mac dinh suy luan dai");
+  }
+  assert.strictEqual(c.seen[0].generation_config.thinking_level, A.THINK_DISPATCH,
+    "luot dau phai la muc dispatch");
+  assert.strictEqual(c.seen[1].generation_config.thinking_level, A.THINK_COMPOSE,
+    "luot sau phai la muc compose");
+  for (const lv of [A.THINK_DISPATCH, A.THINK_COMPOSE]) {
+    assert(["minimal", "low", "medium", "high"].includes(lv), "muc suy luan la: " + lv);
+  }
+});
+
+ok("thu vien bai tap co cache, khong doc 360 bai moi lan", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "functions", "assistant.js"), "utf8");
+  assert(/function exerciseLibrary/.test(src), "thieu ham cache thu vien");
+  assert(/_exCache/.test(src), "thieu bien cache");
+  // search_exercises khong duoc goi thang collection("exercises").get()
+  const i = src.indexOf('name === "search_exercises"');
+  const blk = src.slice(i, i + 700);
+  assert(!/collection\("exercises"\)/.test(blk),
+    "search_exercises van doc thang ca kho, khong qua cache");
+  assert(/exerciseLibrary\(/.test(blk), "search_exercises chua dung cache");
+});
+
 // ── Duong di cua de xuat tu server ra may khach ──────────────────────
 // Bug that: callable chi chuyen tiep text/toolLog/steps/hitLimit nen `pending`
 // bi roi, server dung de xuat dung ma the duyet khong bao gio hien ra.
