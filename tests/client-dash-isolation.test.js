@@ -60,7 +60,7 @@ ok("coach van mo duoc ho so bat ky", async () => {
 });
 
 // ── renderClientDash: cai gi hien ra cho ai ───────────────────────────
-function mkRender(role) {
+function mkRender(role, avatar) {
   let html = "";
   const el = { innerHTML: "", classList: { add() {}, toggle() {}, contains: () => false } };
   Object.defineProperty(el, "innerHTML", {
@@ -81,8 +81,13 @@ function mkRender(role) {
     cdMuscles: () => [], cdLoadValue: () => "", parseSetsCount: () => 3,
     escHtml: (x) => String(x == null ? "" : x),
     dashClientStrip: () => "<!--DAI-KHACH-->",
+    CD_AV_CAM: "<!--CAM-->",
   };
+  if (avatar !== undefined) ctx.activeClient.avatar = avatar;
   ctx.globalThis = ctx; vm.createContext(ctx);
+  // Hàm avatar chạy THẬT, cắt từ index.html như mọi hàm khác ở đây.
+  vm.runInContext(take("cdHasAvatar"), ctx);
+  vm.runInContext(take("cdAvatarHTML"), ctx);
   vm.runInContext(take("renderClientDash"), ctx);
   return { get html() { return html; },
     run: () => vm.runInContext("renderClientDash()", ctx) };
@@ -112,6 +117,46 @@ ok("khach van thay phan tap cua minh", async () => {
 });
 
 // ── loadClientDash: moi duong dan deu mang id cua chinh khach ─────────
+
+// ── anh dai dien: theo vai, va khong cho chuoi la vao src ─────────────
+const AV = "data:image/jpeg;base64," + "A".repeat(64);
+
+ok("KHACH khong doi duoc anh dai dien", async () => {
+  const r = mkRender("client", AV); await r.run();
+  assert(/<img src="data:image\/jpeg/.test(r.html), "khach phai thay anh cua chinh minh");
+  assert(!/<button class="cd-av"/.test(r.html), "khach khong duoc co nut doi anh");
+  assert(!/cdPickAvatar/.test(r.html), "khach khong duoc goi duoc cdPickAvatar");
+  assert(!/Bỏ ảnh/.test(r.html), "khach khong duoc co nut bo anh");
+});
+
+ok("COACH doi va bo duoc anh", async () => {
+  const r = mkRender("coach", AV); await r.run();
+  assert(/<button class="cd-av"[^>]*onclick="cdPickAvatar\(\)"/.test(r.html), "coach thieu nut doi anh");
+  assert(/cdRemoveAvatar\(\)/.test(r.html), "coach thieu nut bo anh khi da co anh");
+});
+
+ok("chua co anh thi hien chu cai, va khong co nut bo anh", async () => {
+  const r = mkRender("coach", ""); await r.run();
+  assert(!/<img src=/.test(r.html), "khong co anh ma van dung the img");
+  assert(/>C</.test(r.html), "thieu chu cai dau thay cho anh");
+  assert(!/cdRemoveAvatar/.test(r.html), "chua co anh ma van bay nut bo anh");
+});
+
+// Truong avatar la chuoi tu Firestore, duoc ghep thang vao thuoc tinh src.
+// Mot chuoi khong phai data URL anh thi phai bi tu choi, khong duoc render.
+for (const bad of [
+  "javascript:alert(1)",
+  "https://ke-khac.example/theo-doi.gif",
+  'data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==',
+  'x" onerror="alert(1)',
+]) {
+  ok("tu choi avatar khong hop le: " + bad.slice(0, 28), async () => {
+    const r = mkRender("coach", bad); await r.run();
+    assert(!/<img/.test(r.html), "chuoi la van duoc dung lam anh: " + bad);
+    assert(!r.html.includes(bad), "chuoi la van lot vao HTML: " + bad);
+  });
+}
+
 ok("moi duong dan Firestore deu la cua chinh khach", async () => {
   const paths = [];
   const ctx = { console, Object, Number, String, Promise, Array,
