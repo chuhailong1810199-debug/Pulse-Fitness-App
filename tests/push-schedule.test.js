@@ -111,5 +111,79 @@ ok("gio rac thi bo qua, khong lam do ca luot", () => {
   assert.strictEqual(r[0].booking.id, "w");
 });
 
+// ── Noi dung noti buoi sang ──────────────────────────────────────────
+const A = require(path.join(__dirname, "..", "functions", "assistant.js"));
+const BK = [
+  { startTime: "09:00", title: "Anh Ân" },
+  { startTime: "17:00", title: "Sang" },
+];
+const REC = { brief: { text: {
+  recommendation: "train_hard",
+  headline: "Hồi phục tốt, đẩy nặng được hôm nay.",
+  why: "Nightly Recharge 5/6, HRV 103ms vượt nền.",
+  recoveryActions: ["Ăn đủ protein sau buổi tập", "Lên giường trước 22:30", "Giãn cơ 10 phút"],
+} } };
+
+ok("co buoi + co du lieu hoi phuc -> du ca ba phan", () => {
+  const { title, body } = A.buildMorningPush({ bookings: BK, rec: REC });
+  assert(/2 buổi/.test(title), "thieu so buoi: " + title);
+  assert(/Đẩy nặng được/.test(title), "thieu khuyen nghi tap: " + title);
+  assert(/09:00 Anh Ân · 17:00 Sang/.test(body), "thieu danh sach buoi");
+  assert(/Hồi phục tốt/.test(body), "thieu cau chot phan tich");
+  assert(/protein/.test(body), "thieu loi khuyen an uong");
+  assert(/22:30/.test(body), "thieu loi khuyen sinh hoat");
+});
+
+ok("chi lay 2 loi khuyen, khong do het vao noti", () => {
+  const { body } = A.buildMorningPush({ bookings: BK, rec: REC });
+  assert.strictEqual((body.match(/^• /gm) || []).length, 2, "so dong loi khuyen sai");
+  assert(!/Giãn cơ/.test(body), "do het ca 3 loi khuyen vao noti");
+});
+
+ok("KHONG co du lieu hoi phuc -> noi that, khong bia loi khuyen", () => {
+  const { title, body } = A.buildMorningPush({ bookings: BK, rec: null });
+  assert(/2 buổi/.test(title));
+  assert(!/Đẩy nặng|Tập vừa|Tập nhẹ|Nghỉ hẳn/.test(title), "bia khuyen nghi khi chua co du lieu");
+  assert(/Chưa có dữ liệu hồi phục/.test(body), "phai noi ro la chua co");
+  assert(!/^• /m.test(body), "bia ra loi khuyen tu dau");
+});
+
+ok("ngay nghi van bao duoc neu co du lieu hoi phuc", () => {
+  const { title, body } = A.buildMorningPush({ bookings: [], rec: REC });
+  assert(/không có buổi nào/.test(title), title);
+  assert(/Đẩy nặng được/.test(title), "ngay nghi van phai co khuyen nghi tap");
+  assert(/protein/.test(body));
+});
+
+ok("nhan khuyen nghi KHOP voi man hinh Recovery", () => {
+  const idx = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  for (const [k, v] of Object.entries(A.REC_LABEL)) {
+    const re = new RegExp(k + ":\\s*\\{\\s*label:\\s*'" + v + "'");
+    assert(re.test(idx), "nhan '" + v + "' cho " + k + " khong khop RC_STATUS trong index.html");
+  }
+});
+
+ok("cau dai bi cat gon, khong cat giua tu", () => {
+  const long = "x".repeat(40) + " " + "y".repeat(200);
+  const { body } = A.buildMorningPush({ bookings: [], rec: { brief: { text: {
+    recommendation: "rest", headline: long, recoveryActions: [long] } } } });
+  for (const ln of body.split("\n")) assert(ln.length <= 130, "dong qua dai: " + ln.length);
+  assert(/…/.test(body), "khong thay dau cat");
+});
+
+ok("noti gui SAU luot dong bo, khong truoc", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "functions", "index.js"), "utf8");
+  const grab = (name) => {
+    const i = src.indexOf("exports." + name);
+    const m = /schedule:\s*"([^"]+)"/.exec(src.slice(i, i + 600));
+    return m && m[1];
+  };
+  const sync = grab("syncPolarRecovery"), morn = grab("morningSchedule");
+  assert(sync && morn, "khong doc duoc lich chay");
+  const mins = (cron) => { const p = cron.split(" "); return +p[1] * 60 + +p[0]; };
+  assert(mins(morn) > mins(sync),
+    `noti (${morn}) chay TRUOC dong bo (${sync}) — se doc phai du lieu hom qua`);
+});
+
 console.log(fails ? "\n" + fails + " PHEP KIEM HONG" : "\nTAT CA DAT");
 process.exit(fails ? 1 : 0);

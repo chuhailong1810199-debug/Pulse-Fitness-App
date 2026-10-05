@@ -641,5 +641,69 @@ function shapeReply(r) {
   };
 }
 
-module.exports = { TOOLS, SYSTEM, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, runTool, runAssistant, progSummary, shapeReply,
+/**
+ * Nhãn tiếng Việt cho mức khuyến nghị. PHẢI khớp RC_STATUS trong index.html —
+ * noti và màn hình Recovery nói khác nhau là coach không biết tin cái nào.
+ */
+const REC_LABEL = {
+  train_hard: "Đẩy nặng được",
+  moderate: "Tập vừa",
+  easy: "Tập nhẹ",
+  recovery: "Chỉ phục hồi",
+  rest: "Nghỉ hẳn",
+};
+
+/** Cắt chuỗi cho vừa một dòng noti, không cắt giữa từ. */
+function clip(s, n) {
+  const t = String(s || "").replace(/\s+/g, " ").trim();
+  if (t.length <= n) return t;
+  const cut = t.slice(0, n);
+  const sp = cut.lastIndexOf(" ");
+  return (sp > n * 0.6 ? cut.slice(0, sp) : cut) + "…";
+}
+
+/**
+ * Soạn nội dung noti buổi sáng: hôm nay mấy buổi, và dựa trên dữ liệu hồi
+ * phục thì nên ăn uống / sinh hoạt / tập ra sao.
+ *
+ * Thuần, không I/O — để test được mà không cần mạng.
+ *
+ * @param {object} o
+ * @param {Array}  o.bookings  lịch hôm nay, đã sắp theo giờ
+ * @param {object} [o.rec]     doc recovery của hôm nay
+ * @returns {{title:string, body:string}}
+ */
+function buildMorningPush({ bookings, rec }) {
+  const list = bookings || [];
+  const nS = list.length;
+  const sessions = nS
+    ? `${nS} buổi`
+    : "không có buổi nào";
+
+  const brief = rec && rec.brief && rec.brief.text ? rec.brief.text : null;
+  const label = brief && REC_LABEL[brief.recommendation];
+
+  const title = label
+    ? `Hôm nay ${sessions} · ${label}`
+    : `Hôm nay ${sessions}`;
+
+  const lines = [];
+  if (nS) lines.push(list.map((b) => `${b.startTime} ${b.title || "?"}`).join(" · "));
+
+  if (brief) {
+    // headline là câu chốt của bản phân tích; why dài hơn, chỉ dùng khi thiếu headline.
+    const head = clip(brief.headline || brief.why, 120);
+    if (head) lines.push(head);
+    // Ăn uống và sinh hoạt nằm trong recoveryActions.
+    const acts = (brief.recoveryActions || []).filter(Boolean).slice(0, 2);
+    for (const a of acts) lines.push("• " + clip(a, 90));
+  } else {
+    // KHÔNG bịa lời khuyên khi chưa có dữ liệu. Nói thẳng là chưa có.
+    lines.push("Chưa có dữ liệu hồi phục cho hôm nay — bấm Đồng bộ ngay trong app.");
+  }
+
+  return { title, body: lines.join("\n") };
+}
+
+module.exports = { TOOLS, buildMorningPush, REC_LABEL, SYSTEM, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, runTool, runAssistant, progSummary, shapeReply,
   validateProgram, validateNewClient, makeClientId, LEVELS };

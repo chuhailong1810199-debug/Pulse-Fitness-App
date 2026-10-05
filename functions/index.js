@@ -3189,30 +3189,51 @@ exports.scheduleReminders = onSchedule(
   },
 );
 
-/** Tóm tắt cả ngày, 6h sáng. */
+/**
+ * Tóm tắt buổi sáng: hôm nay mấy buổi, và dựa trên dữ liệu hồi phục thì nên
+ * ăn uống / sinh hoạt / tập ra sao.
+ *
+ * CHẠY LÚC 7:15, KHÔNG PHẢI 6:00. syncPolarRecovery chạy lúc 7:00 và chính nó
+ * sinh ra bản phân tích hồi phục của hôm nay. Gửi lúc 6:00 là đọc phải dữ liệu
+ * HÔM QUA, hoặc không có gì — đúng cái bẫy đã làm lần đồng bộ tay lúc 6:30
+ * sáng 03/10 không ra kết quả. 15 phút là thừa sức: lượt sync thật chạy ~20 giây.
+ *
+ * Lời khuyên LẤY LẠI từ bản phân tích đã sinh, không gọi model lần nữa: khỏi
+ * tốn thêm tiền, và quan trọng hơn là noti với màn hình Recovery nói CÙNG một
+ * điều. Hai nơi gọi model riêng sẽ cho hai câu trả lời lệch nhau.
+ */
 exports.morningSchedule = onSchedule(
   {
-    schedule: "0 6 * * *",
+    schedule: "15 7 * * *",
     timeZone: "Asia/Ho_Chi_Minh",
     region: "asia-southeast1",
     secrets: [VAPID_PRIVATE],
     timeoutSeconds: 120,
   },
   async () => {
+    const { buildMorningPush } = require("./assistant.js");
     const now = ictNow();
     const list = await bookingsOn(now.date);
-    if (!list.length) {
-      console.log("[push] hôm nay không có buổi nào — không gửi");
-      return;                       // Im lặng còn hơn báo "0 buổi" mỗi sáng nghỉ.
+
+    // Hồ sơ của chính coach — nơi có dữ liệu Polar.
+    const me = POLAR_CLIENTS[0].clientId;
+    let rec = null;
+    try {
+      const d = await getFirestore()
+        .collection("clients").doc(me).collection("recovery").doc(now.date).get();
+      if (d.exists) rec = d.data();
+    } catch (e) { console.warn("[push] không đọc được hồi phục:", e.message); }
+
+    // Ngày nghỉ mà cũng không có dữ liệu hồi phục thì chẳng có gì để nói.
+    if (!list.length && !(rec && rec.brief)) {
+      console.log("[push] không buổi nào, không dữ liệu hồi phục — không gửi");
+      return;
     }
-    const lines = list.map((b) => `${b.startTime} ${b.title || "?"}`);
-    await pushToAll({
-      title: `Hôm nay ${list.length} buổi`,
-      body: lines.join(" · "),
-      tag: "today",
-      url: "/index.html",
-    }, { role: "coach" });
-    console.log(`[push] tóm tắt sáng: ${list.length} buổi`);
+
+    const { title, body } = buildMorningPush({ bookings: list, rec });
+    await pushToAll({ title, body, tag: "today", url: "/index.html" }, { role: "coach" });
+    console.log(`[push] tóm tắt sáng: ${list.length} buổi, `
+      + `hồi phục ${rec && rec.brief ? "có" : "CHƯA có"}`);
   },
 );
 
