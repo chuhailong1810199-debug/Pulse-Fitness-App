@@ -8139,11 +8139,17 @@ function _aiFmt(t) {
 function aiPaint() {
   const log = document.getElementById('ai-log');
   if (!log) return;
+  if (_aiForm && !_aiMsgs.length) { log.innerHTML = _aiNewClientForm(); log.scrollTop = 0; return; }
   if (!_aiMsgs.length) {
     log.innerHTML = '<div class="ai-hi">'
       + '<p>Hỏi gì về khách và giáo án cũng được. Tao tự tra dữ liệu thật trong app.</p>'
       + '<p class="ai-hi-note">Đẩy giáo án và tạo khách mới thì tao làm được, nhưng '
       + '<b>không tự ghi</b> — tao dựng thẻ, mày bấm Đồng ý mới lưu.</p>'
+      // Gợi ý nổi bật: mở form, coach chỉ điền thông tin khách — prompt dài
+      // do app tự dựng, khỏi phải gõ lại mỗi lần có khách mới.
+      + '<button type="button" class="ai-eg ai-eg-main" onclick="aiFormOpen()">'
+        + '<span class="ai-eg-t">Soạn giáo án cho khách mới</span>'
+        + '<span class="ai-eg-s">Điền thông tin khách, không cần gõ prompt</span></button>'
       + ['Giáo án của Kem có hợp trình độ không',
           'Khách nào lâu chưa tập nhất',
           'Gợi ý bài thay cho Romanian Deadlift']
@@ -8154,8 +8160,10 @@ function aiPaint() {
   }
   log.innerHTML = _aiMsgs.map((m, i) => {
     if (m.role === 'confirm') return _aiCard(m, i);
+    // m.show: bản rút gọn cho lượt gửi từ form — prompt đầy đủ vẫn nằm ở m.text
+    // và đi sang model, nhưng in cả khối chỉ dẫn dài lên bong bóng thì loãng.
     return '<div class="ai-msg ai-' + (m.role === 'user' ? 'u' : 'a') + '">'
-      + (m.role === 'user' ? escHtml(m.text) : _aiFmt(m.text)) + '</div>';
+      + (m.role === 'user' ? escHtml(m.show || m.text) : _aiFmt(m.text)) + '</div>';
   }).join('') + (_aiBusy ? '<div class="ai-wait">Đang tra dữ liệu…</div>' : '');
   log.scrollTop = log.scrollHeight;
 }
@@ -8236,20 +8244,131 @@ function aiReject(i) {
   if (m && (m.state === 'chờ' || String(m.state).indexOf('lỗi') === 0)) { m.state = 'huỷ'; aiPaint(); }
 }
 
+// ── Form "Soạn giáo án cho khách mới" ──────────────────────────────────
+//
+// Coach điền như điền phiếu, app tự dựng prompt đầy đủ rồi gửi. Prompt bám
+// đúng luật của trợ lý: khoá SessionA/B/C, bài phải có trong thư viện, gọi
+// propose_new_client MỘT lần kèm giáo án — vẫn qua thẻ duyệt, không tự ghi.
+let _aiForm = false;
+
+const _AI_NF_LEVELS = ['Beginner', 'Intermediate', 'Advanced'];
+const _AI_NF_PLACES = ['Phòng gym đầy đủ', 'Gym nhỏ / ít máy', 'Tại nhà — tạ đơn, dây kháng lực', 'Không dụng cụ'];
+
+function _aiNewClientForm() {
+  const opt = (arr, sel) => arr.map((v) => '<option' + (v === sel ? ' selected' : '') + '>'
+    + escHtml(v) + '</option>').join('');
+  const f = (label, ctrl, wide) => '<label class="ai-nf-f' + (wide ? ' wide' : '') + '">'
+    + '<span>' + label + '</span>' + ctrl + '</label>';
+  return '<form class="ai-nf" id="ai-nf" onsubmit="aiFormSend(event)" novalidate>'
+    + '<div class="ai-nf-h">Giáo án cho khách mới</div>'
+    + '<p class="ai-nf-sub">Điền những gì mày biết — ô để trống trợ lý sẽ không tự bịa.</p>'
+    + '<div class="ai-nf-g">'
+      + f('Tên khách *', '<input name="name" required autocomplete="off" placeholder="VD: Minh Anh">', true)
+      + f('Tuổi', '<input name="age" type="number" inputmode="numeric" min="8" max="90" placeholder="—">')
+      + f('Giới tính', '<select name="gender"><option value="">—</option><option>Nam</option><option>Nữ</option></select>')
+      + f('Chiều cao (cm)', '<input name="height" type="number" inputmode="decimal" min="100" max="230" placeholder="—">')
+      + f('Cân nặng (kg)', '<input name="weight" type="number" inputmode="decimal" min="25" max="250" placeholder="—">')
+      + f('Trình độ', '<select name="level">' + opt(_AI_NF_LEVELS, 'Beginner') + '</select>')
+      + f('Buổi / tuần', '<select name="spw">' + opt(['1','2','3','4','5','6'], '3') + '</select>')
+      + f('Mỗi buổi', '<select name="dur">' + opt(['45 phút','60 phút','75 phút','90 phút'], '60 phút') + '</select>')
+      + f('Nơi tập', '<select name="place">' + opt(_AI_NF_PLACES, _AI_NF_PLACES[0]) + '</select>', true)
+      + f('Mục tiêu *', '<textarea name="goal" rows="2" required placeholder="VD: giảm mỡ, tăng sức mạnh thân dưới"></textarea>', true)
+      + f('Chấn thương / bệnh lý', '<textarea name="health" rows="2" placeholder="VD: đau lưng dưới khi gập người — trống nếu chưa rõ"></textarea>', true)
+      + f('Ghi chú thêm', '<textarea name="notes" rows="2" placeholder="Kinh nghiệm tập, bài thích/ghét, lịch sinh hoạt…"></textarea>', true)
+      + f('Gmail khách (để tự đăng nhập)', '<input name="email" type="email" inputmode="email" autocomplete="off" autocapitalize="off" placeholder="Bỏ trống nếu chưa có">', true)
+    + '</div>'
+    + '<div class="ai-nf-err" id="ai-nf-err" role="alert"></div>'
+    + '<div class="ai-nf-btns">'
+      + '<button type="button" class="ai-cf-cancel" onclick="aiFormClose()">Huỷ</button>'
+      + '<button type="submit" class="ai-cf-yes">Soạn giáo án</button>'
+    + '</div></form>';
+}
+
+function aiFormOpen() {
+  _aiForm = true; aiPaint();
+  setTimeout(() => { const i = document.querySelector('#ai-nf [name="name"]'); if (i) i.focus(); }, 60);
+}
+function aiFormClose() { _aiForm = false; aiPaint(); }
+
+/**
+ * Dữ liệu form -> { prompt, show } hoặc { error }.
+ * Tách riêng, không đụng DOM, để test được.
+ */
+function aiBuildProgramPrompt(d) {
+  const v = (k) => String(d[k] == null ? '' : d[k]).trim();
+  const name = v('name'), goal = v('goal');
+  if (!name) return { error: 'Thiếu tên khách.' };
+  if (!goal) return { error: 'Thiếu mục tiêu.' };
+  const email = v('email').toLowerCase();
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: 'Gmail không hợp lệ.' };
+  const spw = Math.min(6, Math.max(1, parseInt(v('spw'), 10) || 3));
+  const keys = Array.from({ length: spw }, (_, i) => 'Session' + String.fromCharCode(65 + i)).join(', ');
+  const age = parseInt(v('age'), 10);
+
+  const info = [
+    ['Tên', name],
+    ['Tuổi', v('age')],
+    ['Giới tính', v('gender')],
+    ['Chiều cao', v('height') && v('height') + ' cm'],
+    ['Cân nặng', v('weight') && v('weight') + ' kg'],
+    ['Trình độ', v('level') || 'Beginner'],
+    ['Số buổi/tuần', String(spw)],
+    ['Thời lượng mỗi buổi', v('dur')],
+    ['Nơi tập / dụng cụ', v('place')],
+    ['Mục tiêu', goal],
+    ['Chấn thương / bệnh lý', v('health') || 'CHƯA GHI (không có nghĩa là khoẻ mạnh — đừng giả định)'],
+    ['Ghi chú', v('notes')],
+    ['Gmail', email || 'chưa có — bỏ trống, KHÔNG bịa địa chỉ'],
+  ].filter(([, x]) => x).map(([k, x]) => '- ' + k + ': ' + x).join('\n');
+
+  const rules = [
+    'Soạn giáo án ' + spw + ' buổi/tuần cho khách mới này. Khoá buổi: ' + keys + '.',
+    'Mỗi buổi chia phase (Warmup → bài chính → phụ trợ/Core), vừa thời lượng ' + (v('dur') || '60 phút') + '.',
+    'Mỗi bài có setsReps, tempo, cue (kỹ thuật + nghỉ bao lâu). Chỉ dùng bài CÓ trong thư viện — không chắc thì search_exercises.',
+    'Chọn bài theo đúng dụng cụ ở nơi tập, và tránh/thay bài động vào chỗ chấn thương nếu có.',
+    'In bảng giáo án từng buổi cho tao xem, kèm 2–3 câu giải thích vì sao chia như vậy.',
+    'Rồi gọi propose_new_client MỘT lần, kèm luôn giáo án vừa soạn' + (email ? ' và Gmail ' + email : '') + ', để tao duyệt.',
+  ];
+  if (age > 0 && age < 18) {
+    rules.push('Khách DƯỚI 18 tuổi: ưu tiên kỹ thuật, tải vừa phải, không tập tới thất bại; nhắc cần phụ huynh đồng ý.');
+  }
+  const prompt = 'Thông tin khách mới:\n' + info + '\n\nYêu cầu:\n'
+    + rules.map((r, i) => (i + 1) + '. ' + r).join('\n');
+  const show = 'Soạn giáo án cho khách mới: ' + name + ' · ' + (v('level') || 'Beginner')
+    + ' · ' + spw + ' buổi/tuần — ' + goal;
+  return { prompt, show };
+}
+
+function aiFormSend(ev) {
+  if (ev) ev.preventDefault();
+  if (_aiBusy) return;
+  const form = document.getElementById('ai-nf');
+  if (!form) return;
+  const r = aiBuildProgramPrompt(Object.fromEntries(new FormData(form).entries()));
+  if (r.error) {
+    const e = document.getElementById('ai-nf-err');
+    if (e) e.textContent = r.error;
+    return;
+  }
+  _aiForm = false;
+  aiSend(null, r.prompt, r.show);
+}
+
 function aiAsk(q) {
   const i = document.getElementById('ai-in');
   if (i) i.value = q;
   aiSend();
 }
 
-async function aiSend(ev) {
+async function aiSend(ev, text, show) {
   if (ev) ev.preventDefault();
   if (_aiBusy) return;
   const input = document.getElementById('ai-in');
-  const q = (input.value || '').trim();
+  const q = (text != null ? String(text) : (input.value || '')).trim();
   if (!q) return;
-  input.value = '';
-  _aiMsgs.push({ role: 'user', text: q });
+  if (text == null) input.value = '';
+  _aiForm = false;
+  _aiMsgs.push(show ? { role: 'user', text: q, show } : { role: 'user', text: q });
   _aiBusy = true;
   aiPaint();
 
@@ -15230,6 +15349,44 @@ body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-even
 #ai-sheet .ai-eg:hover{ background: rgba(143,219,255,.10); border-color: rgba(143,219,255,.35); }
 #ai-sheet .ai-eg:active{ transform: scale(.98); }
 #ai-sheet .ai-eg:focus-visible{ outline: 2px solid var(--ai-acc); outline-offset: 2px; }
+/* gợi ý chính: mở form soạn giáo án khách mới — nổi hơn các câu hỏi mẫu */
+#ai-sheet .ai-eg-main{
+  flex-direction: column; align-items: flex-start; gap: 2px;
+  background: rgba(143,219,255,.12); border-color: rgba(143,219,255,.40);
+}
+#ai-sheet .ai-eg-t{ font-size: 15px; font-weight: 700; }
+#ai-sheet .ai-eg-s{ font-size: 13px; font-weight: 500; color: var(--ai-mut); }
+
+/* ── Form khách mới ──────────────────────────────────────────── */
+#ai-sheet .ai-nf{ display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
+#ai-sheet .ai-nf-h{ font-size: 20px; font-weight: 800; letter-spacing: -.02em; }
+#ai-sheet .ai-nf-sub{ margin: -4px 0 2px; font-size: 13.5px; color: var(--ai-mut); line-height: 1.45; }
+#ai-sheet .ai-nf-g{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+#ai-sheet .ai-nf-f{ display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+#ai-sheet .ai-nf-f.wide{ grid-column: 1 / -1; }
+#ai-sheet .ai-nf-f > span{ font-size: 11.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--ai-mut); }
+#ai-sheet .ai-nf-f input, #ai-sheet .ai-nf-f select, #ai-sheet .ai-nf-f textarea{
+  width: 100%; min-width: 0; min-height: 44px; box-sizing: border-box;
+  padding: 10px 12px; border-radius: 12px;
+  border: 1px solid rgba(255,255,255,.10); background: rgba(255,255,255,.07);
+  color: var(--ai-txt); font: inherit; font-size: 16px; line-height: 1.35;
+  outline: none; -webkit-appearance: none; appearance: none;
+}
+#ai-sheet .ai-nf-f textarea{ resize: vertical; min-height: 64px; }
+#ai-sheet .ai-nf-f select{
+  padding-right: 34px; cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%23999' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 13px center;
+}
+#ai-sheet .ai-nf-f select option{ background: var(--ai-bg2); color: var(--ai-txt); }
+#ai-sheet .ai-nf-f input::placeholder, #ai-sheet .ai-nf-f textarea::placeholder{ color: var(--ai-mut); opacity: 1; }
+#ai-sheet .ai-nf-f :is(input, select, textarea):focus{
+  border-color: rgba(143,219,255,.6); background-color: rgba(255,255,255,.09);
+  box-shadow: 0 0 0 3px rgba(143,219,255,.15);
+}
+#ai-sheet .ai-nf-err{ font-size: 13.5px; font-weight: 600; color: var(--ai-bad); }
+#ai-sheet .ai-nf-err:empty{ display: none; }
+#ai-sheet .ai-nf-btns{ display: flex; gap: 8px; justify-content: flex-end; padding-bottom: 4px; }
 
 /* ── THẺ DUYỆT ────────────────────────────────────────────────────
    Khác bong bóng ở mọi mặt: nền ĐẶC (không phải kính), viền 1.5px + quầng 4px,
