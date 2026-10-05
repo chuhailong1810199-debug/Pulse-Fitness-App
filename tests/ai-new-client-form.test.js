@@ -57,5 +57,24 @@ ok("bong bong hien ban rut gon, khong phai ca prompt", () => {
   assert(/escHtml\(m\.show \|\| m\.text\)/.test(s));
 });
 
+ok("tra ve email de bu khi model quen truyen", () => {
+  assert.strictEqual(build({ name: "An", goal: "x", email: "A@b.com" }).email, "a@b.com");
+});
+
+ok("the tao khach co o nhap Gmail, khong chi la chu", () => {
+  const c = s.slice(s.indexOf("function _aiCard("), s.indexOf("async function aiApprove("));
+  assert(/class="ai-cf-em"/.test(c), "the tao khach thieu o nhap Gmail — khach se khong dang nhap duoc");
+  assert(/oninput="aiCardEmail\(/.test(c));
+});
+
+ok("Gmail tu form duoc dien vao de xuat neu model bo sot", () => {
+  assert(/kind === 'create_client' && !p\.action\.email && _aiFormEmail/.test(s));
+});
+
+ok("duyet thi kiem dinh dang Gmail truoc khi goi coachApply", () => {
+  const a = s.slice(s.indexOf("async function aiApprove("), s.indexOf("function aiReject("));
+  assert(a.indexOf("Gmail không hợp lệ") >= 0 && a.indexOf("Gmail không hợp lệ") < a.indexOf("coachApply"));
+});
+
 console.log(fails ? "\n" + fails + " HONG" : "\nTAT CA DAT");
 process.exit(fails ? 1 : 0);

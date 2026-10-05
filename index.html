@@ -8187,11 +8187,25 @@ function _aiCard(m, i) {
     rows.push(['Buổi/tuần', String(p.sessionsPerWeek)]);
     rows.push(['Giáo án', (p.program || []).length
       ? (p.program || []).map((x) => x.day + ' (' + x.exercises + ')').join(', ') : 'chưa có']);
-    rows.push(['Đăng nhập', p.login || '']);
+    // Gmail là ô nhập chứ không phải chữ: model hay quên truyền email vào
+    // propose_new_client, và thiếu nó thì khách không đăng nhập được. Coach
+    // điền/sửa ngay trên thẻ trước khi bấm Đồng ý.
+    rows.push(['Gmail', null]);
   }
   const title = a.kind === 'apply_program' ? 'Đẩy giáo án' : 'Tạo khách mới';
-  const body = rows.map(([k, v]) =>
-    '<div class="ai-cf-r"><span>' + escHtml(k) + '</span><b>' + escHtml(v || '—') + '</b></div>').join('');
+  const editable = !m.state || m.state === 'chờ' || String(m.state).indexOf('lỗi') === 0;
+  const body = rows.map(([k, v]) => {
+    if (v === null) {
+      const em = a.email || '';
+      const cell = editable
+        ? '<input class="ai-cf-em" type="email" inputmode="email" autocomplete="off" autocapitalize="off"'
+          + ' spellcheck="false" placeholder="vd: ten@gmail.com"'
+          + ' value="' + escHtml(em) + '" oninput="aiCardEmail(' + i + ', this.value)">'
+        : '<b>' + escHtml(em || 'không — coach tự quản') + '</b>';
+      return '<div class="ai-cf-r"><span>' + escHtml(k) + '</span>' + cell + '</div>';
+    }
+    return '<div class="ai-cf-r"><span>' + escHtml(k) + '</span><b>' + escHtml(v || '—') + '</b></div>';
+  }).join('');
   // data-state lái màu, nhãn góc và việc ẩn nút — KHÔNG để CSS đoán qua sự có
   // mặt của .ai-cf-done/.ai-cf-no. Đoán kiểu đó thì "Đang lưu…" ra xanh "Đã lưu",
   // còn "Đã bỏ qua" ra đỏ "Lỗi" — hai thứ đều sai nghĩa.
@@ -8214,11 +8228,22 @@ function _aiCard(m, i) {
     + escHtml(title) + '</div>' + body + foot + '</div>';
 }
 
+/** Coach gõ Gmail trên thẻ tạo khách — ghi thẳng vào action, không vẽ lại (giữ con trỏ). */
+function aiCardEmail(i, val) {
+  const m = _aiMsgs[i];
+  if (m && m.action && m.action.kind === 'create_client') m.action.email = String(val || '').trim().toLowerCase();
+}
+
 async function aiApprove(i) {
   const m = _aiMsgs[i];
   // Cho bấm lại sau khi lỗi: mạng rớt giữa chừng là chuyện thường, bắt coach
   // hỏi lại trợ lý từ đầu chỉ để lấy lại đúng đề xuất cũ là vô lý.
   if (!m || (m.state !== 'chờ' && String(m.state).indexOf('lỗi') !== 0)) return;
+  if (m.action.kind === 'create_client') {
+    const em = String(m.action.email || '').trim().toLowerCase();
+    if (em && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) { m.state = 'lỗi: Gmail không hợp lệ'; aiPaint(); return; }
+    m.action.email = em;
+  }
   m.state = 'đang'; aiPaint();
   try {
     const fn = firebase.app().functions('asia-southeast1')
@@ -8250,6 +8275,7 @@ function aiReject(i) {
 // đúng luật của trợ lý: khoá SessionA/B/C, bài phải có trong thư viện, gọi
 // propose_new_client MỘT lần kèm giáo án — vẫn qua thẻ duyệt, không tự ghi.
 let _aiForm = false;
+let _aiFormEmail = '';     // Gmail điền ở form, để bù khi model quên truyền vào đề xuất
 
 const _AI_NF_LEVELS = ['Beginner', 'Intermediate', 'Advanced'];
 const _AI_NF_PLACES = ['Phòng gym đầy đủ', 'Gym nhỏ / ít máy', 'Tại nhà — tạ đơn, dây kháng lực', 'Không dụng cụ'];
@@ -8336,7 +8362,7 @@ function aiBuildProgramPrompt(d) {
     + rules.map((r, i) => (i + 1) + '. ' + r).join('\n');
   const show = 'Soạn giáo án cho khách mới: ' + name + ' · ' + (v('level') || 'Beginner')
     + ' · ' + spw + ' buổi/tuần — ' + goal;
-  return { prompt, show };
+  return { prompt, show, email };
 }
 
 function aiFormSend(ev) {
@@ -8351,6 +8377,7 @@ function aiFormSend(ev) {
     return;
   }
   _aiForm = false;
+  _aiFormEmail = r.email || '';
   aiSend(null, r.prompt, r.show);
 }
 
@@ -8393,6 +8420,10 @@ async function aiSend(ev, text, show) {
     // Đề xuất thay đổi dữ liệu: dựng thẻ duyệt riêng. Trợ lý KHÔNG tự ghi —
     // chưa bấm Đồng ý thì chưa có gì xuống Firestore.
     for (const p of (d.pending || [])) {
+      // Gmail điền ở form mà model quên chuyển vào đề xuất -> điền lại cho đủ.
+      if (p.action && p.action.kind === 'create_client' && !p.action.email && _aiFormEmail) {
+        p.action.email = _aiFormEmail;
+      }
       _aiMsgs.push({ role: 'confirm', action: p.action, preview: p.preview, state: 'chờ' });
     }
   } catch (e) {
@@ -15460,6 +15491,16 @@ body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-even
 }
 #ai-sheet .ai-cf-r > :last-child{ font-weight: 600; color: var(--ai-txt); overflow-wrap: anywhere; }
 #ai-sheet .ai-cf-r > :only-child{ grid-column: 1 / -1; }
+#ai-sheet .ai-cf-r:has(.ai-cf-em){ align-items: center; }
+#ai-sheet .ai-cf-em{
+  width: 100%; min-width: 0; min-height: 40px; box-sizing: border-box;
+  padding: 8px 12px; border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.07);
+  color: var(--ai-txt); font: inherit; font-size: 16px; font-weight: 600;
+  outline: none; -webkit-appearance: none; appearance: none;
+}
+#ai-sheet .ai-cf-em::placeholder{ color: var(--ai-mut); font-weight: 500; opacity: 1; }
+#ai-sheet .ai-cf-em:focus{ border-color: rgba(143,219,255,.6); box-shadow: 0 0 0 3px rgba(143,219,255,.15); }
 
 /* Hai nút bằng hệt nhau về kích thước — Đồng ý không có lợi thế vị trí hay diện tích */
 #ai-sheet .ai-cf-btns{
