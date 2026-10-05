@@ -11992,6 +11992,16 @@ h1 span,.login-logo span,.cp-header-title span,.empty-sub strong,.client-badge,.
 }
 .client-bar::-webkit-scrollbar{display:none;}
 .client-bar > *{flex:0 0 auto;scroll-snap-align:start;}
+/* Màn rộng: dồn cả cụm vào giữa thay vì ép sát trái chừa một khoảng trống dài.
+   Chỉ từ 701px trở lên — hẹp hơn thì thanh này vốn là dải cuộn ngang.
+   DÙNG "safe center", KHÔNG dùng "center" trần.
+   Thanh có overflow-x:auto. Với center trần, khi nội dung dài hơn khung thì
+   phần tràn ở ĐẦU bị đẩy ra ngoài vùng cuộn và không có cách nào cuộn ngược
+   lại tới — khách đang chọn biến mất khỏi màn hình. "safe" tự lùi về canh
+   trái đúng lúc đó. */
+@media (min-width: 701px){
+  .client-bar{ justify-content: safe center; }
+}
 @media (max-width: 700px){
   .client-select{min-width:170px;max-width:58vw;}
 }

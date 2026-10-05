@@ -89,5 +89,13 @@ ok("o tim 16px — nho hon la Safari iOS tu phong to trang", () => {
   assert(m && +m[1] >= 16, "o tim " + (m ? m[1] : "?") + "px");
 });
 
+ok("thanh khach canh giua o desktop, bang 'safe center'", () => {
+  const m = /@media \(min-width: 701px\)\{\s*\.client-bar\{([^}]*)\}/.exec(s);
+  assert(m, "thieu luat canh giua cho desktop");
+  assert(/justify-content:\s*safe\s+center/.test(m[1]),
+    "phai dung 'safe center'. 'center' tran + overflow-x:auto thi phan tran o DAU "
+    + "bi day ra ngoai vung cuon va khong cuon toi duoc — do that tren may: -214px.");
+});
+
 console.log(fails ? "\n" + fails + " PHEP KIEM HONG" : "\nTAT CA DAT");
 process.exit(fails ? 1 : 0);
