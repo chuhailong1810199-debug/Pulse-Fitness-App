@@ -3371,6 +3371,7 @@ exports.coachApply = onCall(
     }
 
     if (act.kind === "create_client") {
+      const { emailKey } = require("./assistant.js");
       const v = validateNewClient(act);
       if (!v.ok) throw new HttpsError("invalid-argument", v.errors.join(" | "));
       const id = String(act.clientId || "");
@@ -3378,12 +3379,32 @@ exports.coachApply = onCall(
       const ref = db.collection("clients").doc(id);
       if ((await ref.get()).exists) throw new HttpsError("already-exists", `Id '${id}' đã tồn tại.`);
 
-      // email LUÔN rỗng. Khách coach tự quản mang chuỗi rỗng, không bao giờ
-      // mang địa chỉ giữ chỗ — hai khách chung một địa chỉ là đọc ghi được dữ
-      // liệu của nhau. Muốn cho đăng nhập thì đi qua claimClientEmail sau.
+      // ── Email: CHIẾM CHỈ MỤC TRƯỚC, ghi hồ sơ sau ────────────────────
+      // Thứ tự này không được đảo. /clientEmails là chốt duy nhất cưỡng chế
+      // một Gmail một khách; luật Firestore cho create nhưng CẤM update, nên
+      // create() thất bại với ALREADY_EXISTS khi có người chiếm rồi — kể cả
+      // khi hai lượt chạy cùng lúc. Ghi clients.email trước rồi mới chiếm là
+      // để hở đúng khe mà Soobin với Thai Son đã lọt qua.
+      const em = emailKey(act.email);
+      if (em) {
+        try {
+          await db.collection("clientEmails").doc(em).create({
+            clientId: id, claimedAt: new Date().toISOString(), by: email,
+          });
+        } catch (e) {
+          if (e.code === 6 || /already exists/i.test(e.message || "")) {
+            const cur = await db.collection("clientEmails").doc(em).get();
+            throw new HttpsError("already-exists",
+              `Gmail ${em} đã thuộc về khách '${(cur.data() || {}).clientId || "?"}'.`);
+          }
+          throw e;
+        }
+      }
+
+      try {
       await ref.set({
         name: String(act.name).trim(),
-        email: "",
+        email: em,
         level: act.level || "Beginner",
         goal: act.goal || "",
         sessionsPerWeek: Number(act.sessionsPerWeek) || 3,
@@ -3400,8 +3421,15 @@ exports.coachApply = onCall(
           updatedAt: new Date().toISOString(),
         }, { merge: true }).catch((e) => console.warn("[coachApply] profile:", e.message));
       }
-      console.log(`[coachApply] tạo khách ${id}`);
-      return { ok: true, clientId: id };
+      } catch (e) {
+        // Hồ sơ ghi hỏng mà chỉ mục đã chiếm thì địa chỉ đó bị khoá vĩnh viễn
+        // cho một khách không tồn tại — và luật CẤM update nên không ai sửa
+        // được nữa. Gỡ lại ngay.
+        if (em) await db.collection("clientEmails").doc(em).delete().catch(() => {});
+        throw e;
+      }
+      console.log(`[coachApply] tạo khách ${id}${em ? " + email " + em : ""}`);
+      return { ok: true, clientId: id, email: em || null };
     }
 
     throw new HttpsError("invalid-argument", `Loại thao tác không rõ: ${act.kind}`);

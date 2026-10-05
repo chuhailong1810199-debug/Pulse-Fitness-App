@@ -128,6 +128,9 @@ const TOOLS = [
       type: "object",
       properties: {
         name: { type: "string" },
+        email: { type: "string",
+          description: "Gmail của khách, để khách tự đăng nhập. Bỏ trống nếu chưa có — "
+            + "TUYỆT ĐỐI không bịa địa chỉ giữ chỗ." },
         level: { type: "string", description: "Beginner | Intermediate | Advanced" },
         goal: { type: "string" },
         sessionsPerWeek: { type: "integer", description: "1–7" },
@@ -366,6 +369,19 @@ async function runTool(name, args) {
   if (name === "propose_new_client") {
     const v = validateNewClient(a);
     if (!v.ok) return { rejected: true, errors: v.errors };
+    const em = emailKey(a.email);
+    // Dò sớm để coach thấy xung đột TRƯỚC khi bấm duyệt. Chốt chặn thật vẫn
+    // nằm ở lúc ghi (create-only), vì giữa lúc đề xuất và lúc duyệt vẫn có
+    // thể có người khác chiếm mất.
+    if (em) {
+      const taken = await db.collection("clientEmails").doc(em).get();
+      if (taken.exists) {
+        const owner = (taken.data() || {}).clientId;
+        return { rejected: true, errors: [
+          `Gmail ${em} đã thuộc về khách '${owner}'. Một Gmail chỉ được một khách — `
+          + `hai người chung địa chỉ là đọc ghi được dữ liệu của nhau.`] };
+      }
+    }
     const id = makeClientId(a.name);
     return {
       needsConfirm: true,
@@ -378,6 +394,7 @@ async function runTool(name, args) {
         sessionsPerWeek: Number(a.sessionsPerWeek) || 3,
         notes: a.notes || "",
         healthConditions: a.healthConditions || "",
+        email: em,
         program: a.program || {},
       },
       preview: {
@@ -387,7 +404,7 @@ async function runTool(name, args) {
         goal: a.goal || "",
         sessionsPerWeek: Number(a.sessionsPerWeek) || 3,
         program: a.program ? progSummary(a.program) : [],
-        login: "chưa có email — khách này coach tự quản, bổ sung Gmail sau nếu cần",
+        login: em || "chưa có email — khách này coach tự quản",
       },
       note: "Đã gửi cho coach duyệt. Nói cho coach biết sẽ tạo gì, rồi dừng.",
     };
@@ -402,6 +419,19 @@ async function runTool(name, args) {
 // qua được đây thì không có gì chạm tới Firestore. Thuần, không I/O, test được.
 
 const LEVELS = ["Beginner", "Intermediate", "Advanced"];
+
+/**
+ * Địa chỉ -> khoá cho /clientEmails. Trả "" nếu không hợp lệ.
+ *
+ * Luôn viết thường: chỉ mục phân biệt hoa thường, nên "Ben@x.com" và
+ * "ben@x.com" sẽ thành HAI khoá khác nhau cho cùng một hộp thư — đúng lỗ hổng
+ * mà chỉ mục sinh ra để bịt.
+ */
+function emailKey(v) {
+  const t = String(v == null ? "" : v).trim().toLowerCase();
+  if (!t) return "";
+  return /^[^\s@]+@[^\s@.]+\.[^\s@]+$/.test(t) ? t : "";
+}
 const DAY_KEY = /^Session[A-G]$/;
 const str = (v) => (typeof v === "string" ? v.trim() : "");
 
@@ -477,9 +507,12 @@ function validateNewClient(c) {
   if (o.sessionsPerWeek != null && (!Number.isInteger(spw) || spw < 1 || spw > 7)) {
     e.push("Số buổi/tuần phải là số nguyên 1–7.");
   }
-  if (str(o.email)) {
-    e.push("Không được đặt email khi tạo khách. Khách mới luôn bắt đầu với email rỗng; "
-      + "bổ sung sau bằng đường riêng để giữ luật một Gmail một khách.");
+  const em = emailKey(o.email);
+  if (str(o.email) && !em) e.push(`Địa chỉ "${str(o.email)}" không hợp lệ.`);
+  // Địa chỉ giữ chỗ là thứ đã gây ra sự cố: hai khách cùng một địa chỉ thì đọc
+  // ghi được dữ liệu của nhau. Khách chưa có Gmail thật thì để TRỐNG.
+  if (em && /^(placeholder|noemail|none|test|abc|xxx)@/.test(em)) {
+    e.push("Không dùng địa chỉ giữ chỗ. Khách chưa có Gmail thật thì bỏ trống email.");
   }
   if (o.program) {
     const v = validateProgram(o.program);
@@ -525,8 +558,9 @@ GIÁO ÁN
 - Gọi tool đề xuất MỘT LẦN rồi dừng, kể cả khi chưa thấy kết quả cuối. Đừng gọi lại.
 - Trước khi đề xuất sửa giáo án, gọi get_program đọc bản cũ đã, rồi nói rõ đổi những gì và vì sao.
 - Tool trả về rejected kèm errors thì đọc lỗi, sửa, đề xuất lại — đừng lặp lại y nguyên.
-- Khách mới luôn bắt đầu KHÔNG có email. Coach muốn cho đăng nhập thì tự bổ sung sau; đừng tự đặt
-  địa chỉ nào, kể cả địa chỉ giữ chỗ.
+- Khách mới CÓ THỂ kèm Gmail để tự đăng nhập — chỉ khi coach đưa địa chỉ thật. Coach không nói thì
+  bỏ trống. TUYỆT ĐỐI không tự bịa địa chỉ, không dùng địa chỉ giữ chỗ: một Gmail chỉ được thuộc về
+  một khách, hai người chung địa chỉ là đọc ghi được dữ liệu của nhau.
 
 AN TOÀN
 - Khách dưới 18 tuổi (Antony 15, Sang 14, Rome, Kem): KHÔNG BAO GIỜ đề xuất ăn thâm hụt calo. Hạn chế
@@ -705,5 +739,5 @@ function buildMorningPush({ bookings, rec }) {
   return { title, body: lines.join("\n") };
 }
 
-module.exports = { TOOLS, buildMorningPush, REC_LABEL, SYSTEM, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, runTool, runAssistant, progSummary, shapeReply,
+module.exports = { TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, runTool, runAssistant, progSummary, shapeReply,
   validateProgram, validateNewClient, makeClientId, LEVELS };

@@ -258,14 +258,47 @@ ok("giao an thieu truong thi bi chan, va noi ro thieu gi", () => {
   }
 });
 
-ok("khach moi KHONG duoc mang email, ke ca dia chi giu cho", () => {
-  for (const em of ["placeholder@gmail.com", "a@b.com", "  x@y.com  "]) {
-    const v = A.validateNewClient({ name: "Minh", email: em });
-    assert(!v.ok, "email '" + em + "' lot qua");
-    assert(/một Gmail một khách/.test(v.errors.join(" ")), "loi phai giai thich vi sao");
-  }
+ok("email that thi nhan, email rong cung nhan", () => {
+  assert(A.validateNewClient({ name: "Ben", email: "ben.ngo160709@gmail.com" }).ok,
+    "email that bi chan");
   assert(A.validateNewClient({ name: "Minh" }).ok, "khong email thi phai qua");
   assert(A.validateNewClient({ name: "Minh", email: "" }).ok, "email rong phai qua");
+});
+
+ok("dia chi giu cho VAN bi chan — day la cho tung gay su co", () => {
+  for (const em of ["placeholder@gmail.com", "noemail@x.com", "test@test.com"]) {
+    const v = A.validateNewClient({ name: "Minh", email: em });
+    assert(!v.ok, "dia chi giu cho '" + em + "' lot qua");
+    assert(/giữ chỗ/.test(v.errors.join(" ")), "loi phai noi ro vi sao");
+  }
+});
+
+ok("email sai dinh dang bi chan", () => {
+  for (const em of ["khong-phai-email", "a@b", "@x.com", "a b@x.com", "a@@x.com"]) {
+    assert(!A.validateNewClient({ name: "Minh", email: em }).ok, "'" + em + "' lot qua");
+  }
+});
+
+ok("emailKey luon ve chu thuong — chi muc phan biet hoa thuong", () => {
+  assert.strictEqual(A.emailKey("  Ben.Ngo160709@Gmail.COM "), "ben.ngo160709@gmail.com");
+  assert.strictEqual(A.emailKey("khong-phai-email"), "");
+  assert.strictEqual(A.emailKey(null), "");
+  assert.strictEqual(A.emailKey(""), "");
+});
+
+ok("ghi email PHAI chiem chi muc TRUOC, va lui lai duoc", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "functions", "index.js"), "utf8");
+  const i = src.indexOf('act.kind === "create_client"');
+  const blk = src.slice(i, i + 3000);
+  const claim = blk.indexOf('collection("clientEmails")');
+  const write = blk.indexOf("ref.set({");
+  assert(claim > -1, "khong chiem chi muc /clientEmails");
+  assert(claim < write,
+    "ghi clients.email TRUOC khi chiem chi muc — day dung la khe ma Soobin va Thai Son lot qua");
+  assert(/\.create\(/.test(blk.slice(claim, claim + 300)),
+    "phai dung create() (hong neu da ton tai), khong duoc set/update de ghi de");
+  assert(/clientEmails"\)\.doc\(em\)\.delete\(\)/.test(blk),
+    "ho so ghi hong ma khong go lai chi muc -> dia chi bi khoa vinh vien cho mot khach khong ton tai");
 });
 
 ok("khach moi: kiem trinh do va so buoi", () => {
