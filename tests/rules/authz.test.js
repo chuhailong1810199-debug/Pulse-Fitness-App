@@ -65,7 +65,10 @@ const denied = async (p, code) => {
   ok("coach A KHONG assertCanAccess khach cua B", () => denied(authz.assertCanAccess(COACH_A, "sang", db), "permission-denied"));
   ok("coach bi tat bi chan", () => denied(authz.assertCanManage(COACH_OFF, "cindy", db), "permission-denied"));
   ok("users.role 'coach' kieu cu KHONG con la coach", () => denied(authz.requireCoach(OLD_ROLE, db), "permission-denied"));
-  ok("admin (coaches.isAdmin) vao moi khach", () => authz.assertCanManage(ADMIN2, "cindy", db));
+  ok("admin (coaches.isAdmin) XEM moi khach", () => authz.assertCanView(ADMIN2, "cindy", db));
+  ok("admin KHONG SUA khach cua coach khac", () => denied(authz.assertCanManage(ADMIN2, "cindy", db), "permission-denied"));
+  ok("admin goc cung KHONG SUA khach cua coach A", () => denied(authz.assertCanManage(COACH, "cindy", db), "permission-denied"));
+  ok("coach A KHONG assertCanView khach cua B", () => denied(authz.assertCanView(COACH_A, "sang", db), "permission-denied"));
   ok("khach KHONG assertCanManage chinh minh (chi Access)", () =>
     denied(authz.assertCanManage(CINDY, "cindy", db), "permission-denied"));
 
@@ -78,7 +81,9 @@ const denied = async (p, code) => {
     assert(authz.canManageDoc({ coach: true, uid: "coachA" }, { coachUid: "coachA" }));
     assert(!authz.canManageDoc({ coach: true, uid: "coachA" }, { coachUid: "coachB" }));
     assert(!authz.canManageDoc({ coach: false, uid: "coachA" }, { coachUid: "coachA" }));
-    assert(authz.canManageDoc({ coach: true, admin: true, uid: "x" }, { coachUid: "y" }));
+    assert(!authz.canManageDoc({ coach: true, admin: true, uid: "x" }, { coachUid: "y" }), "admin không sửa khách coach khác");
+    assert(authz.canViewDoc({ coach: true, admin: true, uid: "x" }, { coachUid: "y" }), "admin xem được");
+    assert(!authz.canViewDoc({ coach: true, uid: "coachA" }, { coachUid: "coachB" }));
     assert(!authz.canManageDoc({ coach: true, uid: "coachA" }, null));
   });
   ok("requireMember: khach co index", () => authz.requireMember(SANG, db));

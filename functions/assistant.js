@@ -11,7 +11,7 @@
  *   model đòi { type:"function_call", id, name, arguments }
  *   mình đáp  { type:"function_result", call_id, name, result }
  */
-const { canManageDoc } = require("./authz.js");
+const { canManageDoc, canViewDoc } = require("./authz.js");
 const { getFirestore } = require("firebase-admin/firestore");
 
 /** Trần số vòng gọi tool cho một câu hỏi. */
@@ -203,15 +203,20 @@ async function runTool(name, args, role) {
   if (!role || !role.coach) return { error: "Không xác định được coach đang hỏi." };
 
   // Chốt chung cho MỌI tool nhận clientId — tool mới thêm vào cũng tự được gác.
+  // Tool đọc: coach phụ trách hoặc admin (quan sát). Tool đề xuất SỬA
+  // (propose_*): chỉ coach phụ trách — admin cũng không sửa khách coach khác.
   if (a.clientId != null) {
     const id = String(a.clientId);
-    if (!role.admin) {
-      const c = await db.collection("clients").doc(id).get();
-      if (!c.exists || !canManageDoc(role, c.data())) {
-        return name.startsWith("propose_")
-          ? { rejected: true, errors: [`Không có khách id '${id}'.`] }
-          : { error: `Không có khách id '${id}'.` };
+    const write = name.startsWith("propose_");
+    const c = await db.collection("clients").doc(id).get();
+    const okDoc = c.exists && (write ? canManageDoc(role, c.data()) : canViewDoc(role, c.data()));
+    if (!okDoc) {
+      if (write && c.exists && canViewDoc(role, c.data())) {
+        return { rejected: true, errors: [`Khách '${id}' thuộc coach khác — admin chỉ quan sát, không sửa.`] };
       }
+      return write
+        ? { rejected: true, errors: [`Không có khách id '${id}'.`] }
+        : { error: `Không có khách id '${id}'.` };
     }
   }
 

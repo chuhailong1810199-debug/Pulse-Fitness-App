@@ -51,6 +51,15 @@ const ok = (n, f) => cases.push([n, f]);
     const r = await A.runTool("propose_program", { clientId: "cindy", program: prog }, RB);
     assert(r.rejected && !r.needsConfirm, JSON.stringify(r));
   });
+  ok("admin XEM giao an khach cua coach A (quan sat)", async () => {
+    const r = await A.runTool("get_program", { clientId: "cindy" }, ADM);
+    assert(r.program && !r.error, JSON.stringify(r));
+  });
+  ok("admin KHONG de xuat sua giao an khach cua coach A", async () => {
+    const r = await A.runTool("propose_program", { clientId: "cindy", program: prog }, ADM);
+    assert(r.rejected && /chỉ quan sát/.test(r.errors[0]), JSON.stringify(r));
+  });
+
   ok("khong co role -> tu choi, khong doc Firestore", async () => {
     const r = await A.runTool("list_clients", {}, undefined);
     assert(r.error && !r.clients);
