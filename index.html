@@ -204,7 +204,6 @@ onAuthStateChanged(auth, async user => {
   if (user) {
     _authInitialized = true;
     currentUser = user;
-    document.getElementById('slides-screen')?.classList.add('hidden');
     document.getElementById('login-screen')?.classList.add('hidden');
     try {
       await loadUserProfile(user);
@@ -217,8 +216,8 @@ onAuthStateChanged(auth, async user => {
   } else {
     currentUser = null;
     userRole = null;
-    // Hide slides, show login
-    document.getElementById('slides-screen')?.classList.add('hidden');
+    // Chưa đăng nhập: tắt màn tải (hiện sẵn từ đầu) trước khi hiện đăng nhập / gợi ý cài app.
+    document.getElementById('loading-screen')?.classList.add('hidden');
     _authInitialized = true;
     checkPWAPrompt(() => showScreen('login'));
   }
@@ -12912,9 +12911,11 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 </div>
 
 <!-- LOADING SCREEN -->
-<div id="loading-screen" class="loading-screen hidden">
-  <!-- Logo nhịp tim thay vòng xoay: hiện đúng trong lúc app nạp, không bắt
-       chờ thêm như màn chào cũ (2,3 giây cố định). -->
+<div id="loading-screen" class="loading-screen">
+  <!-- HIỆN SẴN từ lúc mở trang — thay chỗ màn chào cũ: che khoảng Firebase
+       đang xác định ai đăng nhập, và người dùng cũ đi đường nhanh (không qua
+       showScreen('loading')) vẫn thấy logo. Tắt bởi showScreen() hoặc nhánh
+       chưa đăng nhập. Không bắt chờ thêm như màn chào cũ (2,3 giây cố định). -->
   <img src="images/pulse-mark.svg" class="loading-logo" alt="Pulse">
 </div>
 
