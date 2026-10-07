@@ -1,0 +1,9 @@
+{
+  "name": "pulse-rules-tests",
+  "private": true,
+  "description": "Chạy firestore.rules + storage.rules thật trên Firebase Emulator",
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
+    "firebase": "^12.19.0"
+  }
+}

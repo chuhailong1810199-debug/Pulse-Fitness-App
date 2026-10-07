@@ -1742,9 +1742,9 @@ function cdLoadValue(day, pi, ei, bw) {
 // Hai lý do, cái thứ hai quan trọng hơn:
 //   1. Bộ chọn khách cần cả 20 ảnh cùng lúc. Chúng đi kèm clientsData — một
 //      lần đọc vốn đã xảy ra — thay vì 20 lượt tải ảnh riêng.
-//   2. storage.rules hiện là `allow read, write: if request.auth != null`,
-//      tức mọi tài khoản đã đăng nhập đọc ghi được mọi file. Client doc thì
-//      luật isClientOwner() đã siết sẵn, nên ảnh mặt nằm đây an toàn hơn hẳn.
+//   2. Cùng một luật quyền với hồ sơ (isClientOwner), không phải giữ thêm một
+//      bộ luật Storage cho riêng ảnh đại diện. (storage.rules từng mở cho mọi
+//      tài khoản đăng nhập; nay đã khoá theo khách — xem storage.rules.)
 // 128px: ô trong bộ chọn khách 34px (3x = 102px), ô dashboard 56px. Một ảnh
 // khoảng 5–8KB, cả 20 khách thêm chừng 150KB vào lần đọc clientsData.
 const CD_AV_PX = 128;

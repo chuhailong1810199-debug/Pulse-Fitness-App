@@ -2,3 +2,6 @@
 public/
 firebase-debug.log
 firestore-debug.log
+node_modules
+storage-debug.log
+ui-debug.log

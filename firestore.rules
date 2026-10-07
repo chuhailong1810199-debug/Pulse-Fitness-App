@@ -75,8 +75,11 @@ service cloud.firestore {
       allow read, write: if isCoach();
 
       allow read:   if request.auth != null && request.auth.uid == uid;
+      // Chỉ được tự tạo với vai trò 'client'. Bản cũ chặn đúng chữ 'coach' nên
+      // tự tạo 'admin' hay bất kỳ giá trị nào khác vẫn lọt — chặn bằng danh sách
+      // cho phép, không bằng danh sách cấm.
       allow create: if request.auth != null && request.auth.uid == uid
-                    && request.resource.data.get('role', 'client') != 'coach';
+                    && request.resource.data.get('role', 'client') == 'client';
       allow update: if request.auth != null && request.auth.uid == uid
                     && request.resource.data.get('role', '')     == resource.data.get('role', '')
                     && request.resource.data.get('clientId', '') == resource.data.get('clientId', '');
@@ -111,10 +114,14 @@ service cloud.firestore {
     // Hàm nền đọc bằng Admin SDK nên không đi qua đây. Phía máy khách chỉ
     // được tự ghi đăng ký của chính mình, và không đọc được của ai cả:
     // endpoint cộng keys là đủ để gửi thông báo tới máy người khác.
+    // Trường role quyết định ai nhận push lịch và brief sáng (pushToAll lọc
+    // role=='coach'). Khách tự khai 'coach' là nhận được lịch có tên khách khác
+    // — nên chỉ coach thật mới được ghi role 'coach'.
     match /pushSubs/{subId} {
       allow read: if false;
       allow create, update: if request.auth != null
-                            && request.resource.data.uid == request.auth.uid;
+                            && request.resource.data.uid == request.auth.uid
+                            && (request.resource.data.get('role', null) != 'coach' || isCoach());
       allow delete: if request.auth != null && resource.data.uid == request.auth.uid;
     }
 

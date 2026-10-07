@@ -25,6 +25,7 @@ const { onRequest }          = require("firebase-functions/v2/https");
 const { initializeApp }      = require("firebase-admin/app");
 const { getFirestore }       = require("firebase-admin/firestore");
 const nodemailer             = require("nodemailer");
+const authz                  = require("./authz.js");
 const { Groq }               = require("groq-sdk");
 
 initializeApp();
@@ -451,6 +452,7 @@ exports.generateProgram = onCall(
     memory: "256MiB",
   },
   async (request) => {
+    await authz.requireCoach(request);
     const { name, level, goal, sessionsPerWeek, notes, age, gender, weight, height } = request.data || {};
 
     // Say which field is missing. Without this the function ran on undefined and
@@ -700,7 +702,9 @@ exports.pulseGenerate = onCall(
     memory: "512MiB",
   },
   async (request) => {
-    const { clientId } = request.data;
+    // Đọc hồ sơ, InBody, lịch sử tập của khách — chỉ coach.
+    await authz.requireCoach(request);
+    const { clientId } = request.data || {};
     // A plain Error from a callable reaches the client as a bare "internal" with
     // the reason stripped — the same dead end the nutrition tab kept hitting.
     if (!clientId) throw new HttpsError("invalid-argument", "clientId is required");
@@ -1856,6 +1860,7 @@ exports.analyzeMealPhoto = onCall(
     memory: "512MiB",
   },
   async (request) => {
+    await authz.requireMember(request);
     const { imageBase64, mimeType, userHint } = request.data || {};
 
     if (!imageBase64) {
@@ -1964,6 +1969,7 @@ exports.recommendMacros = onCall(
     if (!clientId) throw new HttpsError("invalid-argument", "clientId is required");
 
     const db = getFirestore();
+    await authz.assertCanAccess(request, clientId, db);
 
     // ── Read client profile ──────────────────────────────────────────────────
     const clientDoc = await db.collection("clients").doc(clientId).get();
