@@ -86,7 +86,18 @@ service cloud.firestore {
     // Cho phép create, chặn update => không thể chiếm email đã có người dùng.
     // Muốn đổi email cho client thì phải delete doc cũ rồi create doc mới.
     match /clientEmails/{emailKey} {
-      allow read: if request.auth != null;
+      // ĐỌC TỪNG DÒNG (get): chính chủ Gmail (khách tra hồ sơ lúc đăng nhập),
+      // admin, hoặc coach khi Gmail CÒN TRỐNG / thuộc khách của chính coach đó.
+      // Gmail thuộc khách coach khác → bị từ chối; app hiểu là "đã có người dùng".
+      // LIỆT KÊ (list): chỉ admin. Trước đây `allow read: if request.auth != null`
+      // cho bất kỳ Gmail nào đăng nhập liệt kê được Gmail của MỌI khách.
+      allow get: if request.auth != null && (
+        emailKey == myEmail()
+        || isAdmin()
+        || (isCoachRole() && (resource == null
+              || !exists(clientPath(resource.data.clientId))
+              || canManage(resource.data.clientId))));
+      allow list: if isAdmin();
 
       // Coach đăng ký email cho bất kỳ client nào;
       // user tự đăng ký thì CHỈ được đăng ký chính email của mình.

@@ -188,6 +188,24 @@ const STRANGER = { uid: "u_x", email: "la@gmail.com", ...V };
     await env.withSecurityRulesDisabled((c) => c.firestore().doc("clientEmails/tam@gmail.com").set({ clientId: "cindy" }));
     await assertSucceeds(db(COACH_A).doc("clientEmails/tam@gmail.com").delete());
   });
+  // ── Liệt kê Gmail khách (lỗ cũ: ai đăng nhập cũng liệt kê được) ─
+  ok("coach A KHONG liet ke duoc /clientEmails", () => assertFails(db(COACH_A).collection("clientEmails").get()));
+  ok("nguoi la KHONG liet ke duoc /clientEmails", () => assertFails(db(STRANGER).collection("clientEmails").get()));
+  ok("khach KHONG liet ke duoc /clientEmails", () => assertFails(db(CINDY).collection("clientEmails").get()));
+  ok("coach A KHONG doc dong Gmail khach cua coach B", () =>
+    assertFails(db(COACH_A).doc("clientEmails/sang@gmail.com").get()));
+  ok("nguoi la KHONG doc dong Gmail nguoi khac", () =>
+    assertFails(db(STRANGER).doc("clientEmails/cindy@gmail.com").get()));
+  ok("coach A doc dong Gmail khach cua minh", () =>
+    assertSucceeds(db(COACH_A).doc("clientEmails/cindy@gmail.com").get()));
+  ok("coach A doc Gmail con trong (de biet dung duoc khong)", () =>
+    assertSucceeds(db(COACH_A).doc("clientEmails/chuaai@gmail.com").get()));
+  ok("khach doc dong Gmail cua chinh minh (dang nhap)", () =>
+    assertSucceeds(db(CINDY).doc("clientEmails/cindy@gmail.com").get()));
+  ok("nguoi la doc Gmail cua chinh minh (dang nhap, chua co)", () =>
+    assertSucceeds(db(STRANGER).doc("clientEmails/la@gmail.com").get()));
+  ok("admin liet ke /clientEmails", () => assertSucceeds(db(ADMIN).collection("clientEmails").get()));
+
   ok("nguoi la chi chiem dung email cua minh", () =>
     assertFails(db(STRANGER).doc("clientEmails/khac2@gmail.com").set({ clientId: "x" })));
 

@@ -1172,8 +1172,16 @@ function _emailKey(email) {
 async function emailOwner(email) {
   const key = _emailKey(email);
   if (!key) return null;
-  const snap = await getDoc(doc(db, 'clientEmails', key));
-  return snap.exists ? (snap.data().clientId || null) : null;
+  try {
+    const snap = await getDoc(doc(db, 'clientEmails', key));
+    return snap.exists ? (snap.data().clientId || null) : null;
+  } catch (e) {
+    // Luật chỉ cho coach đọc Gmail còn trống hoặc của khách mình. Bị từ chối
+    // nghĩa là Gmail đã thuộc khách của coach khác — coi là đã có chủ, và
+    // KHÔNG lộ là khách nào.
+    if (e && e.code === 'permission-denied') return '(khách của coach khác)';
+    throw e;
+  }
 }
 
 /**
