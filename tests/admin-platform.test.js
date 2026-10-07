@@ -13,7 +13,10 @@ console.log("Admin + moi coach mot cua hang\n");
 
 ok("trang Admin chi admin mo duoc", () => {
   assert(/if \(page === 'platform' && !userIsAdmin\) return;/.test(s));
-  assert(/platTab\.style\.display = userIsAdmin \? '' : 'none'/.test(s));
+  // Lối vào DUY NHẤT là nút Admin trên thanh khách (chỉ admin thấy) — không có tab trên thanh nav.
+  assert(!/platform-nav-tab/.test(s), "còn tab Admin trên thanh nav");
+  assert(/id="coach-admin-btn" onclick="showPage\('platform'\)"/.test(s));
+  assert(/coach-admin-btn'\)\?\.classList\.toggle\('hidden', !userIsAdmin\)/.test(s));
 });
 ok("dashboard co du so lieu coach", () => {
   const f = fnBody("async function renderPlatform()");
