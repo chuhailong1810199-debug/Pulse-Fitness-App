@@ -15467,7 +15467,10 @@ button.cd-av:focus-visible{outline:2px solid #8FDBFF;outline-offset:2px;}
   --rc-line:var(--line,rgba(255,255,255,0.12));
   --rc-green:#7ED9A0;--rc-amber:#E6B34A;--rc-red:#EE5A4F;
   font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","Helvetica Neue",Inter,sans-serif;
-  color:var(--rc-txt);background:var(--rc-bg);
+  color:var(--rc-txt);
+  /* KHONG dat background o day. Nen dac #161111 rong 560px can giua se ve ra
+     mot khoi phang canh cung tren nen bau troi — dung thu coach goi la "vien
+     den". Tab dinh duong khong co nen, de troi xuyen qua; ba tab nay theo. */
   max-width:560px;margin:0 auto;padding:24px 20px 56px;
   -webkit-font-smoothing:antialiased;overflow-x:hidden;
 }
@@ -16467,7 +16470,11 @@ html.cp-lock, html.cp-lock body{ overflow:hidden; }
 .rc-col{display:block;width:100%;border-radius:4px 4px 1px 1px;min-height:3px;cursor:pointer;}
 .rc-col-empty{height:3px;background:var(--rc-line);border-radius:1px;cursor:default;}
 .rc-goal{position:absolute;left:0;right:0;border-top:1px dashed rgba(255,255,255,.5);pointer-events:none;}
-.rc-goal span{position:absolute;right:0;bottom:4px;font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--rc-txt);background:var(--rc-bg);padding-left:6px;}
+.rc-goal span{position:absolute;right:0;bottom:4px;font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--rc-txt);
+  /* Truoc day dung o nen dac de che duong ke dut phia sau. Khung ngoai khong
+     con nen nen o do se noi len thanh mot mieng den. Quang chu om sat glyph
+     che duoc duong ke ma khong ve ra hinh chu nhat. */
+  text-shadow:0 0 5px var(--rc-bg),0 0 5px var(--rc-bg),0 0 3px var(--rc-bg),0 0 3px var(--rc-bg);}
 .rc-days{display:grid;grid-template-columns:repeat(14,minmax(0,1fr));gap:5px;margin-top:8px;}
 .rc-days span{text-align:center;font-size:11px;color:var(--rc-muted);}
 .rc-days .rc-today{color:var(--rc-txt);font-weight:700;}
