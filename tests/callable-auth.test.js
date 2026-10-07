@@ -30,9 +30,15 @@ found.forEach(([name, at], i) => {
   // Chỉ xét ~60 dòng đầu thân hàm: kiểm quyền phải đứng TRƯỚC mọi lần đọc dữ liệu.
   const head = s.slice(at, end).split("\n").slice(0, 60).join("\n");
   ok(name + " kiem quyen o dau ham", () => {
-    assert(/authz\.(require\w+|assertCanAccess)\(|request\.auth/.test(head),
-      name + " không gọi authz.* cũng không đọc request.auth");
+    // Chỉ authz.* — so email tay (request.auth.token.email !== ...) là kiểu cũ,
+    // không biết coaches/{email} nên coach thứ hai bị từ chối hoặc lọt sai.
+    assert(/authz\.(require\w+|assertCan\w+)\(/.test(head),
+      name + " không gọi authz.*");
   });
+});
+
+ok("khong con so email cung de kiem quyen", () => {
+  assert(!/!==\s*COACH_EMAIL/.test(s), "còn so `!== COACH_EMAIL` — quyền phải đi qua authz");
 });
 
 ok("4 callable tung bo ngo nay da qua authz", () => {

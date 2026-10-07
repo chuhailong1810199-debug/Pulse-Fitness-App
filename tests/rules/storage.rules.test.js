@@ -22,7 +22,9 @@ const cases = [];
 const ok = (n, f) => cases.push([n, f]);
 
 const COACH = { uid: "coach1", email: "chuhailong1810199@gmail.com", email_verified: true };
-const COACH2 = { uid: "coach2", email: "pt2@gmail.com", email_verified: true };   // coach qua users.role
+const COACH_A = { uid: "coachA", email: "pta@gmail.com", email_verified: true };   // coach qua coaches/{email}
+const COACH_B = { uid: "coachB", email: "ptb@gmail.com", email_verified: true };
+const COACH_OFF = { uid: "coachOff", email: "nghi@gmail.com", email_verified: true };
 const CINDY = { uid: "u_cindy", email: "cindy@gmail.com", email_verified: true };
 const SANG = { uid: "u_sang", email: "sang@gmail.com", email_verified: true };
 const STRANGER = { uid: "u_x", email: "la@gmail.com", email_verified: true };
@@ -39,10 +41,13 @@ const JPG = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
   // Dữ liệu nền: hai khách, một coach phụ, và sẵn một file của Cindy.
   await env.withSecurityRulesDisabled(async (ctx) => {
     const db = ctx.firestore();
-    await db.doc("clients/cindy").set({ name: "Cindy", email: "cindy@gmail.com" });
-    await db.doc("clients/sang").set({ name: "Sang", email: "sang@gmail.com" });
+    await db.doc("clients/cindy").set({ name: "Cindy", email: "cindy@gmail.com", coachUid: "coachA" });
+    await db.doc("clients/sang").set({ name: "Sang", email: "sang@gmail.com", coachUid: "coachB" });
+    await db.doc("coaches/pta@gmail.com").set({ active: true, isAdmin: false });
+    await db.doc("coaches/ptb@gmail.com").set({ active: true, isAdmin: false });
+    await db.doc("coaches/nghi@gmail.com").set({ active: false, isAdmin: false });
     await db.doc("clients/tien").set({ name: "Tiến", email: "" });      // khách coach tự quản
-    await db.doc("users/coach2").set({ role: "coach", email: "pt2@gmail.com" });
+    await db.doc("users/coach2").set({ role: "coach", email: "cu@gmail.com" });   // vai trò cũ — KHÔNG còn là coach
     await db.doc("users/u_x").set({ role: "client", email: "la@gmail.com" });
     const st = ctx.storage();
     await st.ref("progressPhotos/cindy/2026-10-01.jpg").put(JPG, { contentType: "image/jpeg" });
@@ -90,7 +95,12 @@ const JPG = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
   ok("coach (email) doc anh khach", () => assertSucceeds(photo(as(COACH)).getDownloadURL()));
   ok("coach (email) tai video demo", () =>
     assertSucceeds(as(COACH).ref("videos/sang/squat/coach").put(JPG, { contentType: "video/mp4" })));
-  ok("coach (users.role) doc anh khach", () => assertSucceeds(photo(as(COACH2)).getDownloadURL()));
+  ok("coach A doc anh khach CUA MINH", () => assertSucceeds(photo(as(COACH_A)).getDownloadURL()));
+  ok("coach B KHONG doc anh khach cua A", () => assertFails(photo(as(COACH_B)).getDownloadURL()));
+  ok("coach B KHONG xoa video khach cua A", () => assertFails(video(as(COACH_B)).delete()));
+  ok("coach bi tat KHONG doc", () => assertFails(photo(as(COACH_OFF)).getDownloadURL()));
+  ok("users.role 'coach' cu KHONG con mo kho", () =>
+    assertFails(photo(as({ uid: "coach2", email: "cu@gmail.com", email_verified: true })).getDownloadURL()));
   ok("coach xoa anh khach", () => assertSucceeds(as(COACH).ref("progressPhotos/cindy/2026-10-02.jpg").delete()));
 
   // ── Giới hạn ──────────────────────────────────────────────────

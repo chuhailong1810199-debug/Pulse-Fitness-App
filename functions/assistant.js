@@ -11,6 +11,7 @@
  *   model đòi { type:"function_call", id, name, arguments }
  *   mình đáp  { type:"function_result", call_id, name, result }
  */
+const { canManageDoc } = require("./authz.js");
 const { getFirestore } = require("firebase-admin/firestore");
 
 /** Trần số vòng gọi tool cho một câu hỏi. */
@@ -190,12 +191,35 @@ async function exerciseLibrary(db) {
   return _exCache;
 }
 
-async function runTool(name, args) {
+/**
+ * @param {object} role  vai trò người gọi từ authz.roleOf — { coach, admin, uid }.
+ *   Hàm nền bỏ qua firestore.rules, nên mỗi tool phải tự lọc theo coach: coach
+ *   B hỏi "giáo án của Cindy" (khách của A) phải nhận đúng câu như khi id không
+ *   tồn tại — không lộ ai có thật.
+ */
+async function runTool(name, args, role) {
   const db = getFirestore();
   const a = args || {};
+  if (!role || !role.coach) return { error: "Không xác định được coach đang hỏi." };
+
+  // Chốt chung cho MỌI tool nhận clientId — tool mới thêm vào cũng tự được gác.
+  if (a.clientId != null) {
+    const id = String(a.clientId);
+    if (!role.admin) {
+      const c = await db.collection("clients").doc(id).get();
+      if (!c.exists || !canManageDoc(role, c.data())) {
+        return name.startsWith("propose_")
+          ? { rejected: true, errors: [`Không có khách id '${id}'.`] }
+          : { error: `Không có khách id '${id}'.` };
+      }
+    }
+  }
 
   if (name === "list_clients") {
-    const snap = await db.collection("clients").get();
+    // Admin xem tất cả; coach chỉ khách của mình.
+    const snap = role.admin
+      ? await db.collection("clients").get()
+      : await db.collection("clients").where("coachUid", "==", role.uid).get();
     return {
       count: snap.size,
       clients: snap.docs.map((d) => {
@@ -533,7 +557,8 @@ function makeClientId(name, now) {
 }
 
 // ── Chỉ dẫn hệ thống ─────────────────────────────────────────────────────
-const SYSTEM = `Bạn là trợ lý của Long Chu, huấn luyện viên thể hình, làm việc ngay trong app Pulse của anh ấy.
+const SYSTEM = `Bạn là trợ lý của huấn luyện viên thể hình đang dùng app Pulse (studio của Long Chu).
+Chỉ nói về khách mà tool trả về — đó là khách của coach đang hỏi; tool báo "không có khách" thì nói đúng như vậy.
 Trả lời bằng TIẾNG VIỆT, ngắn gọn, giọng đồng nghiệp nói với đồng nghiệp. Không khách sáo, không mở bài.
 
 DỮ LIỆU
@@ -563,7 +588,7 @@ GIÁO ÁN
   một khách, hai người chung địa chỉ là đọc ghi được dữ liệu của nhau.
 
 AN TOÀN
-- Khách dưới 18 tuổi (Antony 15, Sang 14, Rome, Kem): KHÔNG BAO GIỜ đề xuất ăn thâm hụt calo. Hạn chế
+- Khách dưới 18 tuổi (xem tuổi/ngày sinh trong hồ sơ): KHÔNG BAO GIỜ đề xuất ăn thâm hụt calo. Hạn chế
   năng lượng tuổi dậy thì ảnh hưởng chiều cao cuối cùng và là yếu tố nguy cơ rối loạn ăn uống.
 - Bạn không phải bác sĩ. Đau dai dẳng, khớp sưng, tê bì, chóng mặt → khuyên đi khám chuyên khoa.
   Đưa hướng điều chỉnh tập luyện thì được, chẩn đoán thì không.
@@ -576,9 +601,10 @@ AN TOÀN
  * @param {string} o.model      tên model
  * @param {Array}  o.messages   [{role:'user'|'assistant', text}] — lịch sử hội thoại
  * @param {string} [o.clientId] khách đang mở trên màn hình, để model khỏi phải hỏi lại
+ * @param {object} o.role       vai trò người gọi (authz.roleOf) — mọi tool lọc theo nó
  * @returns {Promise<{text:string, toolLog:Array, steps:number, usage:object}>}
  */
-async function runAssistant({ client, model, messages, clientId }) {
+async function runAssistant({ client, model, messages, clientId, role }) {
   const input = [];
   if (clientId) {
     input.push({
@@ -628,7 +654,7 @@ async function runAssistant({ client, model, messages, clientId }) {
     // đọc lịch sử tập xong.
     const results = await Promise.all(calls.map(async (c) => {
       try {
-        return await runTool(c.name, c.arguments);
+        return await runTool(c.name, c.arguments, role);
       } catch (e) {
         // Một tool hỏng không được làm chết cả câu trả lời: báo lỗi cho model,
         // để nó nói ra chỗ nào không đọc được thay vì im lặng bịa.

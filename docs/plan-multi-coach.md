@@ -267,18 +267,27 @@ Lane 1: A → C (cùng firestore.rules, tuần tự). Lane 2: F. Lane 3: E sau A
 Lane 1 và 3 cùng đụng functions/ ở bước A → làm A trước rồi mới tách lane.
 D chạm index.html một mình, làm cuối.
 
+## Đã triển khai (2026-10-07) — khác plan ở đâu
+
+- **Không có callable** `inviteCoach` / `setCoachActive` / `assignClient` / `markInvoicePaid`: luật đã chỉ
+  cho admin ghi `coaches/*`, `clients.coachUid`, `paidUntil`, nên màn Coach ghi thẳng Firestore. Ít bộ
+  phận hơn; quyền vẫn do luật gác (có test).
+- **Admin gốc** giữ một lối cứu (`BOOTSTRAP_ADMIN`) trong luật/authz — không bao giờ tự khoá mình.
+- Doc `coaches/<admin gốc>` tự được tạo khi admin đăng nhập lần đầu sau deploy (cũng tạo bởi backfill).
+- `pushToAll` gửi theo `uid`; lùi về `role=='coach'` chỉ khi chưa biết uid admin.
+
 ## Implementation Tasks
 
 - [x] **T1 (P0, human: ~4h / CC: ~30m)** — storage.rules — khoá theo đường dẫn khách + test 32
 - [x] **T2 (P0, human: ~3h / CC: ~20m)** — functions — requireAuth/assertCanAccess cho 4 callable không kiểm (A2)
 - [x] **T3 (P0, human: ~2h / CC: ~15m)** — firestore.rules — users chỉ tự tạo role 'client'; pushSubs chỉ coach ghi role 'coach' (A4, A5). Bỏ hẳn field role ở pushSubs để lại cho T8.
 - [x] **T4 (P1, human: ~2h / CC: ~15m)** — pulseGenerateFree — chỉ lấy khung giáo án, đọc tối đa 12 hồ sơ (A3). App Check CHƯA làm — cần đăng ký reCAPTCHA trong Firebase Console.
-- [ ] **T5 (P1, human: ~1d / CC: ~1h)** — functions/authz.js + coaches collection + inviteCoach/setCoachActive + test 33
-- [ ] **T6 (P1, human: ~1.5d / CC: ~1.5h)** — firestore.rules multi-coach (C11-16) + test 31
-- [ ] **T7 (P1, human: ~1d / CC: ~1h)** — assistant.js + coachApply + generators theo coach (E24-26) + test 34
-- [ ] **T8 (P1, human: ~1d / CC: ~1h)** — push + lịch theo coach (E27) + index bookings
-- [ ] **T9 (P1, human: ~2d / CC: ~2h)** — index.html: clientsQuery, isAdmin, loadUserProfile coach-trước, createSelfClient, billing, màn Coach (D17-22) + test 35, 36
-- [ ] **T10 (P1, human: ~3h / CC: ~20m)** — scripts/backfill-multi-coach.js (dry-run + ghi)
+- [x] **T5 (P1, human: ~1d / CC: ~1h)** — functions/authz.js + coaches collection + inviteCoach/setCoachActive + test 33
+- [x] **T6 (P1, human: ~1.5d / CC: ~1.5h)** — firestore.rules multi-coach (C11-16) + test 31
+- [x] **T7 (P1, human: ~1d / CC: ~1h)** — assistant.js + coachApply + generators theo coach (E24-26) + test 34
+- [x] **T8 (P1, human: ~1d / CC: ~1h)** — push + lịch theo coach (E27) + index bookings
+- [x] **T9 (P1, human: ~2d / CC: ~2h)** — index.html: clientsQuery, isAdmin, loadUserProfile coach-trước, createSelfClient, billing, màn Coach (D17-22) + test 35, 36
+- [x] **T10 (P1, human: ~3h / CC: ~20m)** — scripts/backfill-multi-coach.js (dry-run + ghi)
 - [x] **T11 (P2, human: ~1h / CC: ~10m)** — run-tests.sh chạy emulator; cài Java
 
 Tổng: human ~3-4 tuần · CC ~1-2 ngày.

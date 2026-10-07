@@ -28,7 +28,7 @@
 const { HttpsError } = require("firebase-functions/v2/https");
 const { makeClientId } = require("./assistant.js");
 
-async function claimMyClient(db, { uid, email, displayName, create }) {
+async function claimMyClient(db, { uid, email, displayName, create, ownerUid }) {
   if (!uid || !email) throw new HttpsError("unauthenticated", "Cần đăng nhập.");
   const em = String(email).trim().toLowerCase();
 
@@ -68,7 +68,8 @@ async function claimMyClient(db, { uid, email, displayName, create }) {
           email: em,
           program: {},
           goal: "", level: "", sessionsPerWeek: 0,
-          coachUid: null,                 // admin gán coach sau (docs/plan-multi-coach.md)
+          // Khách tự đăng ký thuộc về admin; admin chuyển cho coach khác sau.
+          coachUid: ownerUid || null,
           createdAt: new Date().toISOString(),
           createdBy: "self-signup",
         });

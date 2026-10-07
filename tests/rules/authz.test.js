@@ -15,7 +15,11 @@ const authz = require(path.join(__dirname, "..", "..", "functions", "authz.js"))
 
 const req = (uid, email, extra = {}) => (uid ? { auth: { uid, token: { email, email_verified: true, ...extra } } } : {});
 const COACH = req("coach1", "chuhailong1810199@gmail.com");
-const COACH2 = req("coach2", "pt2@gmail.com");
+const COACH_A = req("coachA", "pta@gmail.com");
+const COACH_B = req("coachB", "ptb@gmail.com");
+const COACH_OFF = req("coachOff", "nghi@gmail.com");
+const ADMIN2 = req("admin2", "quanly@gmail.com");
+const OLD_ROLE = req("coach2", "cu@gmail.com");          // users.role 'coach' kiểu cũ
 const CINDY = req("u_cindy", "Cindy@gmail.com");          // viết hoa: vẫn phải khớp
 const SANG = req("u_sang", "sang@gmail.com");
 const STRANGER = req("u_x", "la@gmail.com");
@@ -31,13 +35,18 @@ const denied = async (p, code) => {
 
 (async () => {
   const db = getFirestore();
-  await db.doc("clients/cindy").set({ email: "cindy@gmail.com" });
-  await db.doc("clients/sang").set({ email: "sang@gmail.com" });
+  await db.doc("clients/cindy").set({ email: "cindy@gmail.com", coachUid: "coachA" });
+  await db.doc("clients/sang").set({ email: "sang@gmail.com", coachUid: "coachB" });
+  await db.doc("coaches/pta@gmail.com").set({ active: true, isAdmin: false, uid: "coachA" });
+  await db.doc("coaches/ptb@gmail.com").set({ active: true, isAdmin: false });
+  await db.doc("coaches/nghi@gmail.com").set({ active: false, isAdmin: false });
+  await db.doc("coaches/quanly@gmail.com").set({ active: true, isAdmin: true });
+  await db.doc("coaches/chuhailong1810199@gmail.com").set({ active: true, isAdmin: true, uid: "admin1" });
   await db.doc("clients/tien").set({ email: "" });
   await db.doc("clients/old").set({ email: "cu@gmail.com" });              // khách cũ, không có index
   await db.doc("clientEmails/cindy@gmail.com").set({ clientId: "cindy" });
   await db.doc("clientEmails/sang@gmail.com").set({ clientId: "sang" });
-  await db.doc("users/coach2").set({ role: "coach" });
+  await db.doc("users/coach2").set({ role: "coach" });   // không còn tác dụng
   await db.doc("users/u_x").set({ role: "client" });
 
   ok("chua dang nhap -> unauthenticated", () => denied(authz.assertCanAccess(ANON, "cindy", db), "unauthenticated"));
@@ -51,10 +60,27 @@ const denied = async (p, code) => {
     denied(authz.assertCanAccess(STRANGER, "khong_co", db), "permission-denied"));
   ok("thieu clientId -> invalid-argument", () => denied(authz.assertCanAccess(CINDY, "", db), "invalid-argument"));
   ok("coach (email) vao moi khach", () => authz.assertCanAccess(COACH, "sang", db));
-  ok("coach (users.role) vao moi khach", () => authz.assertCanAccess(COACH2, "cindy", db));
+  ok("coach A vao khach cua minh", () => authz.assertCanManage(COACH_A, "cindy", db));
+  ok("coach A KHONG vao khach cua B", () => denied(authz.assertCanManage(COACH_A, "sang", db), "permission-denied"));
+  ok("coach A KHONG assertCanAccess khach cua B", () => denied(authz.assertCanAccess(COACH_A, "sang", db), "permission-denied"));
+  ok("coach bi tat bi chan", () => denied(authz.assertCanManage(COACH_OFF, "cindy", db), "permission-denied"));
+  ok("users.role 'coach' kieu cu KHONG con la coach", () => denied(authz.requireCoach(OLD_ROLE, db), "permission-denied"));
+  ok("admin (coaches.isAdmin) vao moi khach", () => authz.assertCanManage(ADMIN2, "cindy", db));
+  ok("khach KHONG assertCanManage chinh minh (chi Access)", () =>
+    denied(authz.assertCanManage(CINDY, "cindy", db), "permission-denied"));
 
   ok("requireCoach: khach bi chan", () => denied(authz.requireCoach(CINDY, db), "permission-denied"));
-  ok("requireCoach: coach qua", () => authz.requireCoach(COACH2, db));
+  ok("requireCoach: coach qua", () => authz.requireCoach(COACH_B, db));
+  ok("requireAdmin: coach thuong bi chan", () => denied(authz.requireAdmin(COACH_A, db), "permission-denied"));
+  ok("requireAdmin: admin goc + admin2 qua", async () => { await authz.requireAdmin(COACH, db); await authz.requireAdmin(ADMIN2, db); });
+  ok("defaultOwnerUid = uid admin goc", async () => assert.strictEqual(await authz.defaultOwnerUid(db), "admin1"));
+  ok("canManageDoc thuan", () => {
+    assert(authz.canManageDoc({ coach: true, uid: "coachA" }, { coachUid: "coachA" }));
+    assert(!authz.canManageDoc({ coach: true, uid: "coachA" }, { coachUid: "coachB" }));
+    assert(!authz.canManageDoc({ coach: false, uid: "coachA" }, { coachUid: "coachA" }));
+    assert(authz.canManageDoc({ coach: true, admin: true, uid: "x" }, { coachUid: "y" }));
+    assert(!authz.canManageDoc({ coach: true, uid: "coachA" }, null));
+  });
   ok("requireMember: khach co index", () => authz.requireMember(SANG, db));
   ok("requireMember: khach cu chua co index", () => authz.requireMember(LEGACY, db));
   ok("requireMember: Gmail la bi chan (khong dot quota Gemini)", () =>

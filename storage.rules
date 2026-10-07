@@ -7,9 +7,10 @@ rules_version = '2';
 // khách (có khách 14–15 tuổi). Id khách dễ đoán ('cindy', 'sang') nên không cần
 // biết gì thêm.
 //
-// BÂY GIỜ: chỉ hai thư mục theo khách, và chỉ coach hoặc chính khách đó.
-// Logic quyền chép từ firestore.rules (isCoach / isClientOwner) — đổi bên kia
-// thì phải đổi ở đây. Đường dẫn nào khác: từ chối hết.
+// BÂY GIỜ: chỉ hai thư mục theo khách, và chỉ admin, coach phụ trách khách đó,
+// hoặc chính khách đó.
+// Logic quyền chép từ firestore.rules (isAdmin / canManage / isClientOwner) —
+// đổi bên kia thì phải đổi ở đây. Đường dẫn nào khác: từ chối hết.
 //
 // Lần deploy đầu, Firebase sẽ xin cấp quyền cho Storage đọc Firestore
 // (firestore.get bên dưới). Đồng ý thì luật mới chạy được.
@@ -20,23 +21,29 @@ service firebase.storage {
       return request.auth != null && request.auth.token.email_verified != false;
     }
 
-    function isCoach() {
-      return signedIn() && (
-        request.auth.token.email == 'chuhailong1810199@gmail.com' ||
-        (firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
-         firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'coach')
-      );
+    function myEmail() { return request.auth.token.email.lower(); }
+    function coachDoc() {
+      return /databases/(default)/documents/coaches/$(myEmail());
     }
-
-    function isClientOwner(clientId) {
-      return signedIn() &&
-        firestore.exists(/databases/(default)/documents/clients/$(clientId)) &&
-        firestore.get(/databases/(default)/documents/clients/$(clientId)).data.get('email', '')
-          == request.auth.token.email.lower();
+    function clientDoc(clientId) {
+      return /databases/(default)/documents/clients/$(clientId);
+    }
+    // Cùng logic với firestore.rules: admin gốc, hoặc coaches/{email} đang active.
+    function isBootstrapAdmin() { return signedIn() && myEmail() == 'chuhailong1810199@gmail.com'; }
+    function isCoachRole() {
+      return isBootstrapAdmin() || (signedIn() && firestore.exists(coachDoc())
+        && firestore.get(coachDoc()).data.get('active', false) == true);
+    }
+    function isAdmin() {
+      return isBootstrapAdmin() || (isCoachRole() && firestore.get(coachDoc()).data.get('isAdmin', false) == true);
     }
 
     function canUse(clientId) {
-      return isCoach() || isClientOwner(clientId);
+      return signedIn() && firestore.exists(clientDoc(clientId)) && (
+        isAdmin()
+        || (isCoachRole() && firestore.get(clientDoc(clientId)).data.get('coachUid', null) == request.auth.uid)
+        || firestore.get(clientDoc(clientId)).data.get('email', '') == myEmail()
+      );
     }
 
     // Xoá thì request.resource là null — chỉ kiểm kích thước khi thật sự ghi file.

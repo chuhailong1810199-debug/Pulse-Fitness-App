@@ -1,71 +1,129 @@
 /**
- * Kiểm quyền cho callable.
+ * Kiểm quyền cho callable — mô hình nhiều coach.
  *
- * Hàm nền chạy bằng Admin SDK nên BỎ QUA firestore.rules — luật kỹ đến đâu cũng
- * không gác được một callable quên tự kiểm. Bốn callable từng không kiểm gì:
- * recommendMacros trả số liệu InBody của bất kỳ clientId cho người chưa đăng
- * nhập; pulseGenerate đọc hồ sơ + lịch sử tập của bất kỳ khách nào.
+ * Hàm nền chạy bằng Admin SDK nên BỎ QUA firestore.rules: luật kỹ đến đâu cũng
+ * không gác được một callable quên tự kiểm. Mọi onCall phải gọi một hàm ở đây
+ * (tests/callable-auth.test.js quét để bảo đảm).
  *
- * Logic ở đây CHÉP từ firestore.rules (isCoach / isClientOwner). Đổi một bên
- * thì đổi bên kia — tests/authz.test.js giữ hai bên khớp nhau.
+ * Logic CHÉP từ firestore.rules — đổi một bên thì đổi bên kia:
+ *
+ *   coaches/{email}  { active, isAdmin, uid }      ← chỉ admin ghi
+ *   BOOTSTRAP_ADMIN luôn là admin (không bao giờ tự khoá mình ra ngoài)
+ *
+ *   requireAuth       đã đăng nhập, email đã xác minh
+ *   requireCoach      coach đang active (kể cả admin)
+ *   requireAdmin      admin
+ *   assertCanManage   admin, hoặc coach có clients/{id}.coachUid == mình
+ *   assertCanAccess   như trên, HOẶC chính khách đó (email khớp)
+ *   requireMember     coach, hoặc tài khoản đã gắn hồ sơ khách
  */
 const { HttpsError } = require("firebase-functions/v2/https");
 const { getFirestore } = require("firebase-admin/firestore");
 
-const COACH_EMAIL = "chuhailong1810199@gmail.com";
+const BOOTSTRAP_ADMIN = "chuhailong1810199@gmail.com";
+// Tên cũ — functions/index.js vẫn dùng làm địa chỉ nhận mail lead và VAPID.
+const COACH_EMAIL = BOOTSTRAP_ADMIN;
 
 /** Email đã xác minh của người gọi, viết thường. Không có thì ném unauthenticated. */
 function requireAuth(request) {
   const t = request && request.auth && request.auth.token;
   if (!t || !t.email) throw new HttpsError("unauthenticated", "Cần đăng nhập.");
-  // Giống verifiedEmail() trong rules: Google luôn có claim này; chỉ chặn khi nó
-  // nói rõ là false, để không khoá ai nếu claim vắng mặt.
+  // Giống verifiedEmail() trong rules: chỉ chặn khi claim nói rõ là false.
   if (t.email_verified === false) throw new HttpsError("unauthenticated", "Email chưa xác minh.");
   return String(t.email).toLowerCase();
 }
 
-/** Có phải coach không — cùng điều kiện với isCoach() trong firestore.rules. */
-async function isCoach(request, db = getFirestore()) {
+/**
+ * Vai trò của người gọi: { coach, admin, email, uid }.
+ * Đọc coaches/{email} mỗi lần — tắt active là mất quyền ngay, không chờ token.
+ */
+async function roleOf(request, db = getFirestore()) {
   const email = requireAuth(request);
-  if (email === COACH_EMAIL) return true;
-  const u = await db.collection("users").doc(request.auth.uid).get();
-  return u.exists && (u.data() || {}).role === "coach";
+  const uid = request.auth.uid;
+  if (email === BOOTSTRAP_ADMIN) return { coach: true, admin: true, email, uid };
+  const c = await db.collection("coaches").doc(email).get();
+  const d = c.exists ? (c.data() || {}) : {};
+  const coach = d.active === true;
+  return { coach, admin: coach && d.isAdmin === true, email, uid };
+}
+
+async function isCoach(request, db = getFirestore()) {
+  return (await roleOf(request, db)).coach;
 }
 
 async function requireCoach(request, db = getFirestore()) {
-  if (!(await isCoach(request, db))) throw new HttpsError("permission-denied", "Chỉ coach.");
+  const r = await roleOf(request, db);
+  if (!r.coach) throw new HttpsError("permission-denied", "Chỉ coach.");
+  return r;
 }
 
-/** Coach, HOẶC chính khách đó (email hồ sơ khớp email đăng nhập). */
-async function assertCanAccess(request, clientId, db = getFirestore()) {
-  const email = requireAuth(request);
+async function requireAdmin(request, db = getFirestore()) {
+  const r = await roleOf(request, db);
+  if (!r.admin) throw new HttpsError("permission-denied", "Chỉ admin.");
+  return r;
+}
+
+/** Cùng một câu cho "không tồn tại" và "không phải của mày" — khỏi lộ id nào có thật. */
+const NO_ACCESS = () => new HttpsError("permission-denied", "Không có quyền với khách này.");
+
+function checkClientId(clientId) {
   if (!clientId || typeof clientId !== "string") {
     throw new HttpsError("invalid-argument", "clientId is required");
   }
-  if (await isCoach(request, db)) return;
+}
+
+/** Quyết định thuần (không I/O) — dùng chung cho assert* và cho lọc danh sách. */
+function canManageDoc(role, clientData) {
+  if (!role || !role.coach || !clientData) return false;
+  return role.admin || clientData.coachUid === role.uid;
+}
+
+async function assertCanManage(request, clientId, db = getFirestore()) {
+  checkClientId(clientId);
+  const role = await roleOf(request, db);
+  if (!role.coach) throw NO_ACCESS();
+  if (role.admin) return role;
   const c = await db.collection("clients").doc(clientId).get();
-  const owner = c.exists ? String((c.data() || {}).email || "").toLowerCase() : "";
+  if (!c.exists || !canManageDoc(role, c.data())) throw NO_ACCESS();
+  return role;
+}
+
+async function assertCanAccess(request, clientId, db = getFirestore()) {
+  checkClientId(clientId);
+  const role = await roleOf(request, db);
+  if (role.admin) return role;
+  const c = await db.collection("clients").doc(clientId).get();
+  const data = c.exists ? (c.data() || {}) : null;
+  if (role.coach && canManageDoc(role, data)) return role;
+  const owner = data ? String(data.email || "").toLowerCase() : "";
   // owner rỗng ('' — khách coach tự quản) không bao giờ khớp: requireAuth đã
   // bảo đảm email người gọi không rỗng.
-  if (!owner || owner !== email) {
-    // Cùng một câu cho "không tồn tại" và "không phải của mày" — khỏi lộ id nào có thật.
-    throw new HttpsError("permission-denied", "Không có quyền với khách này.");
-  }
+  if (owner && owner === role.email) return role;
+  throw NO_ACCESS();
 }
 
 /**
- * Coach hoặc một khách đã có hồ sơ. Dùng cho callable không gắn với clientId
- * nào (phân tích ảnh bữa ăn) — để một Gmail lạ không đốt quota Gemini.
+ * Coach hoặc một khách đã có hồ sơ. Cho callable không gắn với clientId nào
+ * (phân tích ảnh bữa ăn) — để một Gmail lạ không đốt quota Gemini.
  */
 async function requireMember(request, db = getFirestore()) {
-  const email = requireAuth(request);
-  if (await isCoach(request, db)) return;
-  const idx = await db.collection("clientEmails").doc(email).get();
-  if (idx.exists) return;
-  // Khách cũ tạo trước khi có /clientEmails: dò thẳng trên clients, như app
-  // vẫn làm lúc đăng nhập (loadUserProfile, nhánh legacy).
-  const legacy = await db.collection("clients").where("email", "==", email).limit(1).get();
+  const role = await roleOf(request, db);
+  if (role.coach) return role;
+  const idx = await db.collection("clientEmails").doc(role.email).get();
+  if (idx.exists) return role;
+  // Khách cũ tạo trước khi có /clientEmails: dò thẳng trên clients.
+  const legacy = await db.collection("clients").where("email", "==", role.email).limit(1).get();
   if (legacy.empty) throw new HttpsError("permission-denied", "Tài khoản chưa được gán hồ sơ khách.");
+  return role;
 }
 
-module.exports = { COACH_EMAIL, requireAuth, isCoach, requireCoach, assertCanAccess, requireMember };
+/** uid của admin gốc — chủ mặc định của khách tự đăng ký. null nếu admin chưa đăng nhập lần nào sau đợt này. */
+async function defaultOwnerUid(db = getFirestore()) {
+  const c = await db.collection("coaches").doc(BOOTSTRAP_ADMIN).get();
+  return (c.exists && (c.data() || {}).uid) || null;
+}
+
+module.exports = {
+  BOOTSTRAP_ADMIN, COACH_EMAIL, requireAuth, roleOf, isCoach, requireCoach, requireAdmin,
+  canManageDoc, assertCanManage, assertCanAccess, requireMember, defaultOwnerUid,
+};
