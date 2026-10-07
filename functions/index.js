@@ -3346,7 +3346,7 @@ exports.coachAssistant = onCall(
         clientId: await (async () => {
           const id = request.data && request.data.clientId;
           if (!id) return null;
-          try { await authz.assertCanManage(request, String(id)); return String(id); } catch (_e) { return null; }
+          try { await authz.assertCanView(request, String(id)); return String(id); } catch (_e) { return null; }
         })(),
         role,
       });
@@ -3496,13 +3496,16 @@ exports.claimMyClient = onCall(
     if (await authz.isCoach(request, db)) {
       throw new HttpsError("failed-precondition", "Tài khoản coach không gắn với hồ sơ khách.");
     }
-    const { create } = request.data || {};
     const { claimMyClient } = require("./claim-client.js");
+    // Tự đăng ký ĐANG TẮT: chỉ Gmail đã được coach gán cho một khách mới vào
+    // được app. Server bỏ qua create từ máy khách — không tin tham số đó.
+    // Bật lại: đổi SELF_SIGNUP thành true (và cân nhắc giao khách cho ai).
+    const SELF_SIGNUP = false;
     return claimMyClient(db, {
       uid: request.auth.uid,
       email,
       displayName: request.auth.token.name || "",
-      create: create === true,
+      create: SELF_SIGNUP && (request.data || {}).create === true,
       ownerUid: await authz.defaultOwnerUid(db),
     });
   },

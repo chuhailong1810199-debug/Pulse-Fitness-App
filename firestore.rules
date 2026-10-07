@@ -36,13 +36,17 @@ service cloud.firestore {
     function clientPath(clientId) {
       return /databases/$(database)/documents/clients/$(clientId);
     }
-    // Coach sở hữu khách này (hoặc admin). Dùng cho subcollection — ở đó
-    // get() theo id được. KHÔNG dùng cho đọc clients: truy vấn danh sách
-    // không chạy được get() theo từng doc (xem match /clients).
+    // SỬA: chỉ coach phụ trách khách này — kể cả admin cũng chỉ sửa khách
+    // của CHÍNH MÌNH. Mỗi coach một cửa hàng riêng: không ai, kể cả chủ nền
+    // tảng, chỉnh giáo án hay dữ liệu khách của coach khác.
+    // XEM: admin quan sát được mọi khách (canView), nhưng chỉ xem.
+    // Dùng cho subcollection — ở đó get() theo id được. KHÔNG dùng cho đọc
+    // clients: truy vấn danh sách không chạy được get() theo từng doc.
     function canManage(clientId) {
-      return isAdmin() || (isCoachRole() && exists(clientPath(clientId))
-        && get(clientPath(clientId)).data.get('coachUid', null) == request.auth.uid);
+      return isCoachRole() && exists(clientPath(clientId))
+        && get(clientPath(clientId)).data.get('coachUid', null) == request.auth.uid;
     }
+    function canView(clientId) { return isAdmin() || canManage(clientId); }
 
     // ── Helper: user hiện tại là chủ của clientId (email khớp)
     // LƯU Ý: rule này chỉ an toàn khi mỗi email chỉ thuộc về DUY NHẤT một client.
@@ -54,6 +58,7 @@ service cloud.firestore {
         get(clientPath(clientId)).data.email == myEmail();
     }
     function canAccess(clientId) { return canManage(clientId) || isClientOwner(clientId); }
+    function canRead(clientId)   { return canView(clientId)   || isClientOwner(clientId); }
 
     // Email trên hồ sơ khách phải được chỉ mục /clientEmails trỏ về đúng khách
     // đó (hoặc rỗng). Không có dòng này thì coach ghi thẳng clients.email là
@@ -90,16 +95,15 @@ service cloud.firestore {
       allow create: if request.auth != null
                     && request.resource.data.clientId is string
                     && request.resource.data.clientId.size() > 0
-                    && (isAdmin()
-                        || (isCoachRole() && (!exists(clientPath(request.resource.data.clientId))
-                                              || canManage(request.resource.data.clientId)))
+                    && ((isCoachRole() && (!exists(clientPath(request.resource.data.clientId))
+                                           || canManage(request.resource.data.clientId)))
                         || emailKey == myEmail());
 
       allow update: if false;   // KHÔNG BAO GIỜ ghi đè — đây là chốt chặn duy nhất
       // Không thì coach B xoá chỉ mục Gmail khách của coach A rồi chiếm cho
       // khách của mình — khách đó đăng nhập sẽ mở hồ sơ của B.
-      allow delete: if isAdmin() || (isCoachRole() && (!exists(clientPath(resource.data.clientId))
-                                                       || canManage(resource.data.clientId)));
+      allow delete: if isCoachRole() && (!exists(clientPath(resource.data.clientId))
+                                         || canManage(resource.data.clientId));
     }
 
     // ── LEADS collection ─────────────────────────────────
@@ -145,9 +149,19 @@ service cloud.firestore {
     // ── EXERCISES collection (thư viện bài tập) ──────────
     // Tất cả user đã login đều được đọc
     // Chỉ coach mới được thêm/sửa/xóa
+    // Thư viện gốc (không có ownerUid): chỉ admin sửa. Bài riêng của coach
+    // mang ownerUid: chỉ chính coach đó sửa/xoá. Đọc thì ai đăng nhập cũng
+    // được — tên bài không nhạy cảm, và app tải cả thư viện một lần.
     match /exercises/{docId} {
       allow read: if request.auth != null;
-      allow write: if isCoach();
+      allow create: if (isAdmin() && request.resource.data.get('ownerUid', null) == null)
+        || (isCoachRole() && request.resource.data.get('ownerUid', null) == request.auth.uid);
+      allow update: if (isAdmin() && resource.data.get('ownerUid', null) == null
+                                  && request.resource.data.get('ownerUid', null) == null)
+        || (isCoachRole() && resource.data.get('ownerUid', null) == request.auth.uid
+                          && request.resource.data.get('ownerUid', null) == request.auth.uid);
+      allow delete: if (isAdmin() && resource.data.get('ownerUid', null) == null)
+        || (isCoachRole() && resource.data.get('ownerUid', null) == request.auth.uid);
     }
 
     // ── BOOKINGS collection (coach schedule only) ─────────
@@ -164,11 +178,12 @@ service cloud.firestore {
     // (coachUid, date) trong firestore.indexes.json.
     match /bookings/{bookingId} {
       allow read: if isAdmin() || (isCoachRole() && resource.data.coachUid == request.auth.uid);
-      allow create: if isAdmin() || (isCoachRole() && request.resource.data.coachUid == request.auth.uid);
-      allow update: if isAdmin() || (isCoachRole()
+      // Ghi: chỉ lịch của chính mình — admin cũng vậy (quan sát, không sửa).
+      allow create: if isCoachRole() && request.resource.data.coachUid == request.auth.uid;
+      allow update: if isCoachRole()
         && resource.data.get('coachUid', null) == request.auth.uid
-        && request.resource.data.coachUid == request.auth.uid);
-      allow delete: if isAdmin() || (isCoachRole() && resource.data.get('coachUid', null) == request.auth.uid);
+        && request.resource.data.coachUid == request.auth.uid;
+      allow delete: if isCoachRole() && resource.data.get('coachUid', null) == request.auth.uid;
     }
 
     // ── PUSH SUBSCRIPTIONS ────────────────────────────────
@@ -204,11 +219,9 @@ service cloud.firestore {
 
       // Coach tạo khách thì khách thuộc về chính coach đó; email (nếu có) đã
       // được chiếm ở /clientEmails trước.
-      allow create: if (isAdmin()
-          || (isCoachRole() && request.resource.data.coachUid == request.auth.uid))
+      allow create: if isCoachRole() && request.resource.data.coachUid == request.auth.uid
         && emailIndexed(clientId, request.resource.data.get('email', ''));
-      allow delete: if isAdmin()
-        || (isCoachRole() && resource.data.get('coachUid', null) == request.auth.uid);
+      allow delete: if isCoachRole() && resource.data.get('coachUid', null) == request.auth.uid;
 
       // `access.paidUntil` và `coaching` là tiền — chỉ admin (studio thu chung,
       // xác nhận đã trả). Coach đổi được GÓI (access.planId) cho khách mình.
@@ -216,7 +229,10 @@ service cloud.firestore {
       // đổi email phải đi kèm chỉ mục /clientEmails trỏ đúng khách này.
       // Khách tự sửa: không đụng access, coaching, email, coachUid.
       allow update: if (
-          isAdmin()
+          // Admin: CHUYỂN khách giữa các coach (chỉ đổi coachUid) cho mọi khách;
+          // sửa toàn bộ chỉ với khách của chính mình.
+          (isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['coachUid']))
+          || (isAdmin() && resource.data.get('coachUid', null) == request.auth.uid)
           || (isCoachRole()
               && resource.data.get('coachUid', null) == request.auth.uid
               && request.resource.data.get('coachUid', null) == request.auth.uid
@@ -239,14 +255,14 @@ service cloud.firestore {
       // so a client cannot invoice themselves 1.000 d for the top tier.
       // Only the coach may ever mark one paid; that is what extends access.
       match /invoices/{invoiceId} {
-        allow read:   if canAccess(clientId);
+        allow read:   if canRead(clientId);
         // A client may raise their own invoice, but only for a figure the coach
         // published. Both kinds are checked against settings, so the amount is
         // never something the client chose: access against settings/plans, and
         // coaching against the term price stored in settings/coaching — stored
         // rather than recomputed here, so this check and the app cannot drift.
         // Coach của khách được lập hoá đơn, nhưng chỉ ở trạng thái chưa trả.
-        allow create: if isAdmin()
+        allow create: if (isAdmin() && canManage(clientId))
           || (canManage(clientId) && request.resource.data.status == 'unpaid')
           || (isClientOwner(clientId)
               && request.resource.data.status == 'unpaid'
@@ -269,7 +285,7 @@ service cloud.firestore {
         // erase something already paid for.
         // Đánh dấu ĐÃ TRẢ: chỉ admin (studio nhận tiền). Coach của khách được
         // huỷ hoá đơn chưa trả, không được chuyển sang 'paid'.
-        allow update: if isAdmin()
+        allow update: if (isAdmin() && canManage(clientId))
           || (canManage(clientId)
               && resource.data.status != 'paid'
               && request.resource.data.status != 'paid')
@@ -278,27 +294,27 @@ service cloud.firestore {
               && request.resource.data.status == 'cancelled'
               && request.resource.data.diff(resource.data).affectedKeys()
                    .hasOnly(['status', 'cancelledAt']));
-        allow delete: if isAdmin();
+        allow delete: if isAdmin() && canManage(clientId);
       }
 
       // Everything the client legitimately owns, at any depth.
-      match /assessment/{d=**}     { allow read, write: if canAccess(clientId); }
-      match /profile/{d=**}        { allow read, write: if canAccess(clientId); }
-      match /checkpoints/{d=**}    { allow read, write: if canAccess(clientId); }
-      match /measurements/{d=**}   { allow read, write: if canAccess(clientId); }
-      match /workoutHistory/{d=**} { allow read, write: if canAccess(clientId); }
-      match /sessionLoads/{d=**}   { allow read, write: if canAccess(clientId); }
-      match /videos/{d=**}         { allow read, write: if canAccess(clientId); }
-      match /progressPhotos/{d=**} { allow read, write: if canAccess(clientId); }
-      match /nutrition/{d=**}      { allow read, write: if canAccess(clientId); }
-      match /youthTests/{d=**}     { allow read, write: if canAccess(clientId); }
+      match /assessment/{d=**}     { allow read: if canRead(clientId); allow write: if canAccess(clientId); }
+      match /profile/{d=**}        { allow read: if canRead(clientId); allow write: if canAccess(clientId); }
+      match /checkpoints/{d=**}    { allow read: if canRead(clientId); allow write: if canAccess(clientId); }
+      match /measurements/{d=**}   { allow read: if canRead(clientId); allow write: if canAccess(clientId); }
+      match /workoutHistory/{d=**} { allow read: if canRead(clientId); allow write: if canAccess(clientId); }
+      match /sessionLoads/{d=**}   { allow read: if canRead(clientId); allow write: if canAccess(clientId); }
+      match /videos/{d=**}         { allow read: if canRead(clientId); allow write: if canAccess(clientId); }
+      match /progressPhotos/{d=**} { allow read: if canRead(clientId); allow write: if canAccess(clientId); }
+      match /nutrition/{d=**}      { allow read: if canRead(clientId); allow write: if canAccess(clientId); }
+      match /youthTests/{d=**}     { allow read: if canRead(clientId); allow write: if canAccess(clientId); }
       // Dữ liệu hồi phục kéo từ Polar AccessLink (ngủ, HRV, nhịp tim nghỉ).
       // Phải liệt kê tường minh như mọi subcollection khác — không có wildcard
       // bao trùm, nên thiếu dòng này là client đọc ra permission-denied.
-      match /recovery/{d=**}       { allow read, write: if canAccess(clientId); }
+      match /recovery/{d=**}       { allow read: if canRead(clientId); allow write: if canAccess(clientId); }
       // Bước chân, calo ngày và buổi tập kéo từ Polar. Tách khỏi recovery vì
       // đây là dữ liệu hoạt động ban ngày, không phải hồi phục ban đêm.
-      match /activity/{d=**}       { allow read, write: if canAccess(clientId); }
+      match /activity/{d=**}       { allow read: if canRead(clientId); allow write: if canAccess(clientId); }
     }
   }
 }

@@ -25,7 +25,7 @@ ok("khong truy van tran clients ngoai helper (tru ngoai le co ghi chu)", () => {
 });
 ok("ngoai le chi o luong khach dang nhap hoac chi admin", () => {
   const ex = lines.filter((l) => /clients-scan-ok:/.test(l));
-  assert(ex.length <= 6, "ngoại lệ tăng lên " + ex.length + " — kiểm lại có cần thật không");
+  assert(ex.length <= 7, "ngoại lệ tăng lên " + ex.length + " — kiểm lại có cần thật không");
   ex.forEach((l) => assert(/vai trò khách|chỉ admin/.test(l), "ngoại lệ thiếu lý do: " + l.trim()));
 });
 ok("loadAllClients dung clientsQuery", () => {
@@ -36,7 +36,9 @@ ok("clientsQuery: coach luon kem where coachUid; truy van tran chi khi admin bat
   const i = s.indexOf("function clientsQuery()");
   const f = s.slice(i, s.indexOf("\n}", i));
   assert(/if \(userIsAdmin && _allCoaches\) return collection\(db, 'clients'\);/.test(f));
-  assert(/where\('coachUid', '==', currentUser\.uid\)/.test(f));
+  // coach: luôn where coachUid == chính mình; admin quan sát: == coach đang xem
+  assert(/const uid = \(userIsAdmin && _observeCoachUid\) \|\| currentUser\.uid;/.test(f));
+  assert(/where\('coachUid', '==', uid\)/.test(f));
 });
 ok("bookings: khong truy van tran, tao moi co coachUid", () => {
   assert(!/query\(\s*collection\(db,\s*'bookings'\)/.test(s), "còn query(collection(db,'bookings')) trần");

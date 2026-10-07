@@ -10,7 +10,7 @@
  * (hoặc GOOGLE_APPLICATION_CREDENTIALS trỏ tới file service account).
  *
  * Làm gì:
- *   1. coaches/<admin gốc> { active, isAdmin, uid }
+ *   1. coaches/<admin gốc> { active, isAdmin, uid } + settings/platform { adminUid }
  *   2. clients thiếu coachUid  → uid admin   (luật mới: coach không thấy khách không chủ)
  *   3. bookings thiếu coachUid → uid admin   (luật mới từ chối lịch không chủ)
  *   4. /clientEmails cho khách có email mà thiếu chỉ mục — trừ khi Gmail đó
@@ -41,6 +41,9 @@ async function main({ db, adminUid, write, log = console.log }) {
   if (!cur.exists || d.active !== true || d.isAdmin !== true || d.uid !== adminUid) {
     plan.coachDoc = want;
   }
+  // App đọc uid admin ở đây để biết khách nào được bật thu tiền.
+  const pf = await db.collection("settings").doc("platform").get();
+  plan.platform = (pf.exists && (pf.data() || {}).adminUid === adminUid) ? null : { adminUid };
 
   // 2 + 4 + 5. Khách
   // coachUid "lạ" = không phải admin và không thuộc coach nào trong coaches/
@@ -77,6 +80,7 @@ async function main({ db, adminUid, write, log = console.log }) {
 
   log(`Admin gốc: ${BOOTSTRAP_ADMIN} (uid ${adminUid})`);
   log(`  coaches/${BOOTSTRAP_ADMIN}: ${plan.coachDoc ? "SẼ GHI " + JSON.stringify(plan.coachDoc) : "đã đúng"}`);
+  log(`  settings/platform: ${plan.platform ? "SẼ GHI " + JSON.stringify(plan.platform) : "đã đúng"}`);
   log(`  clients sẽ gán cho admin: ${plan.clients.length}${plan.clients.length ? " — " + plan.clients.join(", ") : ""}`);
   if (plan.strays.length) log(`    trong đó coachUid lạ (không phải admin, không thuộc coach nào): ${plan.strays.join(", ")}`);
   log(`  bookings thiếu coachUid: ${plan.bookings.length}`);
@@ -87,6 +91,7 @@ async function main({ db, adminUid, write, log = console.log }) {
   if (!write) { log("\nCHẠY THỬ — chưa ghi gì. Thêm --write để ghi."); return plan; }
 
   if (plan.coachDoc) await cRef.set({ name: "Long Chu", ...plan.coachDoc }, { merge: true });
+  if (plan.platform) await db.collection("settings").doc("platform").set(plan.platform, { merge: true });
   // Batch 400 thao tác một lần (giới hạn 500).
   const ops = [
     ...plan.clients.map((id) => (b) => b.update(db.collection("clients").doc(id), { coachUid: adminUid })),

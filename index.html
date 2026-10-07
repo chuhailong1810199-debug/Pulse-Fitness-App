@@ -287,10 +287,14 @@ async function _bindCoachUid(user, admin) {
         await setDoc(ref, { name: user.displayName || email, active: true, isAdmin: true,
           uid: user.uid, lastLoginAt: new Date().toISOString() });
       }
-      return;
-    }
-    if ((c.data() || {}).uid !== user.uid) {
+    } else if ((c.data() || {}).uid !== user.uid) {
       await updateDoc(ref, { uid: user.uid, lastLoginAt: new Date().toISOString() });
+    }
+    // Uid admin nền tảng — công khai để app biết khách nào thuộc admin (thu
+    // tiền chỉ bật cho khách của admin). settings đọc được bởi mọi tài khoản.
+    if (email === BOOTSTRAP_ADMIN && _platformAdminUid !== user.uid) {
+      await setDoc(doc(db, 'settings', 'platform'), { adminUid: user.uid }, { merge: true });
+      _platformAdminUid = user.uid;
     }
   } catch (e) { console.warn('[coach] không ghi được uid:', e.code || e.message); }
 }
@@ -381,8 +385,16 @@ async function loadUserProfile(user) {
       // setDoc(clients/…) — luật chỉ cho coach tạo clients, nên người mới bị
       // permission-denied và kẹt ở màn tải. Server cũng chiếm /clientEmails
       // trước, giữ chốt một Gmail một khách.
-      const r = await _claimMyClient(true);
+      // Tự đăng ký đang TẮT: chỉ Gmail coach đã gán mới vào được. Vẫn hỏi
+      // server một lần (create:false) — có thể coach vừa gán xong mà bản tra
+      // phía máy khách ở trên chưa thấy.
+      const r = await _claimMyClient(false);
       if (!r) return;                       // đã hiện màn báo lỗi
+      if (!r.clientId) {
+        showNoClientError('Gmail ' + emailNorm + ' chưa được coach nào thêm vào Pulse. '
+          + 'Nhờ coach của bạn thêm đúng Gmail này rồi đăng nhập lại.');
+        return;
+      }
       role = 'client'; assignedClientId = r.clientId;
     }
     const profileData = {
@@ -593,10 +605,11 @@ function migrateLocalStorageDayKeys(clientId) {
 }
 
 async function loadApp() {
+  await loadPlatformInfo();
   // Show role badge
   const badge = document.getElementById('role-badge');
   if (badge) {
-    badge.textContent = userRole === 'coach' ? 'Coach' : 'Client';
+    badge.textContent = userIsAdmin ? 'Admin' : userRole === 'coach' ? 'Coach' : 'Client';
     badge.className   = 'user-role-badge ' + (userRole === 'coach' ? 'role-coach' : 'role-client');
   }
 
@@ -607,6 +620,10 @@ async function loadApp() {
     if (schTab) schTab.style.display = '';
     const dashTab = document.getElementById('dash-nav-tab');
     if (dashTab) dashTab.style.display = '';
+    const platTab = document.getElementById('platform-nav-tab');
+    if (platTab) platTab.style.display = userIsAdmin ? '' : 'none';
+    if (userIsAdmin) loadCoachNames();       // tên coach cho biển "đang quan sát"
+    afterClientChange();
     // Youth là công cụ của coach: khách không cần thấy pin test này.
     const youthTab = document.getElementById('youth-nav-tab');
     if (youthTab) youthTab.style.display = '';
@@ -713,6 +730,7 @@ async function loadApp() {
     // cả khách, nên tab này chỉ bật cho khách và trỏ thẳng vào hồ sơ của họ.
     const cdTab = document.getElementById('cdash-nav-tab');
     if (cdTab) cdTab.style.display = '';
+    afterClientChange();
     console.log('[clientId-debug] activeClient.id =', activeClient.id, '| userClientId =', userClientId);
     renderClientBar(false);
 
@@ -777,15 +795,158 @@ let _allCoaches = false;
 try { _allCoaches = localStorage.getItem('pulse_all_coaches') === '1'; } catch (_e) {}
 function clientsQuery() {
   if (userIsAdmin && _allCoaches) return collection(db, 'clients');
-  return query(collection(db, 'clients'), where('coachUid', '==', currentUser.uid));
+  const uid = (userIsAdmin && _observeCoachUid) || currentUser.uid;
+  return query(collection(db, 'clients'), where('coachUid', '==', uid));
 }
 async function setAllCoaches(on) {
   if (!userIsAdmin) return;
   _allCoaches = !!on;
+  if (on) _observeCoachUid = null;
   try { localStorage.setItem('pulse_all_coaches', _allCoaches ? '1' : '0'); } catch (_e) {}
   await loadAllClients();
   const sp = document.getElementById('schedule-page');
   if (sp && sp.offsetParent && typeof renderSchedulePage === 'function') renderSchedulePage();
+}
+
+// ── MỖI COACH MỘT CỬA HÀNG — admin quan sát, thu tiền theo chủ ──────────────
+let _platformAdminUid = null;   // settings/platform.adminUid
+let _observeCoachUid = null;    // admin đang xem khách của coach này (chỉ xem)
+let _coachNames = {};           // uid -> tên, cho biển quan sát
+
+async function loadPlatformInfo() {
+  try {
+    const d = await getDoc(doc(db, 'settings', 'platform'));
+    _platformAdminUid = d.exists ? ((d.data() || {}).adminUid || null) : null;
+  } catch (_e) { _platformAdminUid = null; }
+}
+
+/**
+ * Thu tiền chỉ bật cho khách của admin nền tảng. Tài khoản ngân hàng và bảng
+ * giá vẫn là MỘT bộ chung — mở cho khách coach khác là họ chuyển tiền vào
+ * tài khoản của admin. Tắt cho tới khi mỗi coach có bộ riêng.
+ */
+function billingOn(c) {
+  c = c || activeClient;
+  return !!(c && _platformAdminUid && c.coachUid === _platformAdminUid);
+}
+
+async function loadCoachNames() {
+  try {
+    const cs = await getDocs(collection(db, 'coaches'));
+    _coachNames = {};
+    cs.forEach(d => { const v = d.data() || {}; if (v.uid) _coachNames[v.uid] = v.name || d.id; });
+    renderObserveStrip();
+  } catch (_e) {}
+}
+
+/** Admin đang mở khách của coach khác: biển "chỉ xem" — luật cũng chặn mọi lần ghi. */
+function isObserving() {
+  return !!(userIsAdmin && activeClient && currentUser && activeClient.coachUid !== currentUser.uid);
+}
+function renderObserveStrip() {
+  const h = document.getElementById('observe-strip');
+  if (!h) return;
+  if (!isObserving()) { h.innerHTML = ''; document.body.classList.remove('observing'); return; }
+  document.body.classList.add('observing');
+  const who = _coachNames[activeClient.coachUid] || 'coach khác';
+  h.innerHTML = '<div class="obs-strip"><span>👁 Đang quan sát khách của <b>' + escHtml(who)
+    + '</b> — chỉ xem, không sửa được.</span>'
+    + '<button type="button" onclick="stopObserving()">Về khách của tôi</button></div>';
+}
+
+function afterClientChange() {
+  renderObserveStrip();
+  const tab = document.querySelector('.nav-tab[data-page="billing"]');
+  if (tab) tab.style.display = billingOn() ? '' : 'none';
+  if (!billingOn() && document.getElementById('billing-page')?.classList.contains('active')) showPage('workout');
+  renderAccessAlert();
+}
+
+async function observeCoach(uid) {
+  if (!userIsAdmin) return;
+  _observeCoachUid = uid === currentUser.uid ? null : uid;
+  _allCoaches = false;
+  try { localStorage.setItem('pulse_all_coaches', '0'); } catch (_e) {}
+  await loadAllClients();
+  if (activeClient) await switchClient(activeClient.id);
+  showPage('workout');
+}
+async function stopObserving() { await observeCoach(currentUser.uid); }
+
+/** Dashboard admin: mọi coach, số khách, ai đang hoạt động. */
+function _toMs(v) {
+  if (!v) return 0;
+  if (typeof v.toDate === 'function') return v.toDate().getTime();
+  if (typeof v.seconds === 'number') return v.seconds * 1000;
+  const t = new Date(v).getTime();
+  return isNaN(t) ? 0 : t;
+}
+async function renderPlatform() {
+  const host = document.getElementById('platform-body');
+  if (!host || !userIsAdmin) return;
+  host.innerHTML = '<div class="pf-loading">Đang tải…</div>';
+  try {
+    const [cs, all] = await Promise.all([
+      getDocs(collection(db, 'coaches')),
+      getDocs(collection(db, 'clients')),   // clients-scan-ok: dashboard admin, chỉ admin
+    ]);
+    const coaches = [];
+    cs.forEach(d => coaches.push({ email: d.id, ...d.data() }));
+    if (!coaches.some(c => c.email === BOOTSTRAP_ADMIN)) {
+      coaches.unshift({ email: BOOTSTRAP_ADMIN, name: 'Admin', active: true, isAdmin: true, uid: currentUser.uid });
+    }
+    const clients = [];
+    all.forEach(d => clients.push({ id: d.id, ...d.data() }));
+    const now = Date.now(), D14 = 14 * 864e5;
+    const activeC = (c) => now - _toMs(c.lastWorkoutAt) < D14;
+    const known = new Set(coaches.filter(c => c.uid).map(c => c.uid));
+    const orphans = clients.filter(c => !c.coachUid || !known.has(c.coachUid));
+    _coachNames = {}; coaches.forEach(c => { if (c.uid) _coachNames[c.uid] = c.name || c.email; });
+
+    const rows = coaches.map(c => {
+      const mine = c.uid ? clients.filter(x => x.coachUid === c.uid) : [];
+      const last = Math.max(0, ...mine.map(x => _toMs(x.lastWorkoutAt)));
+      return {
+        c, n: mine.length,
+        login: mine.filter(x => (x.email || '').trim()).length,
+        act: mine.filter(activeC).length,
+        last: last ? new Date(last).toLocaleDateString('vi-VN') : '—',
+        lastLogin: c.lastLoginAt ? new Date(c.lastLoginAt).toLocaleDateString('vi-VN') : (c.uid ? '—' : 'chưa đăng nhập'),
+      };
+    });
+    const tot = (k) => rows.reduce((a, r) => a + r[k], 0);
+    const card = (v, l) => '<div class="pf-card"><div class="pf-v">' + v + '</div><div class="pf-l">' + l + '</div></div>';
+
+    host.innerHTML = '<div class="pf-head"><h2>Admin</h2><div class="pf-acts">'
+      + '<button class="add-client-btn" onclick="openCoachAdmin()">Quản lý coach</button>'
+      + '<button class="add-client-btn" onclick="setAllCoaches(true);showPage(\'workout\')">Xem tất cả khách</button>'
+      + '</div></div>'
+      + '<div class="pf-cards">'
+      + card(coaches.filter(c => c.active).length, 'Coach đang hoạt động')
+      + card(clients.length, 'Tổng khách')
+      + card(tot('login'), 'Khách tự đăng nhập')
+      + card(tot('act'), 'Khách tập trong 14 ngày')
+      + '</div>'
+      + '<div class="pf-table"><div class="pf-tr pf-th"><span>Coach</span><span>Khách</span><span>Tự đăng nhập</span>'
+      + '<span>Tập 14 ngày</span><span>Buổi gần nhất</span><span>Đăng nhập</span><span></span></div>'
+      + rows.map(r => '<div class="pf-tr' + (r.c.active ? '' : ' off') + '">'
+        + '<span><b>' + escHtml(r.c.name || r.c.email) + '</b>' + (r.c.isAdmin ? ' <i class="ca-tag">admin</i>' : '')
+        + (r.c.active ? '' : ' <i class="ca-tag">đã tắt</i>') + '<small>' + escHtml(r.c.email) + '</small></span>'
+        + '<span data-l="Khách">' + r.n + '</span><span data-l="Tự đăng nhập">' + r.login + '</span>'
+        + '<span data-l="Tập 14 ngày">' + r.act + '</span><span data-l="Buổi gần nhất">' + r.last + '</span>'
+        + '<span data-l="Đăng nhập">' + escHtml(r.lastLogin) + '</span>'
+        + '<span>' + (r.c.uid && r.n
+          ? '<button class="add-client-btn" onclick="observeCoach(\'' + escHtml(r.c.uid) + '\')">'
+            + (r.c.uid === currentUser.uid ? 'Khách của tôi' : 'Quan sát') + '</button>' : '') + '</span>'
+        + '</div>').join('')
+      + '</div>'
+      + (orphans.length ? '<div class="ca-note">' + orphans.length + ' khách chưa thuộc coach nào: '
+        + orphans.slice(0, 10).map(c => escHtml(c.name || c.id)).join(', ')
+        + ' — vào <b>Quản lý coach</b> để chuyển.</div>' : '');
+  } catch (e) {
+    console.error('[platform]', e);
+    host.innerHTML = '<div class="pf-loading">Không tải được: ' + escHtml(e.message || String(e)) + '</div>';
+  }
 }
 
 // ── QUẢN LÝ COACH (chỉ admin) ─────────────────────────────────────────────
@@ -1002,6 +1163,7 @@ async function switchClient(id) {
 
   // ── Fade in ──
   pages.forEach(p => p.classList.remove('switching'));
+  afterClientChange();
 }
 
 // ── EDIT CLIENT INFO (coach only) ─────────────────────
@@ -7000,6 +7162,9 @@ function showPage(page) {
   // Youth chỉ dành cho coach. Giấu tab mới là trang trí; chỗ chặn thật nằm ở
   // đây, vì showPage còn gọi được từ console, từ nút cũ hay từ link sâu.
   if (page === 'youth' && userRole !== 'coach') return;
+  if (page === 'platform' && !userIsAdmin) return;
+  // Thu tiền chỉ bật cho khách của admin nền tảng — xem billingOn().
+  if (page === 'billing' && !billingOn()) return;
   document.querySelectorAll('.nav-tab').forEach(t => {
     t.classList.toggle('active', t.dataset.page === page);
   });
@@ -7016,6 +7181,8 @@ function showPage(page) {
   document.getElementById('health-page').classList.toggle('active', page === 'health');
   document.getElementById('active-page').classList.toggle('active', page === 'active');
   document.getElementById('cdash-page').classList.toggle('active', page === 'cdash');
+  document.getElementById('platform-page').classList.toggle('active', page === 'platform');
+  if (page === 'platform') renderPlatform();
   if (page === 'dash') renderDashboard();
   if (page === 'cdash') renderClientDash();
   if (page === 'progress') {
@@ -7568,7 +7735,8 @@ function _minToT(m) { return `${String(Math.floor(m/60)).padStart(2,'0')}:${Stri
 function bookingsQuery(...constraints) {
   const base = collection(db, 'bookings');
   if (userIsAdmin && _allCoaches) return query(base, ...constraints);
-  return query(base, where('coachUid', '==', currentUser.uid), ...constraints);
+  const uid = (userIsAdmin && _observeCoachUid) || currentUser.uid;
+  return query(base, where('coachUid', '==', uid), ...constraints);
 }
 
 async function _schedLoadWeek(weekStart) {
@@ -9371,6 +9539,10 @@ function _accAcked() {
 }
 
 function renderAccessAlert() {
+  if (!billingOn()) {
+    const h = document.getElementById('access-strip'); if (h) h.innerHTML = '';
+    return;
+  }
   const st = accessAlert();
   const tab = document.querySelector('.nav-tab[data-page="billing"]');
   if (tab) tab.classList.toggle('alert', !!st);
@@ -13088,8 +13260,10 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
       <div class="signup-icon">
         <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
       </div>
-      <div class="signup-headline">Start Your<br><span>Journey</span></div>
-      <div class="signup-sub">Sign up to have your coach build a personalised training program just for you.</div>
+      <!-- Màn này hiện cho MỌI Gmail chưa được coach gán (tự đăng ký đang tắt),
+           kể cả khách của coach khác — nên nói chuyện chung, không chào hàng riêng. -->
+      <div class="signup-headline">Chưa có<br><span>quyền truy cập</span></div>
+      <div class="signup-sub">Pulse chỉ mở cho khách đã được coach thêm vào. Nhờ coach của bạn thêm đúng Gmail đang đăng nhập, rồi đăng nhập lại.</div>
 
       <div class="signup-perks">
         <div class="signup-perk"><div class="signup-perk-icon">🎯</div>Program designed specifically for your goal & level</div>
@@ -13100,7 +13274,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 
     <div style="width:100%;display:flex;flex-direction:column;align-items:center;gap:.5rem;">
       <a class="signup-cta" href="https://docs.google.com/forms/d/e/1FAIpQLSeMJ11udwoqW2Hj3n3jzlJSNWSBTSn9gbDrIS-aZ7SWb0ZGVw/viewform" target="_blank">
-        Get Started →
+        Chưa có coach? Đăng ký tập →
       </a>
       <div id="no-client-debug"></div>
       <button class="signup-logout" onclick="logout()">Sign out</button>
@@ -13133,10 +13307,11 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <button class="add-client-btn" onclick="openEditClientModal()" style="background:#161111;border-color:rgba(255,255,255,0.60);color:rgba(255,255,255,0.88);">Edit</button>
     <button class="add-client-btn" onclick="openClientProfile()" style="background:#0a1a2e;border-color:#2a3a4e;color:#8FDBFF;">Profile</button>
     <button class="add-client-btn" id="export-xlsx-btn" onclick="exportClientExcel()" style="background:#0a2e18;border-color:#2a4e3a;color:#4fd18b;" title="Xuất báo cáo Excel">Excel</button>
-    <button class="add-client-btn hidden" id="coach-admin-btn" onclick="openCoachAdmin()" title="Quản lý coach — chỉ admin">Coach</button>
+    <button class="add-client-btn hidden" id="coach-admin-btn" onclick="showPage('platform')" title="Dashboard admin — chỉ admin">Admin</button>
     <div id="stg-bar-coach" class="stg-host"></div>
   </div>
 
+  <div id="observe-strip"></div>
   <div id="access-strip"></div>
 
   <div class="nav">
@@ -13150,6 +13325,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <div class="nav-tab" data-page="nutrition" onclick="showPage('nutrition')">Nutrition</div>
     <div class="nav-tab" id="youth-nav-tab" data-page="youth" style="display:none" onclick="showPage('youth')">Youth</div>
     <div class="nav-tab" data-page="billing" onclick="showPage('billing')">Billing</div>
+    <div class="nav-tab" id="platform-nav-tab" data-page="platform" style="display:none" onclick="showPage('platform')">Admin</div>
     <div class="nav-tab" data-page="log" onclick="showPage('log')">Log</div>
     <div class="nav-tab" id="schedule-nav-tab" data-page="schedule" style="display:none" onclick="showPage('schedule')">Schedule</div>
   </div>
@@ -13250,6 +13426,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 
   <!-- ── BILLING ──────────────────────────────────────────────────────── -->
   <div id="dash-page"><div id="dash-body"></div></div>
+  <div id="platform-page"><div id="platform-body"></div></div>
   <div id="cdash-page"><div id="cdash-body"></div>
     <input type="file" id="cd-av-input" accept="image/*" style="display:none" onchange="cdAvatarPicked(this)">
   </div>
@@ -15786,6 +15963,36 @@ body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-even
 #ai-sheet .ai-eg:hover{ background: rgba(143,219,255,.10); border-color: rgba(143,219,255,.35); }
 #ai-sheet .ai-eg:active{ transform: scale(.98); }
 #ai-sheet .ai-eg:focus-visible{ outline: 2px solid var(--ai-acc); outline-offset: 2px; }
+/* ── Dashboard admin + biển quan sát ───────────────────────── */
+#platform-page{display:none;}
+#platform-page.active{display:block;padding:0 20px 100px;max-width:1200px;margin:0 auto;}
+.pf-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:8px 0 16px}
+.pf-head h2{margin:0;font-size:26px;font-weight:800;letter-spacing:-.02em}
+.pf-acts{display:flex;gap:8px;flex-wrap:wrap}
+.pf-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:18px}
+.pf-card{border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:14px 16px;background:rgba(255,255,255,.03)}
+.pf-v{font-size:30px;font-weight:800;font-variant-numeric:tabular-nums}
+.pf-l{font-size:12.5px;color:rgba(255,255,255,.55);margin-top:2px}
+.pf-table{display:flex;flex-direction:column;border:1px solid rgba(255,255,255,.12);border-radius:16px;overflow:hidden}
+.pf-tr{display:grid;grid-template-columns:minmax(180px,2fr) repeat(5,minmax(70px,1fr)) 120px;gap:10px;align-items:center;padding:12px 16px;border-top:1px solid rgba(255,255,255,.08);font-size:14px}
+.pf-tr:first-child{border-top:0}
+.pf-th{font-size:11.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:rgba(255,255,255,.5);background:rgba(255,255,255,.03)}
+.pf-tr.off{opacity:.5}
+.pf-tr small{display:block;font-size:12px;color:rgba(255,255,255,.5);overflow-wrap:anywhere}
+.pf-tr .ca-tag{font-style:normal}
+.pf-loading{padding:24px 0;color:rgba(255,255,255,.6)}
+@media (max-width:760px){
+  .pf-th{display:none}
+  .pf-tr{grid-template-columns:1fr 1fr;row-gap:6px}
+  .pf-tr > span:first-child{grid-column:1/-1}
+  .pf-tr > span[data-l]::before{content:attr(data-l) ": ";color:rgba(255,255,255,.5);font-size:12px}
+  .pf-tr > span:last-child{grid-column:1/-1}
+}
+.obs-strip{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
+  margin:8px 16px 0;padding:10px 14px;border-radius:12px;font-size:13.5px;
+  background:rgba(255,196,0,.12);border:1px solid rgba(255,196,0,.45);color:#FFD98A}
+.obs-strip button{border:1px solid rgba(255,217,138,.5);background:transparent;color:#FFD98A;border-radius:999px;padding:6px 12px;font:inherit;font-weight:700;cursor:pointer}
+
 /* ── Quản lý coach (admin) ─────────────────────────────────── */
 .ca-modal{max-width:560px}
 .ca-h{margin:16px 0 8px;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:rgba(255,255,255,.55)}

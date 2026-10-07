@@ -82,15 +82,22 @@ records were created in the first place.
   (màn **Coach** trên thanh khách). `chuhailong1810199@gmail.com` là admin gốc, luôn là admin kể cả
   khi doc bị tắt — cùng địa chỉ ở `firestore.rules`, `storage.rules`, `functions/authz.js`, `index.html`.
   `users.role` **không còn** cấp quyền gì. Không có danh sách email coach cứng nào nữa.
-- **Sở hữu**: mỗi khách đúng một coach — `clients.coachUid`. Admin thấy tất cả (công tắc "Tất cả coach"),
-  coach chỉ khách của mình. Khách tự đăng ký (`claimMyClient`) thuộc admin.
+- **Mỗi coach một cửa hàng riêng**: mỗi khách đúng một coach — `clients.coachUid`. Coach chỉ thấy và
+  SỬA khách của mình. **Admin QUAN SÁT**: xem được mọi khách (trang **Admin**, nút "Quan sát", công tắc
+  "Tất cả coach") nhưng **không sửa** giáo án/dữ liệu khách của coach khác — kể cả admin. Ngoại lệ duy
+  nhất: admin chuyển khách giữa các coach (update chỉ đổi `coachUid`). Luật: `canManage` (sửa) vs
+  `canView` (xem); functions: `assertCanManage` vs `assertCanView`.
+- **Tự đăng ký ĐANG TẮT** (`SELF_SIGNUP = false` trong `claimMyClient`): chỉ Gmail coach đã gán mới vào
+  được app; Gmail lạ thấy màn "Chưa có quyền truy cập".
+- **Thư viện bài tập**: bài gốc (không `ownerUid`) chỉ admin sửa; bài riêng mang `ownerUid` — chỉ coach đó.
 - **Truy vấn danh sách** `clients` / `bookings` PHẢI qua `clientsQuery()` / `bookingsQuery()`. Luật
   không lọc: coach truy vấn thiếu `where('coachUid','==',uid)` bị từ chối cả lần → màn hình trống.
   Ngoại lệ ghi `// clients-scan-ok:` (tests/clients-query.test.js quét).
 - **Functions** bỏ qua rules → mọi `onCall` phải gọi `authz.*` (`requireCoach`, `requireAdmin`,
   `assertCanManage`, `assertCanAccess`, `requireMember`). Trợ lý AI: `runTool(name, args, role)` lọc theo coach.
-- **Tiền**: studio thu chung — chỉ admin đánh dấu hoá đơn đã trả / sửa `access.paidUntil`, bảng giá,
-  tài khoản ngân hàng. Coach đổi được `access.planId`.
+- **Tiền (tạm gác)**: tài khoản ngân hàng + bảng giá vẫn là MỘT bộ của admin, nên tab Billing chỉ hiện
+  cho khách có `coachUid == settings/platform.adminUid` (`billingOn()`). Mở cho coach khác = khách của họ
+  chuyển tiền vào tài khoản admin. Muốn bật: mỗi coach cần bộ settings riêng trước.
 - **Storage**: `videos/{clientId}/**`, `progressPhotos/{clientId}/**` — admin, coach của khách, chính khách.
   Mọi đường dẫn khác bị chặn.
 - **Test luật**: `./run-tests.sh` chạy `tests/rules/*` trên Firebase Emulator (cần Java + firebase-tools).

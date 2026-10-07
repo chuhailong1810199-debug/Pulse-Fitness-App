@@ -13,8 +13,10 @@
  *   requireAuth       đã đăng nhập, email đã xác minh
  *   requireCoach      coach đang active (kể cả admin)
  *   requireAdmin      admin
- *   assertCanManage   admin, hoặc coach có clients/{id}.coachUid == mình
- *   assertCanAccess   như trên, HOẶC chính khách đó (email khớp)
+ *   assertCanManage   SỬA: chỉ coach có clients/{id}.coachUid == mình — admin cũng
+ *                     chỉ sửa khách của chính mình (mỗi coach một cửa hàng riêng)
+ *   assertCanView     XEM: như trên, HOẶC admin (quan sát mọi khách, chỉ xem)
+ *   assertCanAccess   XEM: như assertCanView, HOẶC chính khách đó (email khớp)
  *   requireMember     coach, hoặc tài khoản đã gắn hồ sơ khách
  */
 const { HttpsError } = require("firebase-functions/v2/https");
@@ -72,29 +74,41 @@ function checkClientId(clientId) {
   }
 }
 
-/** Quyết định thuần (không I/O) — dùng chung cho assert* và cho lọc danh sách. */
+/** SỬA được không — thuần, không I/O. Admin KHÔNG có ngoại lệ. */
 function canManageDoc(role, clientData) {
   if (!role || !role.coach || !clientData) return false;
-  return role.admin || clientData.coachUid === role.uid;
+  return clientData.coachUid === role.uid;
+}
+/** XEM được không — admin quan sát mọi khách. */
+function canViewDoc(role, clientData) {
+  if (!role || !role.coach || !clientData) return false;
+  return role.admin || canManageDoc(role, clientData);
 }
 
 async function assertCanManage(request, clientId, db = getFirestore()) {
   checkClientId(clientId);
   const role = await roleOf(request, db);
   if (!role.coach) throw NO_ACCESS();
-  if (role.admin) return role;
   const c = await db.collection("clients").doc(clientId).get();
   if (!c.exists || !canManageDoc(role, c.data())) throw NO_ACCESS();
+  return role;
+}
+
+async function assertCanView(request, clientId, db = getFirestore()) {
+  checkClientId(clientId);
+  const role = await roleOf(request, db);
+  if (!role.coach) throw NO_ACCESS();
+  const c = await db.collection("clients").doc(clientId).get();
+  if (!c.exists || !canViewDoc(role, c.data())) throw NO_ACCESS();
   return role;
 }
 
 async function assertCanAccess(request, clientId, db = getFirestore()) {
   checkClientId(clientId);
   const role = await roleOf(request, db);
-  if (role.admin) return role;
   const c = await db.collection("clients").doc(clientId).get();
   const data = c.exists ? (c.data() || {}) : null;
-  if (role.coach && canManageDoc(role, data)) return role;
+  if (role.coach && canViewDoc(role, data)) return role;
   const owner = data ? String(data.email || "").toLowerCase() : "";
   // owner rỗng ('' — khách coach tự quản) không bao giờ khớp: requireAuth đã
   // bảo đảm email người gọi không rỗng.
@@ -125,5 +139,5 @@ async function defaultOwnerUid(db = getFirestore()) {
 
 module.exports = {
   BOOTSTRAP_ADMIN, COACH_EMAIL, requireAuth, roleOf, isCoach, requireCoach, requireAdmin,
-  canManageDoc, assertCanManage, assertCanAccess, requireMember, defaultOwnerUid,
+  canManageDoc, canViewDoc, assertCanManage, assertCanView, assertCanAccess, requireMember, defaultOwnerUid,
 };

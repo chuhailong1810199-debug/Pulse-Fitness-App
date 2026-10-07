@@ -17,9 +17,15 @@ ok("loadUserProfile khong tu tao clients", () =>
   assert(!/setDoc\(doc\(db, 'clients'/.test(lup), "còn setDoc(clients) trong loadUserProfile"));
 ok("loadUserProfile khong tu doi users.clientId", () =>
   assert(!/updateDoc\(userRef, \{[^}]*clientId/.test(lup), "còn updateDoc(users, {clientId})"));
-ok("hai nhanh deu goi claimMyClient", () => {
-  assert(/_claimMyClient\(true\)/.test(lup), "nhánh tự đăng ký");
-  assert(/_claimMyClient\(false\)/.test(lup), "nhánh gán Gmail sau");
+ok("tu dang ky TAT: app khong bao gio xin tao ho so", () => {
+  assert(!/_claimMyClient\(true\)/.test(s), "còn _claimMyClient(true)");
+  assert((lup.match(/_claimMyClient\(false\)/g) || []).length === 2, "hai nhánh đều chỉ tra, không tạo");
+  assert(/chưa được coach nào thêm vào Pulse/.test(lup), "thiếu lời báo cho Gmail chưa được gán");
+});
+ok("server bo qua create tu may khach khi tu dang ky tat", () => {
+  const f = fs.readFileSync(path.join(__dirname, "..", "functions", "index.js"), "utf8");
+  assert(/const SELF_SIGNUP = false;/.test(f));
+  assert(/create: SELF_SIGNUP && /.test(f));
 });
 ok("loi claim tra null, khong nem (de man bao loi khong bi de)", () => {
   const h = s.slice(s.indexOf("async function _claimMyClient("), s.indexOf("// Background re-verify"));

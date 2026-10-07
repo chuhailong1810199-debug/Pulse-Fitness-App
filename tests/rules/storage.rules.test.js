@@ -15,6 +15,9 @@ const {
 } = require("@firebase/rules-unit-testing");
 
 const ROOT = path.join(__dirname, "..", "..");
+// emulators:exec đặt sẵn địa chỉ emulator vào biến môi trường — đọc từ đó để
+// chạy được trên cổng khác khi một phiên khác đang giữ 8080/9199.
+const hp = (v, port) => { const m = String(v || "").match(/^(.*):(\d+)$/); return m ? { host: m[1], port: +m[2] } : { host: "127.0.0.1", port }; };
 const PROJECT = "demo-pulse-rules";
 
 let fails = 0;
@@ -34,8 +37,8 @@ const JPG = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
 (async () => {
   const env = await initializeTestEnvironment({
     projectId: PROJECT,
-    firestore: { rules: fs.readFileSync(path.join(ROOT, "firestore.rules"), "utf8"), host: "127.0.0.1", port: 8080 },
-    storage: { rules: fs.readFileSync(path.join(ROOT, "storage.rules"), "utf8"), host: "127.0.0.1", port: 9199 },
+    firestore: { rules: fs.readFileSync(path.join(ROOT, "firestore.rules"), "utf8"), ...hp(process.env.FIRESTORE_EMULATOR_HOST, 8080) },
+    storage: { rules: fs.readFileSync(path.join(ROOT, "storage.rules"), "utf8"), ...hp(process.env.FIREBASE_STORAGE_EMULATOR_HOST, 9199) },
   });
 
   // Dữ liệu nền: hai khách, một coach phụ, và sẵn một file của Cindy.
@@ -93,15 +96,20 @@ const JPG = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
 
   // ── Coach ──────────────────────────────────────────────────────
   ok("coach (email) doc anh khach", () => assertSucceeds(photo(as(COACH)).getDownloadURL()));
-  ok("coach (email) tai video demo", () =>
-    assertSucceeds(as(COACH).ref("videos/sang/squat/coach").put(JPG, { contentType: "video/mp4" })));
+  ok("admin KHONG tai video vao khach cua coach B", () =>
+    assertFails(as(COACH).ref("videos/sang/squat/coach").put(JPG, { contentType: "video/mp4" })));
+  ok("coach B tai video demo cho khach minh", () =>
+    assertSucceeds(as(COACH_B).ref("videos/sang/squat/coach").put(JPG, { contentType: "video/mp4" })));
   ok("coach A doc anh khach CUA MINH", () => assertSucceeds(photo(as(COACH_A)).getDownloadURL()));
   ok("coach B KHONG doc anh khach cua A", () => assertFails(photo(as(COACH_B)).getDownloadURL()));
   ok("coach B KHONG xoa video khach cua A", () => assertFails(video(as(COACH_B)).delete()));
   ok("coach bi tat KHONG doc", () => assertFails(photo(as(COACH_OFF)).getDownloadURL()));
   ok("users.role 'coach' cu KHONG con mo kho", () =>
     assertFails(photo(as({ uid: "coach2", email: "cu@gmail.com", email_verified: true })).getDownloadURL()));
-  ok("coach xoa anh khach", () => assertSucceeds(as(COACH).ref("progressPhotos/cindy/2026-10-02.jpg").delete()));
+  ok("admin KHONG xoa anh khach cua coach A (quan sat, chi xem)", () =>
+    assertFails(as(COACH).ref("progressPhotos/cindy/2026-10-02.jpg").delete()));
+  ok("coach A xoa anh khach cua minh", () =>
+    assertSucceeds(as(COACH_A).ref("progressPhotos/cindy/2026-10-02.jpg").delete()));
 
   // ── Giới hạn ──────────────────────────────────────────────────
   ok("anh qua 10MB bi chan", () =>

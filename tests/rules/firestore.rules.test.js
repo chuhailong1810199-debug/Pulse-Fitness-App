@@ -12,6 +12,9 @@ const {
 } = require("@firebase/rules-unit-testing");
 
 const ROOT = path.join(__dirname, "..", "..");
+// emulators:exec đặt sẵn địa chỉ emulator vào biến môi trường — đọc từ đó để
+// chạy được trên cổng khác khi một phiên khác đang giữ 8080/9199.
+const hp = (v, port) => { const m = String(v || "").match(/^(.*):(\d+)$/); return m ? { host: m[1], port: +m[2] } : { host: "127.0.0.1", port }; };
 let fails = 0;
 const cases = [];
 const ok = (n, f) => cases.push([n, f]);
@@ -29,7 +32,7 @@ const STRANGER = { uid: "u_x", email: "la@gmail.com", ...V };
 (async () => {
   const env = await initializeTestEnvironment({
     projectId: "demo-pulse-rules",
-    firestore: { rules: fs.readFileSync(path.join(ROOT, "firestore.rules"), "utf8"), host: "127.0.0.1", port: 8080 },
+    firestore: { rules: fs.readFileSync(path.join(ROOT, "firestore.rules"), "utf8"), ...hp(process.env.FIRESTORE_EMULATOR_HOST, 8080) },
   });
   await env.withSecurityRulesDisabled(async (ctx) => {
     const db = ctx.firestore();
@@ -41,6 +44,11 @@ const STRANGER = { uid: "u_x", email: "la@gmail.com", ...V };
       access: { planId: "pro", paidUntil: "2026-12-01" } });
     await db.doc("clients/sang").set({ name: "Sang", email: "sang@gmail.com", coachUid: "coachB" });
     await db.doc("clients/nocoach").set({ name: "Mồ côi", email: "", coachUid: null });
+    await db.doc("clients/longchu").set({ name: "Long", email: "", coachUid: "admin1",
+      access: { planId: "pro", paidUntil: "2026-12-01" } });
+    await db.doc("clients/longchu/invoices/i9").set({ status: "unpaid", kind: "access", planId: "pro", amount: 1 });
+    await db.doc("exercises/squat").set({ name: "Squat" });                       // thư viện gốc
+    await db.doc("exercises/a_bai").set({ name: "Bài của A", ownerUid: "coachA" });
     await db.doc("clients/cindy/checkpoints/c1").set({ weight: 58 });
     await db.doc("clients/sang/checkpoints/c1").set({ weight: 50 });
     await db.doc("clients/cindy/invoices/i1").set({ status: "unpaid", kind: "access", planId: "pro", amount: 1 });
@@ -107,8 +115,60 @@ const STRANGER = { uid: "u_x", email: "la@gmail.com", ...V };
     assertFails(db(COACH_A).doc("clients/cindy").update({ email: "khac@gmail.com" })));
   ok("admin chuyen khach sang coach B", () =>
     assertSucceeds(db(ADMIN).doc("clients/nocoach").update({ coachUid: "coachB" })));
-  ok("admin gia han paidUntil", () =>
-    assertSucceeds(db(ADMIN).doc("clients/cindy").update({ "access.paidUntil": "2027-01-01" })));
+  ok("admin gia han paidUntil khach CUA MINH", () =>
+    assertSucceeds(db(ADMIN).doc("clients/longchu").update({ "access.paidUntil": "2027-01-01" })));
+
+  // ── Admin QUAN SÁT: xem mọi thứ, KHÔNG sửa khách của coach khác ─
+  ok("admin KHONG sua giao an khach cua coach A", () =>
+    assertFails(db(ADMIN).doc("clients/cindy").update({ program: {} })));
+  ok("admin KHONG sua ten khach cua coach A", () =>
+    assertFails(db(ADMIN).doc("clients/cindy").update({ name: "x" })));
+  ok("admin KHONG ghi checkpoint khach cua coach A", () =>
+    assertFails(db(ADMIN).doc("clients/cindy/checkpoints/c9").set({ weight: 1 })));
+  ok("admin KHONG xoa khach cua coach A", () => assertFails(db(ADMIN).doc("clients/cindy").delete()));
+  ok("admin KHONG tao khach gan cho coach A", () =>
+    assertFails(db(ADMIN).doc("clients/x_a").set({ name: "x", email: "", coachUid: "coachA" })));
+  ok("admin chuyen khach (chi doi coachUid) giua coach", () =>
+    assertSucceeds(db(ADMIN).doc("clients/sang").update({ coachUid: "coachA" }).then(() =>
+      db(ADMIN).doc("clients/sang").update({ coachUid: "coachB" }))));
+  ok("admin KHONG doi coachUid kem sua truong khac", () =>
+    assertFails(db(ADMIN).doc("clients/sang").update({ coachUid: "coachA", name: "x" })));
+  ok("admin KHONG tao lich cho coach B", () =>
+    assertFails(db(ADMIN).doc("bookings/bx").set({ coachUid: "coachB", date: "2026-10-09" })));
+  ok("admin KHONG sua lich cua coach A", () =>
+    assertFails(db(ADMIN).doc("bookings/b1").update({ title: "x" })));
+  ok("admin tao lich cua chinh minh", () =>
+    assertSucceeds(db(ADMIN).doc("bookings/bm").set({ coachUid: "admin1", date: "2026-10-09" })));
+  ok("admin KHONG chiem Gmail tro vao khach coach A", () =>
+    assertFails(db(ADMIN).doc("clientEmails/moi9@gmail.com").set({ clientId: "cindy" })));
+  ok("admin sua khach cua chinh minh", () =>
+    assertSucceeds(db(ADMIN).doc("clients/longchu").update({ name: "Long C" })));
+
+  // ── Thư viện bài tập ─────────────────────────────────────────
+  ok("moi tai khoan dang nhap doc thu vien", () => assertSucceeds(db(CINDY).collection("exercises").get()));
+  ok("coach KHONG sua bai trong thu vien goc", () =>
+    assertFails(db(COACH_A).doc("exercises/squat").update({ name: "x" })));
+  ok("coach KHONG xoa bai trong thu vien goc", () => assertFails(db(COACH_A).doc("exercises/squat").delete()));
+  ok("coach tao bai rieng mang ownerUid cua minh", () =>
+    assertSucceeds(db(COACH_A).doc("exercises/a_moi").set({ name: "Moi", ownerUid: "coachA" })));
+  ok("coach KHONG tao bai gia danh coach khac / thu vien goc", async () => {
+    await assertFails(db(COACH_A).doc("exercises/gia1").set({ name: "x", ownerUid: "coachB" }));
+    await assertFails(db(COACH_A).doc("exercises/gia2").set({ name: "x" }));
+  });
+  ok("coach sua/xoa bai rieng cua minh", async () => {
+    await assertSucceeds(db(COACH_A).doc("exercises/a_bai").update({ name: "Đổi" }));
+    await assertSucceeds(db(COACH_A).doc("exercises/a_moi").delete());
+  });
+  ok("coach B KHONG sua/xoa bai rieng cua coach A", async () => {
+    await assertFails(db(COACH_B).doc("exercises/a_bai").update({ name: "x" }));
+    await assertFails(db(COACH_B).doc("exercises/a_bai").delete());
+  });
+  ok("coach KHONG chuyen bai rieng thanh bai goc", () =>
+    assertFails(db(COACH_A).doc("exercises/a_bai").update({ ownerUid: null })));
+  ok("admin sua thu vien goc", () => assertSucceeds(db(ADMIN).doc("exercises/squat").update({ name: "Back Squat" })));
+  ok("admin KHONG sua bai rieng cua coach A", () =>
+    assertFails(db(ADMIN).doc("exercises/a_bai").update({ name: "x" })));
+  ok("khach KHONG ghi thu vien", () => assertFails(db(CINDY).doc("exercises/k").set({ name: "x" })));
   ok("coach A KHONG xoa khach cua B", () => assertFails(db(COACH_A).doc("clients/sang").delete()));
   ok("khach KHONG tu doi coachUid/access/email", async () => {
     await assertFails(db(CINDY).doc("clients/cindy").update({ coachUid: "coachB" }));
@@ -141,8 +201,12 @@ const STRANGER = { uid: "u_x", email: "la@gmail.com", ...V };
     assertSucceeds(db(COACH_A).doc("clients/cindy/invoices/i2").set({ status: "unpaid", amount: 5 })));
   ok("coach A KHONG lap hoa don 'paid'", () =>
     assertFails(db(COACH_A).doc("clients/cindy/invoices/i3").set({ status: "paid", amount: 5 })));
-  ok("admin danh dau da tra", () =>
-    assertSucceeds(db(ADMIN).doc("clients/cindy/invoices/i2").update({ status: "paid" })));
+  ok("admin KHONG danh dau da tra hoa don khach coach A", () =>
+    assertFails(db(ADMIN).doc("clients/cindy/invoices/i2").update({ status: "paid" })));
+  ok("admin danh dau da tra hoa don khach cua minh", () =>
+    assertSucceeds(db(ADMIN).doc("clients/longchu/invoices/i9").update({ status: "paid" })));
+  ok("admin van DOC hoa don khach coach A (quan sat)", () =>
+    assertSucceeds(db(ADMIN).doc("clients/cindy/invoices/i1").get()));
   ok("coach B KHONG doc hoa don khach cua A", () => assertFails(db(COACH_B).doc("clients/cindy/invoices/i1").get()));
 
   // ── Lịch ───────────────────────────────────────────────────────
@@ -178,7 +242,8 @@ const STRANGER = { uid: "u_x", email: "la@gmail.com", ...V };
   ok("admin doc leads", () => assertSucceeds(db(ADMIN).doc("leads/l1").get()));
   ok("coach thuong KHONG sua bang gia", () => assertFails(db(COACH_A).doc("settings/plans").set({ pro: { price: 0 } })));
   ok("coach thuong doc bang gia", () => assertSucceeds(db(COACH_A).doc("settings/plans").get()));
-  ok("coach thuong sua thu vien bai tap", () => assertSucceeds(db(COACH_A).doc("exercises/e1").set({ name: "Squat" })));
+  ok("coach thuong KHONG tao bai goc (khong ownerUid)", () =>
+    assertFails(db(COACH_A).doc("exercises/e1").set({ name: "Squat" })));
 
   // ── Tự cấp vai trò (lỗ cũ) ─────────────────────────────────────
   ok("KHONG tu tao users role admin", () =>

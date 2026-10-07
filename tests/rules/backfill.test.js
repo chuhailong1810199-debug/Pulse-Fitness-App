@@ -37,6 +37,7 @@ const quiet = () => {};
     const p = await main({ db, adminUid: "admin1", write: true, log: quiet });
     const c = (await db.doc("coaches/chuhailong1810199@gmail.com").get()).data();
     assert(c.active && c.isAdmin && c.uid === "admin1");
+    assert.strictEqual((await db.doc("settings/platform").get()).data().adminUid, "admin1");
     assert.strictEqual((await db.doc("clients/cindy").get()).data().coachUid, "admin1");
     assert.strictEqual((await db.doc("bookings/b1").get()).data().coachUid, "admin1");
     assert.strictEqual((await db.doc("bookings/b2").get()).data().coachUid, "x", "không đè chủ là coach thật");
@@ -49,6 +50,7 @@ const quiet = () => {};
   ok("chay lai: khong con gi de lam (tru xung dot da bao)", async () => {
     const p = await main({ db, adminUid: "admin1", write: false, log: quiet });
     assert.strictEqual(p.coachDoc, null);
+    assert.strictEqual(p.platform, null);
     assert.strictEqual(p.clients.length, 0);
     assert.strictEqual(p.bookings.length, 0);
     assert.strictEqual(p.emailIndex.filter((x) => x.email !== "hoa@gmail.com").length, 0);
