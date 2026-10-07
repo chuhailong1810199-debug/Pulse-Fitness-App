@@ -127,7 +127,7 @@ Rút lại: [5] → deploy lại rules commit trước. [1]–[4] tương thích
    → bỏ field role khỏi pushSubs; server gửi theo `uid`, tra vai trò ở `coaches`.
 5. **users tự tạo được role 'admin'** (`firestore.rules:79` chỉ chặn 'coach').
    → users không được ghi `role`; app không đọc `users.role` để cấp quyền.
-6. **Tự đăng ký đang hỏng**: `index.html:331` `setDoc(clients/…)` từ máy khách, nhưng rules chỉ
+6. **[ĐÃ SỬA — claimMyClient] Tự đăng ký đang hỏng**: `index.html:331` `setDoc(clients/…)` từ máy khách, nhưng rules chỉ
    cho coach tạo clients → người lạ kẹt ở đăng nhập. (Sửa ở mục D bằng callable.)
 
 ### B. Vai trò
@@ -272,7 +272,7 @@ D chạm index.html một mình, làm cuối.
 - [x] **T1 (P0, human: ~4h / CC: ~30m)** — storage.rules — khoá theo đường dẫn khách + test 32
 - [x] **T2 (P0, human: ~3h / CC: ~20m)** — functions — requireAuth/assertCanAccess cho 4 callable không kiểm (A2)
 - [x] **T3 (P0, human: ~2h / CC: ~15m)** — firestore.rules — users chỉ tự tạo role 'client'; pushSubs chỉ coach ghi role 'coach' (A4, A5). Bỏ hẳn field role ở pushSubs để lại cho T8.
-- [ ] **T4 (P1, human: ~2h / CC: ~15m)** — pulseGenerateFree — bỏ đọc clients thật, thêm App Check (A3)
+- [x] **T4 (P1, human: ~2h / CC: ~15m)** — pulseGenerateFree — chỉ lấy khung giáo án, đọc tối đa 12 hồ sơ (A3). App Check CHƯA làm — cần đăng ký reCAPTCHA trong Firebase Console.
 - [ ] **T5 (P1, human: ~1d / CC: ~1h)** — functions/authz.js + coaches collection + inviteCoach/setCoachActive + test 33
 - [ ] **T6 (P1, human: ~1.5d / CC: ~1.5h)** — firestore.rules multi-coach (C11-16) + test 31
 - [ ] **T7 (P1, human: ~1d / CC: ~1h)** — assistant.js + coachApply + generators theo coach (E24-26) + test 34

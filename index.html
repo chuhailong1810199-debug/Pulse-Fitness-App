@@ -323,19 +323,13 @@ async function loadUserProfile(user) {
       // Coach account
       role = 'coach'; assignedClientId = null;
     } else {
-      // New self-signup — create client doc with empty program
-      const newClientId = (user.displayName || user.email || 'user')
-        .toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'')
-        .replace(/[^a-z0-9]/g,'_').replace(/_+/g,'_').replace(/^_|_$/g,'')
-        + '_' + Date.now();
-      await setDoc(doc(db, 'clients', newClientId), {
-        name: user.displayName || user.email,
-        email: user.email,
-        program: {},
-        goal: '', level: '', sessionsPerWeek: 0,
-        createdAt: serverTimestamp()
-      });
-      role = 'client'; assignedClientId = newClientId;
+      // Tự đăng ký: hồ sơ do SERVER tạo (claimMyClient). Trước đây app tự
+      // setDoc(clients/…) — luật chỉ cho coach tạo clients, nên người mới bị
+      // permission-denied và kẹt ở màn tải. Server cũng chiếm /clientEmails
+      // trước, giữ chốt một Gmail một khách.
+      const r = await _claimMyClient(true);
+      if (!r) return;                       // đã hiện màn báo lỗi
+      role = 'client'; assignedClientId = r.clientId;
     }
     const profileData = {
       email: user.email,
@@ -373,15 +367,36 @@ async function loadUserProfile(user) {
         }
       }
       if (matchedClientId) {
-        await updateDoc(userRef, { role: 'client', clientId: matchedClientId });
-        userRole     = 'client';
-        userClientId = matchedClientId;
+        // Khách đăng nhập trước, coach gán Gmail sau (như Kem 04/10). Không tự
+        // updateDoc(users, {clientId}) — luật cấm khách tự đổi clientId nên lệnh
+        // đó văng lỗi và chặn đăng nhập. Server tra /clientEmails rồi gán.
+        const r = await _claimMyClient(false);
+        if (!r) return;                     // đã hiện màn báo lỗi
+        if (r.clientId) { userRole = 'client'; userClientId = r.clientId; }
       }
     }
   }
   // Save to cache for next time
   localStorage.setItem(_USER_CACHE_KEY(user.uid), JSON.stringify({ role: userRole, clientId: userClientId }));
   return _launchAfterProfile(user);
+}
+
+/**
+ * Gọi claimMyClient. Lỗi thì hiện màn báo lỗi và trả null — KHÔNG ném ra:
+ * onAuthStateChanged bắt lỗi rồi đẩy về màn đăng nhập, đè mất lời báo.
+ */
+async function _claimMyClient(create) {
+  try {
+    const fn = firebase.app().functions('asia-southeast1').httpsCallable('claimMyClient', { timeout: 30000 });
+    const res = await fn({ create });
+    const d = res.data || {};
+    if (create && !d.clientId) throw new Error('Không tạo được hồ sơ.');
+    return d;
+  } catch (e) {
+    console.error('[claimMyClient]', e);
+    showNoClientError((e && e.message) || 'Không gắn được tài khoản với hồ sơ khách.');
+    return null;
+  }
 }
 
 // Background re-verify: silently refresh cache without blocking UI
@@ -856,15 +871,9 @@ async function saveClientInfo() {
 
   await updateDoc(doc(db, 'clients', activeClient.id), { name, email, level, goal });
 
-  // Update linked user record if email changed
-  if (email !== oldEmail) {
-    const usersSnap = await getDocs(query(collection(db, 'users')));
-    usersSnap.forEach(async d => {
-      if (d.data().clientId === activeClient.id) {
-        await updateDoc(doc(db, 'users', d.id), { email, role: 'client' });
-      }
-    });
-  }
+  // Không quét bảng users để nối tài khoản nữa. Bản cũ dùng forEach(async …)
+  // không await: lỗi bị nuốt và modal đóng trước khi ghi xong. Khách đăng nhập
+  // bằng Gmail mới thì claimMyClient (server) tra /clientEmails và tự nối.
 
   closeModal('edit-client-modal');
   await loadAllClients();
@@ -912,13 +921,8 @@ async function addClient(opts) {
     } catch (e) { console.warn('[addClient] profile seed failed', e); }
   }
 
-  // Link user record if already exists
-  const usersSnap = await getDocs(query(collection(db, 'users')));
-  usersSnap.forEach(async d => {
-    if (d.data().email === email) {
-      await updateDoc(doc(db, 'users', d.id), { clientId, role: 'client' });
-    }
-  });
+  // Tài khoản đã từng đăng nhập bằng Gmail này sẽ được nối ở lần đăng nhập
+  // kế tiếp (claimMyClient tra /clientEmails) — không quét bảng users ở đây.
 
   closeModal('add-client-modal');
   await loadAllClients();
@@ -9304,8 +9308,10 @@ async function billIssueCoaching(pkgId, months) {
 }
 
 /** Confirming payment is what extends access — the two must not drift apart. */
+let _billConfirming = null;   // id hoá đơn đang xác nhận — chặn bấm đúp
 async function billConfirm(invoiceId) {
   if (userRole !== 'coach' || !activeClient) return;
+  if (_billConfirming) return;
   const inv = _billInvoices.find(i => i.id === invoiceId);
   if (!inv || inv.status === 'paid') return;
   const method = prompt('Nhận qua đâu?', 'chuyển khoản');
@@ -9318,22 +9324,29 @@ async function billConfirm(invoiceId) {
   const planId = isCoaching ? ((pkg && pkg.includesPlan) || (activeClient.access || {}).planId || 'pro')
                             : inv.planId;
   const until = extendAccess((activeClient.access || {}).paidUntil, inv.months);
+  _billConfirming = invoiceId;
   try {
-    await setDoc(doc(db, 'clients', activeClient.id, 'invoices', invoiceId),
-      { status: 'paid', paidAt: new Date().toISOString(), method, extendedTo: until }, { merge: true });
     const patch = { 'access.planId': planId, 'access.paidUntil': until };
     if (isCoaching) {
       patch['coaching.packageId'] = inv.packageId;
       patch['coaching.paidUntil'] = until;
       patch['coaching.termMonths'] = inv.months;
     }
-    await updateDoc(doc(db, 'clients', activeClient.id), patch);
+    // MỘT batch: hoá đơn "đã trả" và hạn dùng app cùng ghi hoặc cùng không.
+    // Trước đây là hai lần ghi rời — rớt mạng giữa chừng thì hoá đơn ghi đã
+    // trả mà khách không được gia hạn, và bấm lại cũng không được vì nút đã ẩn.
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'clients', activeClient.id, 'invoices', invoiceId),
+      { status: 'paid', paidAt: new Date().toISOString(), method, extendedTo: until }, { merge: true });
+    batch.update(doc(db, 'clients', activeClient.id), patch);
+    await batch.commit();
     activeClient.access = { ...(activeClient.access || {}), planId, paidUntil: until };
     if (isCoaching) activeClient.coaching = { packageId: inv.packageId, paidUntil: until, termMonths: inv.months };
     _syncOpenInvoice(null);
     _blSheet = null;
     await loadBilling();
   } catch (e) { alert('Không xác nhận được: ' + (e.message || '')); }
+  finally { _billConfirming = null; }
 }
 
 /**

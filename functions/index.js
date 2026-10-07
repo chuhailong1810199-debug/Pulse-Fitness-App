@@ -26,6 +26,7 @@ const { initializeApp }      = require("firebase-admin/app");
 const { getFirestore }       = require("firebase-admin/firestore");
 const nodemailer             = require("nodemailer");
 const authz                  = require("./authz.js");
+const { styleSampleFromProgram } = require("./style-sample.js");
 const { Groq }               = require("groq-sdk");
 
 initializeApp();
@@ -1197,22 +1198,22 @@ exports.pulseGenerateFree = onCall(
     steps.push({ icon: "🎨", text: "Học phong cách coaching..." });
     let styleContext = "";
     try {
-      const allClientsSnap = await db.collection("clients").get();
+      // Callable công khai: chỉ đọc vài hồ sơ, và chỉ lấy KHUNG giáo án —
+      // không mục tiêu, cue, ghi chú (xem style-sample.js).
+      const someClients = await db.collection("clients").limit(12).get();
       const styleExamples = [];
-      for (const doc of allClientsSnap.docs) {
+      for (const doc of someClients.docs) {
         const data = doc.data();
-        if (!data.program) continue;
-        const dayKeys = Object.keys(data.program);
-        if (dayKeys.length === 0) continue;
-        const sampleDay = data.program[dayKeys[0]];
-        styleExamples.push({ clientLevel: data.level, clientGoal: data.goal, sampleSession: sampleDay });
+        const sample = styleSampleFromProgram(data.program);
+        if (sample) styleExamples.push({ clientLevel: data.level, sampleSession: sample });
+        if (styleExamples.length >= 2) break;
       }
       if (styleExamples.length > 0) {
         styleContext = `
-COACH'S TRAINING STYLE (learned from ${styleExamples.length} real programs):
-${styleExamples.slice(0, 2).map((ex, i) => `
-Example ${i + 1} — ${ex.clientLevel} client, goal: ${ex.clientGoal}:
-${JSON.stringify(ex.sampleSession, null, 2).substring(0, 600)}
+COACH'S TRAINING STYLE (structure of ${styleExamples.length} real sessions, personal details removed):
+${styleExamples.map((ex, i) => `
+Example ${i + 1} — ${ex.clientLevel || "unspecified"} level:
+${JSON.stringify(ex.sampleSession, null, 2).substring(0, 900)}
 `).join("")}
 IMPORTANT: Mirror this coaching style — same phase structure, similar exercise selection, same cue/note format.`;
       }
@@ -3439,5 +3440,30 @@ exports.coachApply = onCall(
     }
 
     throw new HttpsError("invalid-argument", `Loại thao tác không rõ: ${act.kind}`);
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// claimMyClient — nối tài khoản vừa đăng nhập với hồ sơ khách của chính nó.
+// Xem functions/claim-client.js: hai việc này app từng tự làm và đều bị luật
+// chặn (tạo clients, tự đổi users.clientId).
+// ─────────────────────────────────────────────────────────────────────────────
+exports.claimMyClient = onCall(
+  { region: "asia-southeast1", timeoutSeconds: 30, memory: "256MiB" },
+  async (request) => {
+    const email = authz.requireAuth(request);
+    const db = getFirestore();
+    // Coach không bao giờ bị biến thành khách — kể cả khi gọi nhầm.
+    if (await authz.isCoach(request, db)) {
+      throw new HttpsError("failed-precondition", "Tài khoản coach không gắn với hồ sơ khách.");
+    }
+    const { create } = request.data || {};
+    const { claimMyClient } = require("./claim-client.js");
+    return claimMyClient(db, {
+      uid: request.auth.uid,
+      email,
+      displayName: request.auth.token.name || "",
+      create: create === true,
+    });
   },
 );
