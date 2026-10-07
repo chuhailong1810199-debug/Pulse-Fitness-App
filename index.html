@@ -11522,6 +11522,9 @@ body{font-family:"Figtree",-apple-system,BlinkMacSystemFont,sans-serif;color:#ff
 
 /* LOADING */
 .loading-screen{position:fixed;inset:0;background:#161111;z-index:190;display:flex;align-items:center;justify-content:center;}
+.loading-logo{width:auto;height:96px;max-width:70vw;object-fit:contain;opacity:0;transform:scale(.6);
+  animation:sp-logo-in .45s cubic-bezier(.22,1,.36,1) forwards,sp-heartbeat .75s ease-in-out .45s infinite;}
+@media (prefers-reduced-motion:reduce){.loading-logo{animation:none;opacity:1;transform:none;}}
 .loading-spinner{width:40px;height:40px;border:3px solid rgba(255,255,255,0.12);border-top-color:#8FDBFF;border-radius:50%;animation:spin .8s linear infinite;}
 @keyframes spin{to{transform:rotate(360deg);}}
 
@@ -12910,7 +12913,9 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 
 <!-- LOADING SCREEN -->
 <div id="loading-screen" class="loading-screen hidden">
-  <div class="loading-spinner"></div>
+  <!-- Logo nhịp tim thay vòng xoay: hiện đúng trong lúc app nạp, không bắt
+       chờ thêm như màn chào cũ (2,3 giây cố định). -->
+  <img src="images/pulse-mark.svg" class="loading-logo" alt="Pulse">
 </div>
 
 <!-- ONBOARDING SCREEN -->
