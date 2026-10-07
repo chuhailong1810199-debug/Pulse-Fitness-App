@@ -25,6 +25,8 @@ const { onRequest }          = require("firebase-functions/v2/https");
 const { initializeApp }      = require("firebase-admin/app");
 const { getFirestore }       = require("firebase-admin/firestore");
 const nodemailer             = require("nodemailer");
+const authz                  = require("./authz.js");
+const { styleSampleFromProgram } = require("./style-sample.js");
 const { Groq }               = require("groq-sdk");
 
 initializeApp();
@@ -36,6 +38,8 @@ const GEMINI_API_KEY = defineSecret("GEMINI_API_KEY");
 const POLAR_TOKEN    = defineSecret("POLAR_TOKEN");
 const POLAR_WEBHOOK_SECRET = defineSecret("POLAR_WEBHOOK_SECRET");
 
+// Địa chỉ nhận mail lead + VAPID. KHÔNG dùng để kiểm quyền — quyền nằm ở
+// functions/authz.js (coaches/{email}).
 const COACH_EMAIL = "chuhailong1810199@gmail.com";
 const APP_NAME = "Striveo";
 
@@ -451,6 +455,7 @@ exports.generateProgram = onCall(
     memory: "256MiB",
   },
   async (request) => {
+    await authz.requireCoach(request);
     const { name, level, goal, sessionsPerWeek, notes, age, gender, weight, height } = request.data || {};
 
     // Say which field is missing. Without this the function ran on undefined and
@@ -700,7 +705,9 @@ exports.pulseGenerate = onCall(
     memory: "512MiB",
   },
   async (request) => {
-    const { clientId } = request.data;
+    // Đọc hồ sơ, InBody, lịch sử tập của khách — chỉ coach của khách đó.
+    const { clientId } = request.data || {};
+    const pgRole = await authz.assertCanManage(request, String(clientId || ""));
     // A plain Error from a callable reaches the client as a bare "internal" with
     // the reason stripped — the same dead end the nutrition tab kept hitting.
     if (!clientId) throw new HttpsError("invalid-argument", "clientId is required");
@@ -740,7 +747,9 @@ exports.pulseGenerate = onCall(
 
     // ── Step 5: Read existing programs for coaching style ─────────────────────
     steps.push({ icon: "🎨", text: "Học phong cách coaching từ các chương trình hiện có..." });
-    const allClientsSnap = await db.collection("clients").get();
+    // Chỉ giáo án của CÙNG coach: giáo án khách của coach khác không được lọt
+    // sang prompt của người này.
+    const allClientsSnap = await db.collection("clients").where("coachUid", "==", pgRole.uid).get();
     const styleExamples = [];
     for (const doc of allClientsSnap.docs) {
       if (doc.id === clientId) continue;
@@ -1193,22 +1202,22 @@ exports.pulseGenerateFree = onCall(
     steps.push({ icon: "🎨", text: "Học phong cách coaching..." });
     let styleContext = "";
     try {
-      const allClientsSnap = await db.collection("clients").get();
+      // Callable công khai: chỉ đọc vài hồ sơ, và chỉ lấy KHUNG giáo án —
+      // không mục tiêu, cue, ghi chú (xem style-sample.js).
+      const someClients = await db.collection("clients").limit(12).get();
       const styleExamples = [];
-      for (const doc of allClientsSnap.docs) {
+      for (const doc of someClients.docs) {
         const data = doc.data();
-        if (!data.program) continue;
-        const dayKeys = Object.keys(data.program);
-        if (dayKeys.length === 0) continue;
-        const sampleDay = data.program[dayKeys[0]];
-        styleExamples.push({ clientLevel: data.level, clientGoal: data.goal, sampleSession: sampleDay });
+        const sample = styleSampleFromProgram(data.program);
+        if (sample) styleExamples.push({ clientLevel: data.level, sampleSession: sample });
+        if (styleExamples.length >= 2) break;
       }
       if (styleExamples.length > 0) {
         styleContext = `
-COACH'S TRAINING STYLE (learned from ${styleExamples.length} real programs):
-${styleExamples.slice(0, 2).map((ex, i) => `
-Example ${i + 1} — ${ex.clientLevel} client, goal: ${ex.clientGoal}:
-${JSON.stringify(ex.sampleSession, null, 2).substring(0, 600)}
+COACH'S TRAINING STYLE (structure of ${styleExamples.length} real sessions, personal details removed):
+${styleExamples.map((ex, i) => `
+Example ${i + 1} — ${ex.clientLevel || "unspecified"} level:
+${JSON.stringify(ex.sampleSession, null, 2).substring(0, 900)}
 `).join("")}
 IMPORTANT: Mirror this coaching style — same phase structure, similar exercise selection, same cue/note format.`;
       }
@@ -1856,6 +1865,7 @@ exports.analyzeMealPhoto = onCall(
     memory: "512MiB",
   },
   async (request) => {
+    await authz.requireMember(request);
     const { imageBase64, mimeType, userHint } = request.data || {};
 
     if (!imageBase64) {
@@ -1964,6 +1974,7 @@ exports.recommendMacros = onCall(
     if (!clientId) throw new HttpsError("invalid-argument", "clientId is required");
 
     const db = getFirestore();
+    await authz.assertCanAccess(request, clientId, db);
 
     // ── Read client profile ──────────────────────────────────────────────────
     const clientDoc = await db.collection("clients").doc(clientId).get();
@@ -2720,10 +2731,8 @@ exports.syncPolarNow = onCall(
   // Tải file FIT của cả tuần: mặc định 60s là không đủ khi tập nhiều.
   { region: "asia-southeast1", secrets: [POLAR_TOKEN], timeoutSeconds: 300, memory: "512MiB" },
   async (request) => {
-    const email = request.auth && request.auth.token && request.auth.token.email;
-    if (email !== COACH_EMAIL) {
-      throw new HttpsError("permission-denied", "Chỉ coach mới đồng bộ được.");
-    }
+    // Vòng Polar là của admin (khách 'longchu') — chỉ admin đồng bộ.
+    await authz.requireAdmin(request);
     return { results: await syncAllPolar() };
   },
 );
@@ -2995,10 +3004,8 @@ exports.recoveryBrief = onCall(
     if (!cDoc.exists) throw new HttpsError("not-found", "Không tìm thấy khách: " + clientId);
     const client = cDoc.data();
 
-    // Coach xem được tất cả; khách chỉ xem của chính mình.
-    if (email !== COACH_EMAIL && String(client.email || "") !== email) {
-      throw new HttpsError("permission-denied", "Không có quyền xem dữ liệu này.");
-    }
+    // Admin, coach của khách này, hoặc chính khách đó.
+    await authz.assertCanAccess(request, clientId, db);
 
     const recSnap = await cRef.collection("recovery").orderBy("date", "desc").limit(30).get();
     const nights = recSnap.docs.map((d) => d.data());
@@ -3090,14 +3097,22 @@ const hhmmToMin = (s) => {
   return m ? +m[1] * 60 + +m[2] : null;
 };
 
-/** Gửi một payload tới mọi máy đã đăng ký; dọn luôn máy đã chết. */
-async function pushToAll(payload, { role } = {}) {
+/**
+ * Gửi một payload tới mọi máy của MỘT người (theo uid); dọn luôn máy đã chết.
+ *
+ * Trước đây lọc theo trường `role` do máy khách tự ghi — khách khai 'coach' là
+ * nhận lịch có tên khách khác. Giờ gửi theo uid server đã biết chắc. `role`
+ * chỉ còn làm đường lùi khi chưa biết uid admin (xem recipient()).
+ */
+async function pushToAll(payload, { uid, role } = {}) {
   const webpush = require("web-push");
   webpush.setVapidDetails("mailto:" + COACH_EMAIL, VAPID_PUBLIC, VAPID_PRIVATE.value());
 
   const db = getFirestore();
   let q = db.collection("pushSubs");
-  if (role) q = q.where("role", "==", role);
+  if (uid) q = q.where("uid", "==", uid);
+  else if (role) q = q.where("role", "==", role);
+  else throw new Error("pushToAll: cần uid người nhận — không gửi cho tất cả.");
   const snap = await q.get();
 
   let sent = 0, gone = 0;
@@ -3123,11 +3138,23 @@ async function pushToAll(payload, { role } = {}) {
   return { sent, gone, total: snap.size };
 }
 
-/** Lịch của một ngày, đã sắp theo giờ và bỏ buổi đã huỷ. */
-async function bookingsOn(dateStr) {
+/**
+ * Người nhận push. Chưa biết uid (admin chưa đăng nhập lần nào sau đợt
+ * multi-coach) thì lùi về lọc role=='coach' như cũ — lúc đó admin là coach
+ * duy nhất, và luật đã cấm khách tự khai role 'coach'.
+ */
+const recipient = (uid) => (uid ? { uid } : { role: "coach" });
+
+/**
+ * Lịch của một ngày, đã sắp theo giờ và bỏ buổi đã huỷ. Có coachUid thì chỉ
+ * lịch của coach đó (lọc trong bộ nhớ — một ngày chỉ vài chục buổi, khỏi cần
+ * index ghép cho truy vấn phía server).
+ */
+async function bookingsOn(dateStr, coachUid) {
   const snap = await getFirestore().collection("bookings").where("date", "==", dateStr).get();
   return snap.docs
     .map((d) => ({ id: d.id, ref: d.ref, ...d.data() }))
+    .filter((b) => !coachUid || b.coachUid === coachUid)
     .filter((b) => b.status !== "cancelled" && hhmmToMin(b.startTime) != null)
     .sort((a, b) => hhmmToMin(a.startTime) - hhmmToMin(b.startTime));
 }
@@ -3169,6 +3196,8 @@ exports.scheduleReminders = onSchedule(
   },
   async () => {
     const now = ictNow();
+    // Booking cũ chưa có coachUid (trước backfill) thuộc về admin.
+    const adminUid = await authz.defaultOwnerUid();
     // Buổi lúc 00:15 thì 30 phút trước đã sang ngày hôm trước, nên xét cả mai.
     const days = [now.date, ictPlusDays(now.date, 1)];
     for (let i = 0; i < days.length; i++) {
@@ -3181,7 +3210,7 @@ exports.scheduleReminders = onSchedule(
           tag: "bk_" + b.id,
           url: "/index.html",
           sticky: true,
-        }, { role: "coach" });
+        }, recipient(b.coachUid || adminUid));
         await b.ref.update({ remindedAt: new Date().toISOString() }).catch(() => {});
         console.log(`[push] nhắc ${b.startTime} ${b.title} -> ${r.sent} máy`);
       }
@@ -3213,7 +3242,19 @@ exports.morningSchedule = onSchedule(
   async () => {
     const { buildMorningPush } = require("./assistant.js");
     const now = ictNow();
-    const list = await bookingsOn(now.date);
+    const all = await bookingsOn(now.date);
+    const adminUid = await authz.defaultOwnerUid();
+    const ownerOf = (b) => b.coachUid || adminUid;
+
+    // Mỗi coach có lịch hôm nay nhận tóm tắt CỦA RIÊNG mình (không thấy lịch
+    // coach khác). Dữ liệu hồi phục Polar là của admin — chỉ gửi kèm cho admin.
+    const coachUids = [...new Set(all.map(ownerOf).filter(Boolean))].filter((u) => u !== adminUid);
+    for (const uid of coachUids) {
+      const mine = all.filter((b) => ownerOf(b) === uid);
+      const { title, body } = buildMorningPush({ bookings: mine, rec: null });
+      await pushToAll({ title, body, tag: "today", url: "/index.html" }, { uid });
+    }
+    const list = all.filter((b) => ownerOf(b) === adminUid || !ownerOf(b));
 
     // Hồ sơ của chính coach — nơi có dữ liệu Polar.
     const me = POLAR_CLIENTS[0].clientId;
@@ -3231,7 +3272,7 @@ exports.morningSchedule = onSchedule(
     }
 
     const { title, body } = buildMorningPush({ bookings: list, rec });
-    await pushToAll({ title, body, tag: "today", url: "/index.html" }, { role: "coach" });
+    await pushToAll({ title, body, tag: "today", url: "/index.html" }, recipient(adminUid));
     console.log(`[push] tóm tắt sáng: ${list.length} buổi, `
       + `hồi phục ${rec && rec.brief ? "có" : "CHƯA có"}`);
   },
@@ -3241,10 +3282,9 @@ exports.morningSchedule = onSchedule(
 exports.pushTest = onCall(
   { region: "asia-southeast1", secrets: [VAPID_PRIVATE], timeoutSeconds: 60 },
   async (request) => {
-    const email = request.auth && request.auth.token && request.auth.token.email;
-    if (email !== COACH_EMAIL) throw new HttpsError("permission-denied", "Chỉ coach.");
+    const role = await authz.requireCoach(request);
     const now = ictNow();
-    const list = await bookingsOn(now.date);
+    const list = await bookingsOn(now.date, role.uid);
     const next = list.find((b) => hhmmToMin(b.startTime) >= now.minutes);
     return await pushToAll({
       title: "Pulse — thử thông báo",
@@ -3253,7 +3293,7 @@ exports.pushTest = onCall(
         : "Hôm nay không còn buổi nào.",
       tag: "test",
       url: "/index.html",
-    }, { role: "coach" });
+    }, { uid: role.uid });       // chỉ máy của chính coach bấm nút
   },
 );
 
@@ -3271,12 +3311,9 @@ exports.coachAssistant = onCall(
     memory: "512MiB",
   },
   async (request) => {
-    const email = request.auth && request.auth.token && request.auth.token.email;
-    // Trợ lý đọc được dữ liệu của MỌI khách, kể cả hồ sơ sức khoẻ. Giấu nút ở
-    // giao diện không phải là kiểm soát — chốt chặn thật nằm ở đây.
-    if (email !== COACH_EMAIL) {
-      throw new HttpsError("permission-denied", "Chỉ coach dùng được trợ lý.");
-    }
+    // Trợ lý đọc hồ sơ sức khoẻ của khách. Giấu nút ở giao diện không phải là
+    // kiểm soát — chốt chặn thật nằm ở đây, và mọi tool lọc theo `role`.
+    const role = await authz.requireCoach(request);
 
     const messages = Array.isArray(request.data && request.data.messages)
       ? request.data.messages.slice(-12)        // giữ 12 lượt gần nhất, đủ ngữ cảnh mà không phình token
@@ -3304,7 +3341,14 @@ exports.coachAssistant = onCall(
         client,
         model: GEMINI_MODEL,
         messages,
-        clientId: (request.data && request.data.clientId) || null,
+        // Khách đang mở trên màn hình — chỉ báo cho model nếu coach này quản lý
+        // khách đó; không thì bỏ, tool cũng sẽ từ chối.
+        clientId: await (async () => {
+          const id = request.data && request.data.clientId;
+          if (!id) return null;
+          try { await authz.assertCanManage(request, String(id)); return String(id); } catch (_e) { return null; }
+        })(),
+        role,
       });
       const u = r.usage || {};
       console.log(`[coachAssistant] ${r.steps} vòng, ${r.toolLog.length} tool `
@@ -3341,14 +3385,16 @@ exports.coachAssistant = onCall(
 exports.coachApply = onCall(
   { region: "asia-southeast1", timeoutSeconds: 60 },
   async (request) => {
-    const email = request.auth && request.auth.token && request.auth.token.email;
-    if (email !== COACH_EMAIL) throw new HttpsError("permission-denied", "Chỉ coach.");
+    const role = await authz.requireCoach(request);
+    const email = role.email;
 
     const { validateProgram, validateNewClient } = require("./assistant.js");
     const act = (request.data && request.data.action) || {};
     const db = getFirestore();
 
     if (act.kind === "apply_program") {
+      // Kiểm lại ở đây, không tin đề xuất: máy khách sửa được action trên đường đi.
+      await authz.assertCanManage(request, String(act.clientId || ""), db);
       const v = validateProgram(act.program);
       if (!v.ok) throw new HttpsError("invalid-argument", v.errors.join(" | "));
       const ref = db.collection("clients").doc(String(act.clientId || ""));
@@ -3433,5 +3479,31 @@ exports.coachApply = onCall(
     }
 
     throw new HttpsError("invalid-argument", `Loại thao tác không rõ: ${act.kind}`);
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// claimMyClient — nối tài khoản vừa đăng nhập với hồ sơ khách của chính nó.
+// Xem functions/claim-client.js: hai việc này app từng tự làm và đều bị luật
+// chặn (tạo clients, tự đổi users.clientId).
+// ─────────────────────────────────────────────────────────────────────────────
+exports.claimMyClient = onCall(
+  { region: "asia-southeast1", timeoutSeconds: 30, memory: "256MiB" },
+  async (request) => {
+    const email = authz.requireAuth(request);
+    const db = getFirestore();
+    // Coach không bao giờ bị biến thành khách — kể cả khi gọi nhầm.
+    if (await authz.isCoach(request, db)) {
+      throw new HttpsError("failed-precondition", "Tài khoản coach không gắn với hồ sơ khách.");
+    }
+    const { create } = request.data || {};
+    const { claimMyClient } = require("./claim-client.js");
+    return claimMyClient(db, {
+      uid: request.auth.uid,
+      email,
+      displayName: request.auth.token.name || "",
+      create: create === true,
+      ownerUid: await authz.defaultOwnerUid(db),
+    });
   },
 );

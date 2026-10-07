@@ -90,7 +90,8 @@ const storage = getStorage(app);
 
 // ── STATE ──────────────────────────────────────────────
 let currentUser = null;
-let userRole    = null; // "coach" | "client"
+let userRole    = null; // "coach" | "client" — admin cũng là 'coach', kèm cờ userIsAdmin
+let userIsAdmin = false; // admin studio: thấy mọi coach, chuyển khách, xác nhận đã trả
 let userClientId = null;
 let clientsData  = [];
 let activeClient = null;
@@ -250,8 +251,56 @@ function setLoginLoading(on) {
 }
 
 // ── USER PROFILE ───────────────────────────────────────
-const COACH_EMAILS = ['chuhailong1810199@gmail.com', 'coach@fitwithlongchu.com'];
+// Ai là coach: coaches/{email} do admin quản lý (docs/plan-multi-coach.md),
+// KHÔNG còn danh sách email cứng. BOOTSTRAP_ADMIN luôn là admin — cùng địa chỉ
+// ở firestore.rules, storage.rules, functions/authz.js.
+// (coach@fitwithlongchu.com từng nằm trong danh sách cứng nhưng là KHÁCH
+// 'longchu' — vai trò khách vốn đã thắng; giờ bỏ hẳn.)
+const BOOTSTRAP_ADMIN = 'chuhailong1810199@gmail.com';
 const _USER_CACHE_KEY = uid => 'pulse_user_v2_' + uid;
+
+/** { coach, admin } của tài khoản này, đọc coaches/{email}. Lỗi đọc = không phải coach. */
+async function _resolveCoach(user) {
+  const email = (user.email || '').toLowerCase().trim();
+  if (email === BOOTSTRAP_ADMIN) return { coach: true, admin: true };
+  try {
+    const c = await getDoc(doc(db, 'coaches', email));
+    if (!c.exists) return { coach: false, admin: false };
+    const d = c.data() || {};
+    const coach = d.active === true;
+    return { coach, admin: coach && d.isAdmin === true };
+  } catch (_e) { return { coach: false, admin: false }; }
+}
+
+/**
+ * Coach đăng nhập: ghi uid vào coaches/{email} (admin cần uid để giao khách).
+ * Admin gốc lần đầu chưa có doc thì tự tạo — đây cũng là nơi functions đọc
+ * uid admin làm chủ mặc định của khách tự đăng ký.
+ */
+async function _bindCoachUid(user, admin) {
+  const email = (user.email || '').toLowerCase().trim();
+  const ref = doc(db, 'coaches', email);
+  try {
+    const c = await getDoc(ref);
+    if (!c.exists) {
+      if (email === BOOTSTRAP_ADMIN) {
+        await setDoc(ref, { name: user.displayName || email, active: true, isAdmin: true,
+          uid: user.uid, lastLoginAt: new Date().toISOString() });
+      }
+      return;
+    }
+    if ((c.data() || {}).uid !== user.uid) {
+      await updateDoc(ref, { uid: user.uid, lastLoginAt: new Date().toISOString() });
+    }
+  } catch (e) { console.warn('[coach] không ghi được uid:', e.code || e.message); }
+}
+
+function _launchAsCoach(user, co) {
+  userRole = 'coach'; userIsAdmin = !!co.admin; userClientId = null;
+  localStorage.setItem(_USER_CACHE_KEY(user.uid), JSON.stringify({ role: 'coach', isAdmin: userIsAdmin }));
+  _bindCoachUid(user, co.admin);            // không chặn màn hình
+  return _launchAfterProfile(user);
+}
 
 async function loadUserProfile(user) {
   // ── ?reset=1 param: wipe cache so slow path re-creates users doc ──
@@ -267,6 +316,7 @@ async function loadUserProfile(user) {
       const c = JSON.parse(cacheRaw);
       if (c.role && (c.role === 'coach' || c.clientId)) {
         userRole     = c.role;
+        userIsAdmin  = c.role === 'coach' && c.isAdmin === true;
         userClientId = c.clientId || null;
         // Kick off background re-verify (non-blocking)
         _verifyUserProfileBg(user);
@@ -278,6 +328,13 @@ async function loadUserProfile(user) {
 
   // ── Slow path: first login or cache missing ──
   showScreen('loading');
+
+  // Coach TRƯỚC khi khớp khách. Ngược lại thì coach mới đăng nhập lần đầu rơi
+  // vào nhánh tự đăng ký và bị tạo thành khách, chiếm luôn Gmail của mình.
+  // Coach không cần doc users (luật không cho coach thường tự ghi role 'coach').
+  const co = await _resolveCoach(user);
+  if (co.coach) return _launchAsCoach(user, co);
+
   const userRef = doc(db, 'users', user.uid);
   const snap    = await getDoc(userRef);
 
@@ -299,7 +356,7 @@ async function loadUserProfile(user) {
       // rather than letting it break login.
       let matches = [];
       try {
-        const clientsSnap = await getDocs(collection(db, 'clients'));
+        const clientsSnap = await getDocs(collection(db, 'clients'));   // clients-scan-ok: quét email khách cũ lúc đăng nhập (vai trò khách, lỗi đã bắt)
         clientsSnap.forEach(d => {
           if ((d.data().email || '').toLowerCase().trim() === emailNorm) matches.push(d.id);
         });
@@ -319,23 +376,14 @@ async function loadUserProfile(user) {
     if (matchedClientId) {
       // Known client added by coach
       role = 'client'; assignedClientId = matchedClientId;
-    } else if (COACH_EMAILS.includes((user.email || '').toLowerCase())) {
-      // Coach account
-      role = 'coach'; assignedClientId = null;
     } else {
-      // New self-signup — create client doc with empty program
-      const newClientId = (user.displayName || user.email || 'user')
-        .toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'')
-        .replace(/[^a-z0-9]/g,'_').replace(/_+/g,'_').replace(/^_|_$/g,'')
-        + '_' + Date.now();
-      await setDoc(doc(db, 'clients', newClientId), {
-        name: user.displayName || user.email,
-        email: user.email,
-        program: {},
-        goal: '', level: '', sessionsPerWeek: 0,
-        createdAt: serverTimestamp()
-      });
-      role = 'client'; assignedClientId = newClientId;
+      // Tự đăng ký: hồ sơ do SERVER tạo (claimMyClient). Trước đây app tự
+      // setDoc(clients/…) — luật chỉ cho coach tạo clients, nên người mới bị
+      // permission-denied và kẹt ở màn tải. Server cũng chiếm /clientEmails
+      // trước, giữ chốt một Gmail một khách.
+      const r = await _claimMyClient(true);
+      if (!r) return;                       // đã hiện màn báo lỗi
+      role = 'client'; assignedClientId = r.clientId;
     }
     const profileData = {
       email: user.email,
@@ -349,7 +397,9 @@ async function loadUserProfile(user) {
     userRole     = role;
     userClientId = assignedClientId;
   } else {
-    userRole     = snap.data().role;
+    // users.role 'coach' cũ KHÔNG còn cấp quyền coach — chỉ coaches/{email}
+    // (đã kiểm ở trên). Coach bị tắt rơi xuống đây và được xử lý như khách.
+    userRole     = snap.data().role === 'coach' ? 'client' : snap.data().role;
     userClientId = snap.data().clientId || null;
 
     // Re-check: user has no clientId yet — resolve it from the email index.
@@ -364,7 +414,7 @@ async function loadUserProfile(user) {
       if (!matchedClientId) {
         // Legacy scan — denied for client-role accounts by design; ignore the failure.
         try {
-          const clientsSnap = await getDocs(collection(db, 'clients'));
+          const clientsSnap = await getDocs(collection(db, 'clients'));   // clients-scan-ok: quét email khách cũ lúc đăng nhập (vai trò khách, lỗi đã bắt)
           clientsSnap.forEach(d => {
             if ((d.data().email || '').toLowerCase().trim() === emailNorm0) matchedClientId = d.id;
           });
@@ -373,9 +423,12 @@ async function loadUserProfile(user) {
         }
       }
       if (matchedClientId) {
-        await updateDoc(userRef, { role: 'client', clientId: matchedClientId });
-        userRole     = 'client';
-        userClientId = matchedClientId;
+        // Khách đăng nhập trước, coach gán Gmail sau (như Kem 04/10). Không tự
+        // updateDoc(users, {clientId}) — luật cấm khách tự đổi clientId nên lệnh
+        // đó văng lỗi và chặn đăng nhập. Server tra /clientEmails rồi gán.
+        const r = await _claimMyClient(false);
+        if (!r) return;                     // đã hiện màn báo lỗi
+        if (r.clientId) { userRole = 'client'; userClientId = r.clientId; }
       }
     }
   }
@@ -384,8 +437,38 @@ async function loadUserProfile(user) {
   return _launchAfterProfile(user);
 }
 
+/**
+ * Gọi claimMyClient. Lỗi thì hiện màn báo lỗi và trả null — KHÔNG ném ra:
+ * onAuthStateChanged bắt lỗi rồi đẩy về màn đăng nhập, đè mất lời báo.
+ */
+async function _claimMyClient(create) {
+  try {
+    const fn = firebase.app().functions('asia-southeast1').httpsCallable('claimMyClient', { timeout: 30000 });
+    const res = await fn({ create });
+    const d = res.data || {};
+    if (create && !d.clientId) throw new Error('Không tạo được hồ sơ.');
+    return d;
+  } catch (e) {
+    console.error('[claimMyClient]', e);
+    showNoClientError((e && e.message) || 'Không gắn được tài khoản với hồ sơ khách.');
+    return null;
+  }
+}
+
 // Background re-verify: silently refresh cache without blocking UI
 async function _verifyUserProfileBg(user) {
+  // Coach: đọc lại coaches/{email}. Bị tắt quyền hoặc đổi admin thì xoá cache
+  // và tải lại — luật đã chặn dữ liệu, nhưng giao diện coach không được ở lại.
+  if (userRole === 'coach') {
+    const co = await _resolveCoach(user);
+    if (!co.coach || co.admin !== userIsAdmin) {
+      localStorage.removeItem(_USER_CACHE_KEY(user.uid));
+      location.reload();
+    } else {
+      _bindCoachUid(user, co.admin);
+    }
+    return;
+  }
   try {
     const snap = await getDoc(doc(db, 'users', user.uid));
     if (!snap.exists) {
@@ -393,7 +476,9 @@ async function _verifyUserProfileBg(user) {
       localStorage.removeItem(_USER_CACHE_KEY(user.uid));
       return;
     }
-    const newRole     = snap.data().role;
+    // users.role 'coach' cũ không còn là coach — không được ghi vào cache, nếu
+    // không lần mở sau đi đường nhanh thẳng vào giao diện coach.
+    const newRole     = snap.data().role === 'coach' ? 'client' : snap.data().role;
     const newClientId = snap.data().clientId || null;
     // Update cache; if role changed force a reload next time
     localStorage.setItem(_USER_CACHE_KEY(user.uid), JSON.stringify({ role: newRole, clientId: newClientId }));
@@ -560,7 +645,7 @@ async function loadApp() {
         // Legacy fallback — denied for client-role accounts by design; treat as no match.
         let hits = [];
         try {
-          const csSnap = await getDocs(collection(db, 'clients'));
+          const csSnap = await getDocs(collection(db, 'clients'));   // clients-scan-ok: quét email khách cũ (vai trò khách, lỗi đã bắt)
           csSnap.forEach(d => {
             if ((d.data().email || '').toLowerCase().trim() === emailNorm2) hits.push(d.id);
           });
@@ -601,7 +686,7 @@ async function loadApp() {
       if (!recovered) {
         // Legacy scan — denied for client-role accounts by design.
         try {
-          const csSnap2 = await getDocs(collection(db, 'clients'));
+          const csSnap2 = await getDocs(collection(db, 'clients'));   // clients-scan-ok: quét email khách cũ (vai trò khách, lỗi đã bắt)
           const matches = [];
           csSnap2.forEach(d => {
             if ((d.data().email || '').toLowerCase().trim() === emailNorm3) matches.push(d);
@@ -680,8 +765,147 @@ async function loadApp() {
 // (Anh Đạo, 5 ngày), thuần do thứ tự sắp xếp chứ không phải chủ ý.
 const COACH_HOME_CLIENT = 'longchu';
 
+/**
+ * Danh sách khách mà người đang đăng nhập được thấy. MỌI truy vấn danh sách
+ * clients phải đi qua đây (tests/clients-query.test.js quét).
+ *
+ * firestore.rules không phải bộ lọc: coach truy vấn trần `clients` là bị từ
+ * chối CẢ LẦN, không trả về một phần — nên coach luôn kèm where coachUid.
+ * Admin mặc định cũng chỉ thấy khách của mình; bật "Tất cả coach" mới thấy hết.
+ */
+let _allCoaches = false;
+try { _allCoaches = localStorage.getItem('pulse_all_coaches') === '1'; } catch (_e) {}
+function clientsQuery() {
+  if (userIsAdmin && _allCoaches) return collection(db, 'clients');
+  return query(collection(db, 'clients'), where('coachUid', '==', currentUser.uid));
+}
+async function setAllCoaches(on) {
+  if (!userIsAdmin) return;
+  _allCoaches = !!on;
+  try { localStorage.setItem('pulse_all_coaches', _allCoaches ? '1' : '0'); } catch (_e) {}
+  await loadAllClients();
+  const sp = document.getElementById('schedule-page');
+  if (sp && sp.offsetParent && typeof renderSchedulePage === 'function') renderSchedulePage();
+}
+
+// ── QUẢN LÝ COACH (chỉ admin) ─────────────────────────────────────────────
+// Ghi thẳng Firestore — luật chỉ cho admin ghi coaches/* và clients.coachUid,
+// nên không cần callable riêng. Mọi thay đổi có hiệu lực ngay ở lượt luật kế
+// tiếp: tắt một coach là người đó mất quyền đọc khách liền.
+let _caCoaches = [];      // [{ email, name, active, isAdmin, uid }]
+
+async function openCoachAdmin() {
+  if (!userIsAdmin) return;
+  document.getElementById('ca-all').checked = _allCoaches;
+  document.getElementById('ca-err').textContent = '';
+  document.getElementById('coach-admin-modal').classList.add('open');
+  await caRefresh();
+}
+
+async function caRefresh() {
+  const list = document.getElementById('ca-list');
+  try {
+    const [cs, all] = await Promise.all([
+      getDocs(collection(db, 'coaches')),
+      getDocs(collection(db, 'clients')),   // clients-scan-ok: màn Coach, chỉ admin
+    ]);
+    _caCoaches = [];
+    cs.forEach(d => _caCoaches.push({ email: d.id, ...d.data() }));
+    // Admin gốc luôn có mặt, kể cả khi doc chưa được tạo.
+    if (!_caCoaches.some(c => c.email === BOOTSTRAP_ADMIN)) {
+      _caCoaches.unshift({ email: BOOTSTRAP_ADMIN, name: 'Admin', active: true, isAdmin: true,
+        uid: currentUser && currentUser.email === BOOTSTRAP_ADMIN ? currentUser.uid : null });
+    }
+    const clients = [];
+    all.forEach(d => clients.push({ id: d.id, ...d.data() }));
+    const count = (uid) => uid ? clients.filter(c => c.coachUid === uid).length : 0;
+    const orphans = clients.filter(c => !c.coachUid || !_caCoaches.some(k => k.uid && k.uid === c.coachUid));
+
+    list.innerHTML = _caCoaches.map(c => {
+      const boot = c.email === BOOTSTRAP_ADMIN;
+      return '<div class="ca-item' + (c.active ? '' : ' off') + '">'
+        + '<div class="ca-who"><b>' + escHtml(c.name || c.email) + '</b>'
+        + (c.isAdmin ? ' <span class="ca-tag">admin</span>' : '')
+        + '<div class="ca-mail">' + escHtml(c.email) + ' · '
+        + (c.uid ? count(c.uid) + ' khách' : 'chưa đăng nhập lần nào') + '</div></div>'
+        + (boot ? '' : '<button class="add-client-btn" onclick="caSetActive(\'' + escHtml(c.email) + '\',' + !c.active + ')">'
+          + (c.active ? 'Tắt' : 'Bật lại') + '</button>')
+        + '</div>';
+    }).join('') + (orphans.length
+      ? '<div class="ca-note">' + orphans.length + ' khách chưa thuộc coach nào: '
+        + orphans.slice(0, 8).map(c => escHtml(c.name || c.id)).join(', ') + (orphans.length > 8 ? '…' : '') + '</div>'
+      : '');
+
+    const mvClient = document.getElementById('ca-mv-client');
+    mvClient.innerHTML = clients
+      .sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id), 'vi'))
+      .map(c => {
+        const owner = _caCoaches.find(k => k.uid && k.uid === c.coachUid);
+        return '<option value="' + escHtml(c.id) + '">' + escHtml(c.name || c.id)
+          + ' — ' + escHtml(owner ? (owner.name || owner.email) : 'chưa có coach') + '</option>';
+      }).join('');
+    // Chỉ coach đã đăng nhập ít nhất một lần (đã có uid) mới nhận khách được.
+    document.getElementById('ca-mv-coach').innerHTML = _caCoaches
+      .filter(c => c.active && c.uid)
+      .map(c => '<option value="' + escHtml(c.uid) + '">' + escHtml(c.name || c.email) + '</option>').join('');
+  } catch (e) {
+    console.error('[coach-admin]', e);
+    list.textContent = 'Không tải được: ' + (e.message || e);
+  }
+}
+
+async function caInvite() {
+  const err = document.getElementById('ca-err');
+  const email = (document.getElementById('ca-inv-email').value || '').trim().toLowerCase();
+  const name = (document.getElementById('ca-inv-name').value || '').trim();
+  err.textContent = '';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { err.textContent = 'Gmail không hợp lệ.'; return; }
+  try {
+    // Một Gmail một vai trò: đang là khách thì đăng nhập sẽ mở hồ sơ khách
+    // hay giao diện coach? Không để mập mờ — từ chối.
+    const asClient = await getDoc(doc(db, 'clientEmails', email));
+    if (asClient.exists) {
+      err.textContent = 'Gmail này đang là của khách "' + (asClient.data().clientId || '?') + '". Dùng Gmail khác cho coach.';
+      return;
+    }
+    const cur = await getDoc(doc(db, 'coaches', email));
+    if (cur.exists) { err.textContent = 'Gmail này đã là coach.'; return; }
+    await setDoc(doc(db, 'coaches', email), {
+      name: name || email, active: true, isAdmin: false, invitedAt: new Date().toISOString(),
+      invitedBy: currentUser.email,
+    });
+    document.getElementById('ca-inv-email').value = '';
+    document.getElementById('ca-inv-name').value = '';
+    await caRefresh();
+  } catch (e) { err.textContent = 'Không mời được: ' + (e.message || e); }
+}
+
+async function caSetActive(email, active) {
+  if (email === BOOTSTRAP_ADMIN) return;
+  if (!active && !confirm('Tắt coach ' + email + '? Người này mất quyền xem khách NGAY. Khách của họ vẫn còn, admin chuyển sang coach khác được.')) return;
+  try {
+    await updateDoc(doc(db, 'coaches', email), { active: !!active });
+    await caRefresh();
+  } catch (e) { document.getElementById('ca-err').textContent = 'Không đổi được: ' + (e.message || e); }
+}
+
+async function caMoveClient() {
+  const err = document.getElementById('ca-err');
+  const cid = document.getElementById('ca-mv-client').value;
+  const uid = document.getElementById('ca-mv-coach').value;
+  err.textContent = '';
+  if (!cid || !uid) { err.textContent = 'Chọn khách và coach.'; return; }
+  const coach = _caCoaches.find(c => c.uid === uid);
+  if (!confirm('Chuyển khách này sang ' + (coach ? (coach.name || coach.email) : uid) + '? Coach cũ sẽ không thấy khách nữa.')) return;
+  try {
+    await updateDoc(doc(db, 'clients', cid), { coachUid: uid });
+    await caRefresh();
+    await loadAllClients();
+  } catch (e) { err.textContent = 'Không chuyển được: ' + (e.message || e); }
+}
+
 async function loadAllClients() {
-  const snap = await getDocs(collection(db, 'clients'));
+  const snap = await getDocs(clientsQuery());
   clientsData = [];
   snap.forEach(d => clientsData.push({ id: d.id, ...d.data() }));
   // Sort by most program days first — ensures Thai Son/Sang load before empty clients
@@ -856,15 +1080,9 @@ async function saveClientInfo() {
 
   await updateDoc(doc(db, 'clients', activeClient.id), { name, email, level, goal });
 
-  // Update linked user record if email changed
-  if (email !== oldEmail) {
-    const usersSnap = await getDocs(query(collection(db, 'users')));
-    usersSnap.forEach(async d => {
-      if (d.data().clientId === activeClient.id) {
-        await updateDoc(doc(db, 'users', d.id), { email, role: 'client' });
-      }
-    });
-  }
+  // Không quét bảng users để nối tài khoản nữa. Bản cũ dùng forEach(async …)
+  // không await: lỗi bị nuốt và modal đóng trước khi ghi xong. Khách đăng nhập
+  // bằng Gmail mới thì claimMyClient (server) tra /clientEmails và tự nối.
 
   closeModal('edit-client-modal');
   await loadAllClients();
@@ -912,13 +1130,8 @@ async function addClient(opts) {
     } catch (e) { console.warn('[addClient] profile seed failed', e); }
   }
 
-  // Link user record if already exists
-  const usersSnap = await getDocs(query(collection(db, 'users')));
-  usersSnap.forEach(async d => {
-    if (d.data().email === email) {
-      await updateDoc(doc(db, 'users', d.id), { clientId, role: 'client' });
-    }
-  });
+  // Tài khoản đã từng đăng nhập bằng Gmail này sẽ được nối ở lần đăng nhập
+  // kế tiếp (claimMyClient tra /clientEmails) — không quét bảng users ở đây.
 
   closeModal('add-client-modal');
   await loadAllClients();
@@ -1742,9 +1955,9 @@ function cdLoadValue(day, pi, ei, bw) {
 // Hai lý do, cái thứ hai quan trọng hơn:
 //   1. Bộ chọn khách cần cả 20 ảnh cùng lúc. Chúng đi kèm clientsData — một
 //      lần đọc vốn đã xảy ra — thay vì 20 lượt tải ảnh riêng.
-//   2. storage.rules hiện là `allow read, write: if request.auth != null`,
-//      tức mọi tài khoản đã đăng nhập đọc ghi được mọi file. Client doc thì
-//      luật isClientOwner() đã siết sẵn, nên ảnh mặt nằm đây an toàn hơn hẳn.
+//   2. Cùng một luật quyền với hồ sơ (isClientOwner), không phải giữ thêm một
+//      bộ luật Storage cho riêng ảnh đại diện. (storage.rules từng mở cho mọi
+//      tài khoản đăng nhập; nay đã khoá theo khách — xem storage.rules.)
 // 128px: ô trong bộ chọn khách 34px (3x = 102px), ô dashboard 56px. Một ảnh
 // khoảng 5–8KB, cả 20 khách thêm chừng 150KB vào lần đọc clientsData.
 const CD_AV_PX = 128;
@@ -4365,8 +4578,11 @@ async function resetSessions() {
 
 async function recoverLegacySessions() {
   if (!activeClient) return;
+  // Quét TOÀN BỘ clients tìm doc lạc — việc bảo trì, chỉ admin (coach thường
+  // truy vấn trần là bị luật từ chối).
+  if (!userIsAdmin) { alert('Chỉ admin chạy được việc này.'); return; }
   // Scan root /clients for orphaned workout-history docs (have date+done+total but no name/email)
-  const snap = await getDocs(collection(db, 'clients'));
+  const snap = await getDocs(collection(db, 'clients'));   // clients-scan-ok: recoverLegacySessions, chỉ admin
   const legacy = snap.docs.filter(d => {
     const v = d.data();
     return v.date && v.done !== undefined && v.total !== undefined && !v.name && !v.email;
@@ -7106,6 +7322,7 @@ function renderClientBar(isCoach) {
   // rule beats a plain inline style. That is why clients saw the coach bar
   // stuck on "Loading...".
   bar.classList.toggle('hidden', !isCoach);
+  document.getElementById('coach-admin-btn')?.classList.toggle('hidden', !userIsAdmin);
   loadStorageUsage(activeClient);
   if (isCoach) {
     bar.style.display = 'flex';
@@ -7343,9 +7560,20 @@ function _schedFmtLabel(d) { return d.toLocaleDateString('vi-VN',{day:'2-digit',
 function _tToMin(t) { const [h,m]=t.split(':').map(Number); return h*60+m; }
 function _minToT(m) { return `${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`; }
 
+/**
+ * Lịch của người đang đăng nhập — cùng nguyên tắc clientsQuery(): coach luôn
+ * kèm where coachUid (luật từ chối truy vấn trần), admin bật "Tất cả coach"
+ * mới thấy hết. Cần index ghép (coachUid, date) — firestore.indexes.json.
+ */
+function bookingsQuery(...constraints) {
+  const base = collection(db, 'bookings');
+  if (userIsAdmin && _allCoaches) return query(base, ...constraints);
+  return query(base, where('coachUid', '==', currentUser.uid), ...constraints);
+}
+
 async function _schedLoadWeek(weekStart) {
   const dates = Array.from({length:7}, (_,i) => _schedFmt(_schedAddDays(weekStart,i)));
-  const snap = await getDocs(query(collection(db,'bookings'), where('date','in',dates)));
+  const snap = await getDocs(bookingsQuery(where('date','in',dates)));
   const evts = [];
   snap.forEach(d => evts.push({id:d.id, ...d.data()}));
   return evts;
@@ -7663,7 +7891,9 @@ async function schedSaveNew(date) {
   schedCloseModal();
   _schedRenderCalendar(true);
   try {
-    await setDoc(doc(db,'bookings',id), { date, startTime:start, endTime:end, title, status:'booked', kind, updatedAt:serverTimestamp() });
+    // coachUid bắt buộc — luật từ chối lịch không có chủ.
+    await setDoc(doc(db,'bookings',id), { date, startTime:start, endTime:end, title, status:'booked', kind,
+      coachUid: currentUser.uid, updatedAt:serverTimestamp() });
   } catch(err) {
     console.error('[schedule] save failed', err);
     _schedEvents = _schedEvents.filter(e => e.id !== id);
@@ -7825,8 +8055,7 @@ async function _schedLoadSummary() {
   const { y, mo } = _schedSummaryMonth();
   const ms=String(mo+1).padStart(2,'0');
   // Load all bookings for month, filter done in JS (avoids composite index requirement)
-  const snap=await getDocs(query(
-    collection(db,'bookings'),
+  const snap=await getDocs(bookingsQuery(
     where('date','>=',`${y}-${ms}-01`),
     where('date','<=',`${y}-${ms}-31`)
   ));
@@ -8139,11 +8368,17 @@ function _aiFmt(t) {
 function aiPaint() {
   const log = document.getElementById('ai-log');
   if (!log) return;
+  if (_aiForm && !_aiMsgs.length) { log.innerHTML = _aiNewClientForm(); log.scrollTop = 0; return; }
   if (!_aiMsgs.length) {
     log.innerHTML = '<div class="ai-hi">'
       + '<p>Hỏi gì về khách và giáo án cũng được. Tao tự tra dữ liệu thật trong app.</p>'
       + '<p class="ai-hi-note">Đẩy giáo án và tạo khách mới thì tao làm được, nhưng '
       + '<b>không tự ghi</b> — tao dựng thẻ, mày bấm Đồng ý mới lưu.</p>'
+      // Gợi ý nổi bật: mở form, coach chỉ điền thông tin khách — prompt dài
+      // do app tự dựng, khỏi phải gõ lại mỗi lần có khách mới.
+      + '<button type="button" class="ai-eg ai-eg-main" onclick="aiFormOpen()">'
+        + '<span class="ai-eg-t">Soạn giáo án cho khách mới</span>'
+        + '<span class="ai-eg-s">Điền thông tin khách, không cần gõ prompt</span></button>'
       + ['Giáo án của Kem có hợp trình độ không',
           'Khách nào lâu chưa tập nhất',
           'Gợi ý bài thay cho Romanian Deadlift']
@@ -8154,8 +8389,10 @@ function aiPaint() {
   }
   log.innerHTML = _aiMsgs.map((m, i) => {
     if (m.role === 'confirm') return _aiCard(m, i);
+    // m.show: bản rút gọn cho lượt gửi từ form — prompt đầy đủ vẫn nằm ở m.text
+    // và đi sang model, nhưng in cả khối chỉ dẫn dài lên bong bóng thì loãng.
     return '<div class="ai-msg ai-' + (m.role === 'user' ? 'u' : 'a') + '">'
-      + (m.role === 'user' ? escHtml(m.text) : _aiFmt(m.text)) + '</div>';
+      + (m.role === 'user' ? escHtml(m.show || m.text) : _aiFmt(m.text)) + '</div>';
   }).join('') + (_aiBusy ? '<div class="ai-wait">Đang tra dữ liệu…</div>' : '');
   log.scrollTop = log.scrollHeight;
 }
@@ -8179,11 +8416,25 @@ function _aiCard(m, i) {
     rows.push(['Buổi/tuần', String(p.sessionsPerWeek)]);
     rows.push(['Giáo án', (p.program || []).length
       ? (p.program || []).map((x) => x.day + ' (' + x.exercises + ')').join(', ') : 'chưa có']);
-    rows.push(['Đăng nhập', p.login || '']);
+    // Gmail là ô nhập chứ không phải chữ: model hay quên truyền email vào
+    // propose_new_client, và thiếu nó thì khách không đăng nhập được. Coach
+    // điền/sửa ngay trên thẻ trước khi bấm Đồng ý.
+    rows.push(['Gmail', null]);
   }
   const title = a.kind === 'apply_program' ? 'Đẩy giáo án' : 'Tạo khách mới';
-  const body = rows.map(([k, v]) =>
-    '<div class="ai-cf-r"><span>' + escHtml(k) + '</span><b>' + escHtml(v || '—') + '</b></div>').join('');
+  const editable = !m.state || m.state === 'chờ' || String(m.state).indexOf('lỗi') === 0;
+  const body = rows.map(([k, v]) => {
+    if (v === null) {
+      const em = a.email || '';
+      const cell = editable
+        ? '<input class="ai-cf-em" type="email" inputmode="email" autocomplete="off" autocapitalize="off"'
+          + ' spellcheck="false" placeholder="vd: ten@gmail.com"'
+          + ' value="' + escHtml(em) + '" oninput="aiCardEmail(' + i + ', this.value)">'
+        : '<b>' + escHtml(em || 'không — coach tự quản') + '</b>';
+      return '<div class="ai-cf-r"><span>' + escHtml(k) + '</span>' + cell + '</div>';
+    }
+    return '<div class="ai-cf-r"><span>' + escHtml(k) + '</span><b>' + escHtml(v || '—') + '</b></div>';
+  }).join('');
   // data-state lái màu, nhãn góc và việc ẩn nút — KHÔNG để CSS đoán qua sự có
   // mặt của .ai-cf-done/.ai-cf-no. Đoán kiểu đó thì "Đang lưu…" ra xanh "Đã lưu",
   // còn "Đã bỏ qua" ra đỏ "Lỗi" — hai thứ đều sai nghĩa.
@@ -8206,11 +8457,22 @@ function _aiCard(m, i) {
     + escHtml(title) + '</div>' + body + foot + '</div>';
 }
 
+/** Coach gõ Gmail trên thẻ tạo khách — ghi thẳng vào action, không vẽ lại (giữ con trỏ). */
+function aiCardEmail(i, val) {
+  const m = _aiMsgs[i];
+  if (m && m.action && m.action.kind === 'create_client') m.action.email = String(val || '').trim().toLowerCase();
+}
+
 async function aiApprove(i) {
   const m = _aiMsgs[i];
   // Cho bấm lại sau khi lỗi: mạng rớt giữa chừng là chuyện thường, bắt coach
   // hỏi lại trợ lý từ đầu chỉ để lấy lại đúng đề xuất cũ là vô lý.
   if (!m || (m.state !== 'chờ' && String(m.state).indexOf('lỗi') !== 0)) return;
+  if (m.action.kind === 'create_client') {
+    const em = String(m.action.email || '').trim().toLowerCase();
+    if (em && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) { m.state = 'lỗi: Gmail không hợp lệ'; aiPaint(); return; }
+    m.action.email = em;
+  }
   m.state = 'đang'; aiPaint();
   try {
     const fn = firebase.app().functions('asia-southeast1')
@@ -8236,20 +8498,133 @@ function aiReject(i) {
   if (m && (m.state === 'chờ' || String(m.state).indexOf('lỗi') === 0)) { m.state = 'huỷ'; aiPaint(); }
 }
 
+// ── Form "Soạn giáo án cho khách mới" ──────────────────────────────────
+//
+// Coach điền như điền phiếu, app tự dựng prompt đầy đủ rồi gửi. Prompt bám
+// đúng luật của trợ lý: khoá SessionA/B/C, bài phải có trong thư viện, gọi
+// propose_new_client MỘT lần kèm giáo án — vẫn qua thẻ duyệt, không tự ghi.
+let _aiForm = false;
+let _aiFormEmail = '';     // Gmail điền ở form, để bù khi model quên truyền vào đề xuất
+
+const _AI_NF_LEVELS = ['Beginner', 'Intermediate', 'Advanced'];
+const _AI_NF_PLACES = ['Phòng gym đầy đủ', 'Gym nhỏ / ít máy', 'Tại nhà — tạ đơn, dây kháng lực', 'Không dụng cụ'];
+
+function _aiNewClientForm() {
+  const opt = (arr, sel) => arr.map((v) => '<option' + (v === sel ? ' selected' : '') + '>'
+    + escHtml(v) + '</option>').join('');
+  const f = (label, ctrl, wide) => '<label class="ai-nf-f' + (wide ? ' wide' : '') + '">'
+    + '<span>' + label + '</span>' + ctrl + '</label>';
+  return '<form class="ai-nf" id="ai-nf" onsubmit="aiFormSend(event)" novalidate>'
+    + '<div class="ai-nf-h">Giáo án cho khách mới</div>'
+    + '<p class="ai-nf-sub">Điền những gì mày biết — ô để trống trợ lý sẽ không tự bịa.</p>'
+    + '<div class="ai-nf-g">'
+      + f('Tên khách *', '<input name="name" required autocomplete="off" placeholder="VD: Minh Anh">', true)
+      + f('Tuổi', '<input name="age" type="number" inputmode="numeric" min="8" max="90" placeholder="—">')
+      + f('Giới tính', '<select name="gender"><option value="">—</option><option>Nam</option><option>Nữ</option></select>')
+      + f('Chiều cao (cm)', '<input name="height" type="number" inputmode="decimal" min="100" max="230" placeholder="—">')
+      + f('Cân nặng (kg)', '<input name="weight" type="number" inputmode="decimal" min="25" max="250" placeholder="—">')
+      + f('Trình độ', '<select name="level">' + opt(_AI_NF_LEVELS, 'Beginner') + '</select>')
+      + f('Buổi / tuần', '<select name="spw">' + opt(['1','2','3','4','5','6'], '3') + '</select>')
+      + f('Mỗi buổi', '<select name="dur">' + opt(['45 phút','60 phút','75 phút','90 phút'], '60 phút') + '</select>')
+      + f('Nơi tập', '<select name="place">' + opt(_AI_NF_PLACES, _AI_NF_PLACES[0]) + '</select>', true)
+      + f('Mục tiêu *', '<textarea name="goal" rows="2" required placeholder="VD: giảm mỡ, tăng sức mạnh thân dưới"></textarea>', true)
+      + f('Chấn thương / bệnh lý', '<textarea name="health" rows="2" placeholder="VD: đau lưng dưới khi gập người — trống nếu chưa rõ"></textarea>', true)
+      + f('Ghi chú thêm', '<textarea name="notes" rows="2" placeholder="Kinh nghiệm tập, bài thích/ghét, lịch sinh hoạt…"></textarea>', true)
+      + f('Gmail khách (để tự đăng nhập)', '<input name="email" type="email" inputmode="email" autocomplete="off" autocapitalize="off" placeholder="Bỏ trống nếu chưa có">', true)
+    + '</div>'
+    + '<div class="ai-nf-err" id="ai-nf-err" role="alert"></div>'
+    + '<div class="ai-nf-btns">'
+      + '<button type="button" class="ai-cf-cancel" onclick="aiFormClose()">Huỷ</button>'
+      + '<button type="submit" class="ai-cf-yes">Soạn giáo án</button>'
+    + '</div></form>';
+}
+
+function aiFormOpen() {
+  _aiForm = true; aiPaint();
+  setTimeout(() => { const i = document.querySelector('#ai-nf [name="name"]'); if (i) i.focus(); }, 60);
+}
+function aiFormClose() { _aiForm = false; aiPaint(); }
+
+/**
+ * Dữ liệu form -> { prompt, show } hoặc { error }.
+ * Tách riêng, không đụng DOM, để test được.
+ */
+function aiBuildProgramPrompt(d) {
+  const v = (k) => String(d[k] == null ? '' : d[k]).trim();
+  const name = v('name'), goal = v('goal');
+  if (!name) return { error: 'Thiếu tên khách.' };
+  if (!goal) return { error: 'Thiếu mục tiêu.' };
+  const email = v('email').toLowerCase();
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: 'Gmail không hợp lệ.' };
+  const spw = Math.min(6, Math.max(1, parseInt(v('spw'), 10) || 3));
+  const keys = Array.from({ length: spw }, (_, i) => 'Session' + String.fromCharCode(65 + i)).join(', ');
+  const age = parseInt(v('age'), 10);
+
+  const info = [
+    ['Tên', name],
+    ['Tuổi', v('age')],
+    ['Giới tính', v('gender')],
+    ['Chiều cao', v('height') && v('height') + ' cm'],
+    ['Cân nặng', v('weight') && v('weight') + ' kg'],
+    ['Trình độ', v('level') || 'Beginner'],
+    ['Số buổi/tuần', String(spw)],
+    ['Thời lượng mỗi buổi', v('dur')],
+    ['Nơi tập / dụng cụ', v('place')],
+    ['Mục tiêu', goal],
+    ['Chấn thương / bệnh lý', v('health') || 'CHƯA GHI (không có nghĩa là khoẻ mạnh — đừng giả định)'],
+    ['Ghi chú', v('notes')],
+    ['Gmail', email || 'chưa có — bỏ trống, KHÔNG bịa địa chỉ'],
+  ].filter(([, x]) => x).map(([k, x]) => '- ' + k + ': ' + x).join('\n');
+
+  const rules = [
+    'Soạn giáo án ' + spw + ' buổi/tuần cho khách mới này. Khoá buổi: ' + keys + '.',
+    'Mỗi buổi chia phase (Warmup → bài chính → phụ trợ/Core), vừa thời lượng ' + (v('dur') || '60 phút') + '.',
+    'Mỗi bài có setsReps, tempo, cue (kỹ thuật + nghỉ bao lâu). Chỉ dùng bài CÓ trong thư viện — không chắc thì search_exercises.',
+    'Chọn bài theo đúng dụng cụ ở nơi tập, và tránh/thay bài động vào chỗ chấn thương nếu có.',
+    'In bảng giáo án từng buổi cho tao xem, kèm 2–3 câu giải thích vì sao chia như vậy.',
+    'Rồi gọi propose_new_client MỘT lần, kèm luôn giáo án vừa soạn' + (email ? ' và Gmail ' + email : '') + ', để tao duyệt.',
+  ];
+  if (age > 0 && age < 18) {
+    rules.push('Khách DƯỚI 18 tuổi: ưu tiên kỹ thuật, tải vừa phải, không tập tới thất bại; nhắc cần phụ huynh đồng ý.');
+  }
+  const prompt = 'Thông tin khách mới:\n' + info + '\n\nYêu cầu:\n'
+    + rules.map((r, i) => (i + 1) + '. ' + r).join('\n');
+  const show = 'Soạn giáo án cho khách mới: ' + name + ' · ' + (v('level') || 'Beginner')
+    + ' · ' + spw + ' buổi/tuần — ' + goal;
+  return { prompt, show, email };
+}
+
+function aiFormSend(ev) {
+  if (ev) ev.preventDefault();
+  if (_aiBusy) return;
+  const form = document.getElementById('ai-nf');
+  if (!form) return;
+  const r = aiBuildProgramPrompt(Object.fromEntries(new FormData(form).entries()));
+  if (r.error) {
+    const e = document.getElementById('ai-nf-err');
+    if (e) e.textContent = r.error;
+    return;
+  }
+  _aiForm = false;
+  _aiFormEmail = r.email || '';
+  aiSend(null, r.prompt, r.show);
+}
+
 function aiAsk(q) {
   const i = document.getElementById('ai-in');
   if (i) i.value = q;
   aiSend();
 }
 
-async function aiSend(ev) {
+async function aiSend(ev, text, show) {
   if (ev) ev.preventDefault();
   if (_aiBusy) return;
   const input = document.getElementById('ai-in');
-  const q = (input.value || '').trim();
+  const q = (text != null ? String(text) : (input.value || '')).trim();
   if (!q) return;
-  input.value = '';
-  _aiMsgs.push({ role: 'user', text: q });
+  if (text == null) input.value = '';
+  _aiForm = false;
+  _aiMsgs.push(show ? { role: 'user', text: q, show } : { role: 'user', text: q });
   _aiBusy = true;
   aiPaint();
 
@@ -8274,6 +8649,10 @@ async function aiSend(ev) {
     // Đề xuất thay đổi dữ liệu: dựng thẻ duyệt riêng. Trợ lý KHÔNG tự ghi —
     // chưa bấm Đồng ý thì chưa có gì xuống Firestore.
     for (const p of (d.pending || [])) {
+      // Gmail điền ở form mà model quên chuyển vào đề xuất -> điền lại cho đủ.
+      if (p.action && p.action.kind === 'create_client' && !p.action.email && _aiFormEmail) {
+        p.action.email = _aiFormEmail;
+      }
       _aiMsgs.push({ role: 'confirm', action: p.action, preview: p.preview, state: 'chờ' });
     }
   } catch (e) {
@@ -9053,7 +9432,7 @@ async function loadBilling() {
     if (pd.exists) {
       const d = pd.data();
       ACCESS_PLANS = ACCESS_PLANS_DEFAULT.map(p => ({ ...p, ...(d[p.id] || {}) }));
-    } else if (userRole === 'coach') {
+    } else if (userIsAdmin) {           // bảng giá studio — chỉ admin ghi (luật cũng vậy)
       // Seed once, so the rules have prices to check client-raised invoices against.
       const seed = {};
       ACCESS_PLANS_DEFAULT.forEach(p => { seed[p.id] = { name: p.name, price: p.price, months: p.months, storageMb: p.storageMb }; });
@@ -9066,7 +9445,7 @@ async function loadBilling() {
     if (cd.exists) {
       const d = cd.data();
       COACHING_PKGS = COACHING_DEFAULT.map(p => ({ ...p, ...(d[p.id] || {}) }));
-    } else if (userRole === 'coach') {
+    } else if (userIsAdmin) {
       const seed = {};
       COACHING_DEFAULT.forEach(p => {
         seed[p.id] = { name: p.name, monthly: p.monthly, includesPlan: p.includesPlan, popular: p.popular,
@@ -9154,8 +9533,11 @@ async function billIssueCoaching(pkgId, months) {
 }
 
 /** Confirming payment is what extends access — the two must not drift apart. */
+let _billConfirming = null;   // id hoá đơn đang xác nhận — chặn bấm đúp
 async function billConfirm(invoiceId) {
-  if (userRole !== 'coach' || !activeClient) return;
+  // Studio thu chung: chỉ admin xác nhận đã nhận tiền (luật cũng chặn coach).
+  if (!userIsAdmin || !activeClient) return;
+  if (_billConfirming) return;
   const inv = _billInvoices.find(i => i.id === invoiceId);
   if (!inv || inv.status === 'paid') return;
   const method = prompt('Nhận qua đâu?', 'chuyển khoản');
@@ -9168,22 +9550,29 @@ async function billConfirm(invoiceId) {
   const planId = isCoaching ? ((pkg && pkg.includesPlan) || (activeClient.access || {}).planId || 'pro')
                             : inv.planId;
   const until = extendAccess((activeClient.access || {}).paidUntil, inv.months);
+  _billConfirming = invoiceId;
   try {
-    await setDoc(doc(db, 'clients', activeClient.id, 'invoices', invoiceId),
-      { status: 'paid', paidAt: new Date().toISOString(), method, extendedTo: until }, { merge: true });
     const patch = { 'access.planId': planId, 'access.paidUntil': until };
     if (isCoaching) {
       patch['coaching.packageId'] = inv.packageId;
       patch['coaching.paidUntil'] = until;
       patch['coaching.termMonths'] = inv.months;
     }
-    await updateDoc(doc(db, 'clients', activeClient.id), patch);
+    // MỘT batch: hoá đơn "đã trả" và hạn dùng app cùng ghi hoặc cùng không.
+    // Trước đây là hai lần ghi rời — rớt mạng giữa chừng thì hoá đơn ghi đã
+    // trả mà khách không được gia hạn, và bấm lại cũng không được vì nút đã ẩn.
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'clients', activeClient.id, 'invoices', invoiceId),
+      { status: 'paid', paidAt: new Date().toISOString(), method, extendedTo: until }, { merge: true });
+    batch.update(doc(db, 'clients', activeClient.id), patch);
+    await batch.commit();
     activeClient.access = { ...(activeClient.access || {}), planId, paidUntil: until };
     if (isCoaching) activeClient.coaching = { packageId: inv.packageId, paidUntil: until, termMonths: inv.months };
     _syncOpenInvoice(null);
     _blSheet = null;
     await loadBilling();
   } catch (e) { alert('Không xác nhận được: ' + (e.message || '')); }
+  finally { _billConfirming = null; }
 }
 
 /**
@@ -9421,7 +9810,7 @@ function renderBillingPage() {
         <div class="bl-dates"><span>${st.daysLeft >= 0 ? 'Đang dùng' : 'Đã hết hạn'}</span>
           <span>Hết hạn ${st.until}</span></div>`
         : `<div class="bl-until">Chưa có ngày hết hạn — hoá đơn đầu tiên được xác nhận sẽ bắt đầu tính.</div>`}
-      ${isCoach ? `<div class="bl-actions">
+      ${userIsAdmin ? `<div class="bl-actions">
           <button class="bl-set" onclick="openBillSettings()">Cài đặt thu tiền</button>
         </div>
         ${!(s.bankBin && s.account) ? `<div class="bl-warn">Chưa có tài khoản nhận tiền — mã QR sẽ không hiện.
@@ -9444,10 +9833,12 @@ function renderBillingPage() {
           <span class="bl-status bl-badge-expired">Chưa thanh toán</span>
         </div>
         <button class="bl-pay-btn" onclick="blOpenSheet('${due.id}')">Xem mã QR để chuyển khoản</button>
-        ${isCoach
+        ${userIsAdmin
           ? `<button class="bl-toggle" onclick="billConfirm('${due.id}')">Xác nhận đã nhận tiền · gia hạn đến ${
               extendAccess(acc.paidUntil, due.months)}</button>`
-          : `<div class="bl-wait">Chuyển khoản xong, coach xác nhận là gia hạn ngay.</div>`}
+          : isCoach
+            ? `<div class="bl-wait">Studio nhận tiền — admin xác nhận là gia hạn ngay.</div>`
+            : `<div class="bl-wait">Chuyển khoản xong, coach xác nhận là gia hạn ngay.</div>`}
         <button class="bl-cancel" onclick="billCancel('${due.id}')">Huỷ hoá đơn — chọn gói khác</button>
       </div>`;
   } else {
@@ -9555,6 +9946,7 @@ async function saveBillSettingsFromForm() {
   document.getElementById('bill-set-modal').classList.remove('open');
 }
 async function saveBillSettings(v) {
+  if (!userIsAdmin) { alert('Chỉ admin sửa tài khoản nhận tiền của studio.'); return; }
   try {
     await setDoc(doc(db, 'settings', 'billing'), v, { merge: true });
     _billSettings = { ...(_billSettings || {}), ...v };
@@ -12741,6 +13133,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <button class="add-client-btn" onclick="openEditClientModal()" style="background:#161111;border-color:rgba(255,255,255,0.60);color:rgba(255,255,255,0.88);">Edit</button>
     <button class="add-client-btn" onclick="openClientProfile()" style="background:#0a1a2e;border-color:#2a3a4e;color:#8FDBFF;">Profile</button>
     <button class="add-client-btn" id="export-xlsx-btn" onclick="exportClientExcel()" style="background:#0a2e18;border-color:#2a4e3a;color:#4fd18b;" title="Xuất báo cáo Excel">Excel</button>
+    <button class="add-client-btn hidden" id="coach-admin-btn" onclick="openCoachAdmin()" title="Quản lý coach — chỉ admin">Coach</button>
     <div id="stg-bar-coach" class="stg-host"></div>
   </div>
 
@@ -13220,6 +13613,31 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 </div>
 
 <!-- ADD CLIENT MODAL (coach only) -->
+<div class="modal-overlay" id="coach-admin-modal" onclick="if(event.target===this)closeModal('coach-admin-modal')">
+  <div class="modal ca-modal">
+    <div class="modal-title">Coach</div>
+    <div class="modal-sub">Mỗi khách thuộc một coach. Coach chỉ thấy khách của mình; admin thấy tất cả.</div>
+    <label class="ca-toggle"><input type="checkbox" id="ca-all" onchange="setAllCoaches(this.checked)">
+      <span>Xem khách và lịch của <b>tất cả coach</b></span></label>
+    <div class="ca-h">Danh sách coach</div>
+    <div id="ca-list" class="ca-list">Đang tải…</div>
+    <div class="ca-h">Mời coach mới</div>
+    <div class="ca-row">
+      <input class="form-input" id="ca-inv-email" type="email" autocomplete="off" autocapitalize="off" placeholder="gmail@gmail.com">
+      <input class="form-input" id="ca-inv-name" autocomplete="off" placeholder="Tên">
+      <button class="add-client-btn" onclick="caInvite()">Mời</button>
+    </div>
+    <div class="ca-note">Coach đăng nhập bằng đúng Gmail này. Gmail đang là của một khách thì không mời được — một Gmail chỉ một vai trò.</div>
+    <div class="ca-h">Chuyển khách sang coach khác</div>
+    <div class="ca-row">
+      <select class="form-select" id="ca-mv-client"></select>
+      <select class="form-select" id="ca-mv-coach"></select>
+      <button class="add-client-btn" onclick="caMoveClient()">Chuyển</button>
+    </div>
+    <div class="ca-err" id="ca-err" role="alert"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="add-client-modal" onclick="if(event.target===this)closeModal('add-client-modal')">
   <div class="modal">
     <div class="modal-title">Add New Client</div>
@@ -15357,6 +15775,61 @@ body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-even
 #ai-sheet .ai-eg:hover{ background: rgba(143,219,255,.10); border-color: rgba(143,219,255,.35); }
 #ai-sheet .ai-eg:active{ transform: scale(.98); }
 #ai-sheet .ai-eg:focus-visible{ outline: 2px solid var(--ai-acc); outline-offset: 2px; }
+/* ── Quản lý coach (admin) ─────────────────────────────────── */
+.ca-modal{max-width:560px}
+.ca-h{margin:16px 0 8px;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:rgba(255,255,255,.55)}
+.ca-toggle{display:flex;gap:10px;align-items:center;margin-top:10px;font-size:14px;cursor:pointer}
+.ca-toggle input{width:18px;height:18px}
+.ca-list{display:flex;flex-direction:column;gap:6px}
+.ca-item{display:flex;align-items:center;gap:10px;justify-content:space-between;padding:10px 12px;border:1px solid rgba(255,255,255,.12);border-radius:12px}
+.ca-item.off{opacity:.5}
+.ca-who{min-width:0}
+.ca-mail{font-size:12.5px;color:rgba(255,255,255,.55);overflow-wrap:anywhere}
+.ca-tag{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#8FDBFF;border:1px solid rgba(143,219,255,.4);border-radius:6px;padding:1px 6px}
+.ca-row{display:flex;gap:8px;flex-wrap:wrap}
+.ca-row > .form-input,.ca-row > .form-select{flex:1 1 160px;min-width:0}
+.ca-note{margin-top:8px;font-size:12.5px;color:rgba(255,255,255,.55);line-height:1.45}
+.ca-err{margin-top:10px;font-size:13.5px;font-weight:600;color:#EE5A4F}
+.ca-err:empty{display:none}
+
+/* gợi ý chính: mở form soạn giáo án khách mới — nổi hơn các câu hỏi mẫu */
+#ai-sheet .ai-eg-main{
+  flex-direction: column; align-items: flex-start; gap: 2px;
+  background: rgba(143,219,255,.12); border-color: rgba(143,219,255,.40);
+}
+#ai-sheet .ai-eg-t{ font-size: 15px; font-weight: 700; }
+#ai-sheet .ai-eg-s{ font-size: 13px; font-weight: 500; color: var(--ai-mut); }
+
+/* ── Form khách mới ──────────────────────────────────────────── */
+#ai-sheet .ai-nf{ display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
+#ai-sheet .ai-nf-h{ font-size: 20px; font-weight: 800; letter-spacing: -.02em; }
+#ai-sheet .ai-nf-sub{ margin: -4px 0 2px; font-size: 13.5px; color: var(--ai-mut); line-height: 1.45; }
+#ai-sheet .ai-nf-g{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+#ai-sheet .ai-nf-f{ display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+#ai-sheet .ai-nf-f.wide{ grid-column: 1 / -1; }
+#ai-sheet .ai-nf-f > span{ font-size: 11.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--ai-mut); }
+#ai-sheet .ai-nf-f input, #ai-sheet .ai-nf-f select, #ai-sheet .ai-nf-f textarea{
+  width: 100%; min-width: 0; min-height: 44px; box-sizing: border-box;
+  padding: 10px 12px; border-radius: 12px;
+  border: 1px solid rgba(255,255,255,.10); background: rgba(255,255,255,.07);
+  color: var(--ai-txt); font: inherit; font-size: 16px; line-height: 1.35;
+  outline: none; -webkit-appearance: none; appearance: none;
+}
+#ai-sheet .ai-nf-f textarea{ resize: vertical; min-height: 64px; }
+#ai-sheet .ai-nf-f select{
+  padding-right: 34px; cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%23999' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 13px center;
+}
+#ai-sheet .ai-nf-f select option{ background: var(--ai-bg2); color: var(--ai-txt); }
+#ai-sheet .ai-nf-f input::placeholder, #ai-sheet .ai-nf-f textarea::placeholder{ color: var(--ai-mut); opacity: 1; }
+#ai-sheet .ai-nf-f :is(input, select, textarea):focus{
+  border-color: rgba(143,219,255,.6); background-color: rgba(255,255,255,.09);
+  box-shadow: 0 0 0 3px rgba(143,219,255,.15);
+}
+#ai-sheet .ai-nf-err{ font-size: 13.5px; font-weight: 600; color: var(--ai-bad); }
+#ai-sheet .ai-nf-err:empty{ display: none; }
+#ai-sheet .ai-nf-btns{ display: flex; gap: 8px; justify-content: flex-end; padding-bottom: 4px; }
 
 /* ── THẺ DUYỆT ────────────────────────────────────────────────────
    Khác bong bóng ở mọi mặt: nền ĐẶC (không phải kính), viền 1.5px + quầng 4px,
@@ -15430,6 +15903,16 @@ body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-even
 }
 #ai-sheet .ai-cf-r > :last-child{ font-weight: 600; color: var(--ai-txt); overflow-wrap: anywhere; }
 #ai-sheet .ai-cf-r > :only-child{ grid-column: 1 / -1; }
+#ai-sheet .ai-cf-r:has(.ai-cf-em){ align-items: center; }
+#ai-sheet .ai-cf-em{
+  width: 100%; min-width: 0; min-height: 40px; box-sizing: border-box;
+  padding: 8px 12px; border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.07);
+  color: var(--ai-txt); font: inherit; font-size: 16px; font-weight: 600;
+  outline: none; -webkit-appearance: none; appearance: none;
+}
+#ai-sheet .ai-cf-em::placeholder{ color: var(--ai-mut); font-weight: 500; opacity: 1; }
+#ai-sheet .ai-cf-em:focus{ border-color: rgba(143,219,255,.6); box-shadow: 0 0 0 3px rgba(143,219,255,.15); }
 
 /* Hai nút bằng hệt nhau về kích thước — Đồng ý không có lợi thế vị trí hay diện tích */
 #ai-sheet .ai-cf-btns{

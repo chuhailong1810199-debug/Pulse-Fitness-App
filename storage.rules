@@ -1,8 +1,71 @@
 rules_version = '2';
+
+// Kho ảnh tiến độ và video kỹ thuật của khách.
+//
+// TRƯỚC ĐÂY: `allow read, write: if request.auth != null` cho MỌI đường dẫn —
+// bất kỳ Gmail nào đăng nhập được là tải, ghi đè, xoá được ảnh cơ thể của mọi
+// khách (có khách 14–15 tuổi). Id khách dễ đoán ('cindy', 'sang') nên không cần
+// biết gì thêm.
+//
+// BÂY GIỜ: chỉ hai thư mục theo khách, và chỉ admin, coach phụ trách khách đó,
+// hoặc chính khách đó.
+// Logic quyền chép từ firestore.rules (isAdmin / canManage / isClientOwner) —
+// đổi bên kia thì phải đổi ở đây. Đường dẫn nào khác: từ chối hết.
+//
+// Lần deploy đầu, Firebase sẽ xin cấp quyền cho Storage đọc Firestore
+// (firestore.get bên dưới). Đồng ý thì luật mới chạy được.
 service firebase.storage {
   match /b/{bucket}/o {
-    match /{allPaths=**} {
-      allow read, write: if request.auth != null;
+
+    function signedIn() {
+      return request.auth != null && request.auth.token.email_verified != false;
+    }
+
+    function myEmail() { return request.auth.token.email.lower(); }
+    function coachDoc() {
+      return /databases/(default)/documents/coaches/$(myEmail());
+    }
+    function clientDoc(clientId) {
+      return /databases/(default)/documents/clients/$(clientId);
+    }
+    // Cùng logic với firestore.rules: admin gốc, hoặc coaches/{email} đang active.
+    function isBootstrapAdmin() { return signedIn() && myEmail() == 'chuhailong1810199@gmail.com'; }
+    function isCoachRole() {
+      return isBootstrapAdmin() || (signedIn() && firestore.exists(coachDoc())
+        && firestore.get(coachDoc()).data.get('active', false) == true);
+    }
+    function isAdmin() {
+      return isBootstrapAdmin() || (isCoachRole() && firestore.get(coachDoc()).data.get('isAdmin', false) == true);
+    }
+
+    function canUse(clientId) {
+      return signedIn() && firestore.exists(clientDoc(clientId)) && (
+        isAdmin()
+        || (isCoachRole() && firestore.get(clientDoc(clientId)).data.get('coachUid', null) == request.auth.uid)
+        || firestore.get(clientDoc(clientId)).data.get('email', '') == myEmail()
+      );
+    }
+
+    // Xoá thì request.resource là null — chỉ kiểm kích thước khi thật sự ghi file.
+    function sizeUnder(mb) {
+      return request.resource == null || request.resource.size < mb * 1024 * 1024;
+    }
+
+    // videos/{clientId}/{bài}/{coach|client} — app giới hạn 100MB (index.html uploadVideo)
+    match /videos/{clientId}/{rest=**} {
+      allow read: if canUse(clientId);
+      allow write: if canUse(clientId) && sizeUnder(110);
+    }
+
+    // progressPhotos/{clientId}/{ngày}.jpg — app nén về ~1MB trước khi tải lên
+    match /progressPhotos/{clientId}/{rest=**} {
+      allow read: if canUse(clientId);
+      allow write: if canUse(clientId) && sizeUnder(10);
+    }
+
+    // Mọi đường dẫn khác: không ai đọc ghi được từ máy khách.
+    match /{other=**} {
+      allow read, write: if false;
     }
   }
 }

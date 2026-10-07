@@ -62,7 +62,7 @@ Enforcement now in place — do not remove any layer:
 3. **Lookups read the index first.** If a legacy scan still finds >1 client on one email, the app
    now **stops and shows an error** rather than silently opening whichever matched last —
    that silent pick is what caused the original mix-up.
-4. **users rules**: coach has full access (needed to delete orphans); a client may edit their own
+4. **users rules**: admin has full access (needed to delete orphans); a client may edit their own
    name/email but **cannot change their own `role` or `clientId`**.
 
 Verified end-to-end on 2026-07-31: hijacking a taken email → `permission-denied`; claiming a
@@ -73,6 +73,28 @@ When deleting a client, remove **all** of: the `clients/{id}` doc, every subcoll
 `sessionLoads`), the `clientEmails/{email}` entry, and any `users` doc pointing at it.
 Deleting a Firestore doc does *not* delete its subcollections — that is how the orphaned
 records were created in the first place.
+
+---
+
+## Multi-coach — ai thấy khách nào (docs/plan-multi-coach.md)
+
+- **Vai trò**: `coaches/{email viết thường}` `{ name, active, isAdmin, uid }`, CHỈ admin ghi
+  (màn **Coach** trên thanh khách). `chuhailong1810199@gmail.com` là admin gốc, luôn là admin kể cả
+  khi doc bị tắt — cùng địa chỉ ở `firestore.rules`, `storage.rules`, `functions/authz.js`, `index.html`.
+  `users.role` **không còn** cấp quyền gì. Không có danh sách email coach cứng nào nữa.
+- **Sở hữu**: mỗi khách đúng một coach — `clients.coachUid`. Admin thấy tất cả (công tắc "Tất cả coach"),
+  coach chỉ khách của mình. Khách tự đăng ký (`claimMyClient`) thuộc admin.
+- **Truy vấn danh sách** `clients` / `bookings` PHẢI qua `clientsQuery()` / `bookingsQuery()`. Luật
+  không lọc: coach truy vấn thiếu `where('coachUid','==',uid)` bị từ chối cả lần → màn hình trống.
+  Ngoại lệ ghi `// clients-scan-ok:` (tests/clients-query.test.js quét).
+- **Functions** bỏ qua rules → mọi `onCall` phải gọi `authz.*` (`requireCoach`, `requireAdmin`,
+  `assertCanManage`, `assertCanAccess`, `requireMember`). Trợ lý AI: `runTool(name, args, role)` lọc theo coach.
+- **Tiền**: studio thu chung — chỉ admin đánh dấu hoá đơn đã trả / sửa `access.paidUntil`, bảng giá,
+  tài khoản ngân hàng. Coach đổi được `access.planId`.
+- **Storage**: `videos/{clientId}/**`, `progressPhotos/{clientId}/**` — admin, coach của khách, chính khách.
+  Mọi đường dẫn khác bị chặn.
+- **Test luật**: `./run-tests.sh` chạy `tests/rules/*` trên Firebase Emulator (cần Java + firebase-tools).
+  Đổi luật mà không thêm ca vào ma trận ở `tests/rules/firestore.rules.test.js` là thiếu.
 
 ---
 

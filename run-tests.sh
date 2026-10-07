@@ -22,5 +22,28 @@ for f in tests/*.test.js; do
   printf '%-26s ' "$name"
   if TZ=Asia/Ho_Chi_Minh node "$f" >/dev/null 2>&1; then echo DAT; else echo HONG; fail=1; fi
 done
+
+# ── Luật Firestore + Storage chạy THẬT trên emulator ──────────────────
+# Cần Java + firebase-tools. Thiếu thì BÁO HỎNG chứ không lặng lẽ bỏ qua:
+# đây là lớp bảo mật, "không chạy được" không được trông giống "đạt".
+if [ ! -e tests/rules/node_modules ]; then
+  main=$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')
+  if [ -d "$main/tests/rules/node_modules" ]; then
+    ln -s "$main/tests/rules/node_modules" tests/rules/node_modules
+    echo "(đã nối tests/rules/node_modules sang $main)"
+  else
+    (cd tests/rules && npm install --silent >/dev/null 2>&1)
+  fi
+fi
+for f in tests/rules/*.test.js; do
+  name=rules/$(basename "$f" .test.js)
+  printf '%-26s ' "$name"
+  if ! command -v java >/dev/null 2>&1 || ! command -v firebase >/dev/null 2>&1; then
+    echo "HONG (thiếu java hoặc firebase)"; fail=1; continue
+  fi
+  if NODE_PATH=tests/rules/node_modules firebase emulators:exec --project demo-pulse-rules \
+       --only firestore,storage "node $f" >/dev/null 2>&1; then echo DAT; else echo HONG; fail=1; fi
+done
+
 [ "$fail" = 0 ] && printf '\nTAT CA DAT\n' || printf '\nCO BAI HONG — chay rieng de xem chi tiet\n'
 exit $fail
