@@ -10788,7 +10788,7 @@ document.dispatchEvent(new Event('app-ready'));
 *{box-sizing:border-box;margin:0;padding:0;}
 /* Prevent iOS Safari auto-zoom on input focus (requires font-size >= 16px) */
 input,select,textarea{font-size:16px;}
-body{font-family:"Figtree",-apple-system,BlinkMacSystemFont,sans-serif;background-color:#161111;background-image:linear-gradient(rgba(255,255,255,0.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.025) 1px,transparent 1px);background-size:40px 40px;background-attachment:fixed;color:#ffffff;padding:1rem;padding-left:max(1rem, env(safe-area-inset-left));padding-right:max(1rem, env(safe-area-inset-right));padding-top:max(1rem, env(safe-area-inset-top));min-height:100vh;}
+body{font-family:"Figtree",-apple-system,BlinkMacSystemFont,sans-serif;color:#ffffff;padding:1rem;padding-left:max(1rem, env(safe-area-inset-left));padding-right:max(1rem, env(safe-area-inset-right));padding-top:max(1rem, env(safe-area-inset-top));min-height:100vh;}
 .hidden{display:none!important;}
 .app{max-width:500px;margin:0 auto;}
 
@@ -11908,12 +11908,139 @@ body.reordering .phase-exercises-wrap{min-height:46px;border-radius:14px;transit
 body{
   font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","Helvetica Neue",Inter,sans-serif;
   color:var(--txt);
-  background-color:#161111;
-  background-image:linear-gradient(rgba(255,255,255,0.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.025) 1px,transparent 1px);
-  background-size:40px 40px;
-  background-attachment:fixed;
   min-height:100vh;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Pulse — deep-space background
+   Paste AFTER both old body{} rules (~10791 and ~11908). Static: no animation,
+   no JS, no image file, no request. The sky is a viewport-sized fixed layer,
+   so tall pages never tile or stretch it.
+   ═══════════════════════════════════════════════════════════════════════ */
+:root{
+  /* Star tiers, warm grey (R > G > B, same family as --bg-1).
+     LOAD-BEARING: --sky-star-4 is the brightest pixel this sky can put behind
+     content. At #312C2A, rgba(255,255,255,.55) text on a rgba(255,255,255,.07)
+     card measures 4.61:1. Raise it and that falls under AA. */
+  --sky-star-1:#231E1D;
+  --sky-star-2:#282322;
+  --sky-star-3:#2C2726;
+  --sky-star-4:#312C2A;
+  /* opt-in margin stars (desktop): width of the column they must stay out of */
+  --sky-safe:1080px;   /* = .app{max-width:1080px}. Ban ban giao de 460px,
+                          tuc ~310px noi dung moi ben se nam tren sao 1,11:1. */
+  --sky-feather:120px;
+}
+
+/* Canvas colour lives on <html> now. body must be transparent, or its
+   background paints over the z-index:-1 sky. */
+html{background-color:var(--bg-1,#161111)}
+/* Specificity 0,0,2 beats both old body{} rules whatever their order. This also
+   removes background-attachment:fixed (the iOS jank) and the 40px grid.
+   body's safe-area padding is untouched. */
+html body{background:transparent}
+
+html::before,
+html::after{
+  content:"";position:fixed;top:0;left:0;z-index:-1;pointer-events:none;
+  width:100%;
+  height:100vh;height:100lvh;   /* large viewport: iOS toolbar show/hide never resizes the layer, so it is never re-rasterised */
+  transform:translateZ(0);      /* own compositor layer: scrolling moves it, never repaints it */
+}
+
+/* Layers, top to bottom: vignette · 29 star layers on three tile sizes
+   (263/389/541px, coprime, so the pattern never visibly repeats) · nebula falloff
+   (keeps the cloud low and centred) · nebula. Star centres are opaque colours, so
+   the brightest pixel is exactly --sky-star-4 wherever a star lands. Nebula peak
+   is #2B2524 (flood-opacity 0.154 caps it), below the brightest star. */
+html::before{
+  background-image:
+    radial-gradient(130% 100% at 50% 58%,#0000 42%,rgba(22,17,17,.6) 100%),
+    radial-gradient(0.9px 0.9px at 233.4px 245.5px,var(--sky-star-2),#0000),
+    radial-gradient(0.9px 0.9px at 233.0px 197.0px,var(--sky-star-2),#0000),
+    radial-gradient(0.9px 0.9px at 58.0px 105.8px,var(--sky-star-2),#0000),
+    radial-gradient(1.3px 1.3px at 89.2px 241.4px,var(--sky-star-4),#0000),
+    radial-gradient(1.3px 1.3px at 106.0px 124.2px,var(--sky-star-4),#0000),
+    radial-gradient(0.75px 0.75px at 74.1px 248.7px,var(--sky-star-1),#0000),
+    radial-gradient(0.75px 0.75px at 49.9px 202.5px,var(--sky-star-1),#0000),
+    radial-gradient(0.9px 0.9px at 173.6px 69.2px,var(--sky-star-2),#0000),
+    radial-gradient(0.75px 0.75px at 205.1px 118.0px,var(--sky-star-1),#0000),
+    radial-gradient(0.75px 0.75px at 104.5px 244.2px,var(--sky-star-1),#0000),
+    radial-gradient(0.75px 0.75px at 63.7px 20.2px,var(--sky-star-1),#0000),
+    radial-gradient(0.75px 0.75px at 250.2px 139.5px,var(--sky-star-1),#0000),
+    radial-gradient(0.75px 0.75px at 134.6px 193.2px,var(--sky-star-1),#0000),
+    radial-gradient(1.35px 1.35px at 72.2px 186.2px,var(--sky-star-4),#0000),
+    radial-gradient(0.75px 0.75px at 88.0px 247.0px,var(--sky-star-1),#0000),
+    radial-gradient(0.9px 0.9px at 244.7px 160.9px,var(--sky-star-2),#0000),
+    radial-gradient(1.35px 1.35px at 56.6px 10.8px,var(--sky-star-4),#0000),
+    radial-gradient(1.35px 1.35px at 245.3px 334.8px,var(--sky-star-4),#0000),
+    radial-gradient(1.1px 1.1px at 190.7px 211.4px,var(--sky-star-3),#0000),
+    radial-gradient(0.9px 0.9px at 274.3px 201.5px,var(--sky-star-2),#0000),
+    radial-gradient(1.1px 1.1px at 119.1px 189.3px,var(--sky-star-3),#0000),
+    radial-gradient(1.1px 1.1px at 50.8px 155.9px,var(--sky-star-3),#0000),
+    radial-gradient(0.75px 0.75px at 223.6px 208.8px,var(--sky-star-1),#0000),
+    radial-gradient(1.15px 1.15px at 30.4px 11.5px,var(--sky-star-3),#0000),
+    radial-gradient(1.45px 1.45px at 271.0px 420.6px,var(--sky-star-4),#0000),
+    radial-gradient(0.95px 0.95px at 17.5px 197.3px,var(--sky-star-2),#0000),
+    radial-gradient(1.45px 1.45px at 349.3px 204.1px,var(--sky-star-4),#0000),
+    radial-gradient(1.15px 1.15px at 191.1px 240.1px,var(--sky-star-3),#0000),
+    radial-gradient(1.15px 1.15px at 352.2px 359.3px,var(--sky-star-3),#0000),
+    radial-gradient(85% 65% at 50% 68%,#0000 25%,rgba(22,17,17,.9) 100%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 900 900' preserveAspectRatio='xMidYMid slice'%3E%3Cfilter id='n' x='0' y='0' width='100%' height='100%' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.0028 .0042' numOctaves='3' seed='11' result='t'/%3E%3CfeColorMatrix in='t' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 3.2 0 0 0 -1.35' result='a'/%3E%3CfeFlood flood-color='%239E928A' flood-opacity='0.154'/%3E%3CfeComposite in2='a' operator='in'/%3E%3C/filter%3E%3Crect width='100%' height='100%' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size:100% 100%,263px 271px,263px 271px,263px 271px,263px 271px,263px 271px,263px 271px,263px 271px,263px 271px,263px 271px,263px 271px,263px 271px,263px 271px,263px 271px,389px 401px,389px 401px,389px 401px,389px 401px,389px 401px,389px 401px,389px 401px,389px 401px,389px 401px,389px 401px,541px 557px,541px 557px,541px 557px,541px 557px,541px 557px,541px 557px,100% 100%,cover;
+  background-repeat:no-repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,no-repeat,no-repeat;
+  background-position:0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,0 0,50% 50%;
+}
+
+/* OPT-IN, desktop only: brighter stars in the side margins. Turn on with
+   <html data-sky="margins">. Safe only while nothing translucent is drawn outside
+   the centre column (--sky-safe). Masked to transparent across that column. */
+html::after{
+  display:none;
+  background-image:
+    radial-gradient(130% 100% at 50% 58%,#0000 42%,rgba(22,17,17,.6) 100%),
+    radial-gradient(0.7px 0.7px at 156.3px 95.3px,#5C5652,#0000),
+    radial-gradient(1.1px 1.1px at 253.6px 57.2px,#C6C0BA,#0000),
+    radial-gradient(0.9px 0.9px at 129.2px 121.3px,#928C86,#0000),
+    radial-gradient(1.1px 1.1px at 168.4px 10.2px,#C6C0BA,#0000),
+    radial-gradient(1.1px 1.1px at 119.8px 65.1px,#C6C0BA,#0000),
+    radial-gradient(1.1px 1.1px at 226.1px 255.7px,#C6C0BA,#0000),
+    radial-gradient(1.1px 1.1px at 107.6px 101.1px,#C6C0BA,#0000),
+    radial-gradient(1.1px 1.1px at 293.8px 197.0px,#C6C0BA,#0000),
+    radial-gradient(0.9px 0.9px at 275.2px 120.1px,#928C86,#0000),
+    radial-gradient(1.1px 1.1px at 131.6px 179.1px,#C6C0BA,#0000),
+    radial-gradient(0.75px 0.75px at 127.5px 343.3px,#5C5652,#0000),
+    radial-gradient(0.95px 0.95px at 44.5px 186.8px,#928C86,#0000),
+    radial-gradient(1.15px 1.15px at 33.6px 402.8px,#C6C0BA,#0000),
+    radial-gradient(0.75px 0.75px at 91.7px 372.0px,#5C5652,#0000),
+    radial-gradient(1.15px 1.15px at 297.9px 41.1px,#C6C0BA,#0000),
+    radial-gradient(0.75px 0.75px at 103.7px 198.6px,#5C5652,#0000),
+    radial-gradient(0.75px 0.75px at 442.0px 447.5px,#5C5652,#0000),
+    radial-gradient(0.95px 0.95px at 388.3px 135.7px,#928C86,#0000),
+    radial-gradient(1.7px 1.7px at 113.3px 100.0px,#ECE7E2,#0000),
+    radial-gradient(1.7px 1.7px at 556.2px 93.7px,#ECE7E2,#0000),
+    radial-gradient(1px 1px at 71.7px 469.9px,#928C86,#0000),
+    radial-gradient(1px 1px at 590.9px 121.7px,#928C86,#0000),
+    radial-gradient(1px 1px at 425.7px 599.2px,#928C86,#0000),
+    radial-gradient(0.8px 0.8px at 603.4px 538.8px,#5C5652,#0000),
+    radial-gradient(1.8px 1.8px at 139.5px 552.1px,#F0ECE8,#0000),
+    radial-gradient(7px 7px at 139.5px 552.1px,rgba(236,231,226,.16),#0000),
+    radial-gradient(1.8px 1.8px at 141.5px 210.6px,#F0ECE8,#0000),
+    radial-gradient(7px 7px at 141.5px 210.6px,rgba(236,231,226,.16),#0000),
+    radial-gradient(1.8px 1.8px at 452.3px 556.5px,#F0ECE8,#0000),
+    radial-gradient(7px 7px at 452.3px 556.5px,rgba(236,231,226,.16),#0000);
+  background-size:100% 100%,307px 313px,307px 313px,307px 313px,307px 313px,307px 313px,307px 313px,307px 313px,307px 313px,307px 313px,307px 313px,461px 467px,461px 467px,461px 467px,461px 467px,461px 467px,461px 467px,461px 467px,461px 467px,613px 619px,613px 619px,613px 619px,613px 619px,613px 619px,613px 619px,613px 619px,613px 619px,613px 619px,613px 619px,613px 619px,613px 619px;
+  background-repeat:no-repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat,repeat;
+  -webkit-mask-image:linear-gradient(90deg,#000 calc(50% - var(--sky-safe)/2 - var(--sky-feather)),#0000 calc(50% - var(--sky-safe)/2),#0000 calc(50% + var(--sky-safe)/2),#000 calc(50% + var(--sky-safe)/2 + var(--sky-feather)));
+          mask-image:linear-gradient(90deg,#000 calc(50% - var(--sky-safe)/2 - var(--sky-feather)),#0000 calc(50% - var(--sky-safe)/2),#0000 calc(50% + var(--sky-safe)/2),#000 calc(50% + var(--sky-safe)/2 + var(--sky-feather)));
+}
+@media (min-width:900px){
+  :root[data-sky~="margins"]::after{display:block}
+}
+
+/* NOT RECOMMENDED — content scrim. With the capped sky it buys
+   4.61 → 5.53:1 and costs the stars on phones (full-bleed column).
+#app-screen{background:rgba(22,17,17,.80)} */
 body::before{display:none;}
 .app{max-width:1080px;}
 .login-screen,.slides-screen,.baseline-screen,.cp-overlay,.pp-ba-overlay{background:var(--bg-1);}
