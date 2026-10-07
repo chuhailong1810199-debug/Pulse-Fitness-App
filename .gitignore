@@ -5,3 +5,4 @@ firestore-debug.log
 node_modules
 storage-debug.log
 ui-debug.log
+.DS_Store
