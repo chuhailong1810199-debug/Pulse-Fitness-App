@@ -67,5 +67,12 @@ ok("chi admin xac nhan da tra, sua bang gia, tai khoan studio", () => {
   assert(/if \(!userIsAdmin\)/.test(b));
 });
 
+ok("nut Coach co chu (khong ra o trong vi font-size:0) va an that voi coach thuong", () => {
+  assert(/#app-screen \.client-bar #coach-admin-btn\{[^}]*font-size:11px !important/.test(s),
+    "nút Coach thiếu font-size riêng — sẽ ra ô trống");
+  assert(/#app-screen \.client-bar \.add-client-btn\.hidden\{display:none !important;\}/.test(s),
+    ".hidden không thắng được display:inline-flex !important của thanh");
+});
+
 console.log(fails ? "\n" + fails + " HONG" : "\nTAT CA DAT");
 process.exit(fails ? 1 : 0);

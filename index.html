@@ -14422,6 +14422,17 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 /* 4th button = Excel export. The rule above sets font-size:0 to hide label text,
    so every button in this bar needs its own ::before glyph or it renders empty. */
 #app-screen .client-bar .add-client-btn:nth-of-type(4)::before{content:'⤓';font-size:18px;font-weight:600;}
+/* Nút Coach (chỉ admin): CHỮ chứ không phải biểu tượng — đây là lối vào quản
+   lý cả studio, phải nhìn thấy ngay. Không có rule này nó ra ô trống vì
+   font-size:0 ở trên. */
+#app-screen .client-bar #coach-admin-btn{
+  width:auto !important;padding:0 14px !important;font-size:11px !important;
+  letter-spacing:.08em;font-weight:800;
+}
+/* .hidden thường KHÔNG thắng được display:inline-flex !important ở trên
+   (selector có #id nặng hơn) — phải nhắc lại ở đây, nếu không coach thường
+   cũng thấy nút. */
+#app-screen .client-bar .add-client-btn.hidden{display:none !important;}
 #app-screen .client-bar #export-xlsx-btn{
   background:rgba(79,209,139,.12) !important;border-color:rgba(79,209,139,.3) !important;
   color:#4fd18b !important;
