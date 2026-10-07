@@ -41,8 +41,19 @@ for f in tests/rules/*.test.js; do
   if ! command -v java >/dev/null 2>&1 || ! command -v firebase >/dev/null 2>&1; then
     echo "HONG (thiếu java hoặc firebase)"; fail=1; continue
   fi
-  if NODE_PATH=tests/rules/node_modules firebase emulators:exec --project demo-pulse-rules \
-       --only firestore,storage "node $f" >/dev/null 2>&1; then echo DAT; else echo HONG; fail=1; fi
+  out=$(NODE_PATH=tests/rules/node_modules firebase emulators:exec --project demo-pulse-rules \
+          --only firestore,storage "node $f" 2>&1)
+  if [ $? = 0 ]; then
+    echo DAT
+  elif printf '%s' "$out" | grep -qi 'port taken\|is not open on localhost'; then
+    # Chay song song nhieu lane: lane kia dang giu cong emulator nen lane nay
+    # khong bind duoc. VAN tinh la hong (xem ghi chu tren), nhung phai noi ro
+    # nguyen nhan — "cong ban" ma trong giong "luat bao mat bi vi pham" thi
+    # nguoi ta se quen dan roi ship that.
+    echo "HONG (cong emulator dang bi tien trinh khac giu)"; fail=1
+  else
+    echo HONG; fail=1
+  fi
 done
 
 [ "$fail" = 0 ] && printf '\nTAT CA DAT\n' || printf '\nCO BAI HONG — chay rieng de xem chi tiet\n'
