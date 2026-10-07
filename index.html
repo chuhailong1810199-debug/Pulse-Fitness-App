@@ -498,35 +498,25 @@ async function _verifyUserProfileBg(user) {
 }
 
 function _launchAfterProfile(user) {
-  // For clients: show splash immediately, load app in background
-  if (userRole === 'client') {
-    const slidesEl = document.getElementById('slides-screen');
-    if (slidesEl) {
-      ['login-screen','loading-screen','app-screen','no-client-screen'].forEach(id => {
-        document.getElementById(id)?.classList.add('hidden');
-      });
-      slidesEl.classList.remove('hidden');
-      setTimeout(() => { if (!window._splashDismissed) skipSlides(); }, 2300);
-      loadApp()
-        .then(() => { window._appLoaded = true; })
-        .catch(err => {
-          console.error('[loadApp] fatal error:', err);
-          // First failure: wipe cache and retry once with a clean load
-          const _retryKey = 'pulse_loadapp_retried_' + (currentUser?.uid || '');
-          if (!sessionStorage.getItem(_retryKey)) {
-            sessionStorage.setItem(_retryKey, '1');
-            if (currentUser) localStorage.removeItem(_USER_CACHE_KEY(currentUser.uid));
-            window.location.reload();
-          } else {
-            // Already retried — just show the app (better than infinite loop)
-            window._appLoaded = true;
-            showScreen('app');
-          }
-        });
-      return;
-    }
-  }
-  return loadApp();
+  // Không còn màn chào (logo 2,3 giây + slide cũ): khách vào thẳng app như
+  // coach. Khách vẫn giữ một lần thử lại nếu nạp hỏng — cache vai trò cũ hay
+  // làm lần đầu hỏng, xoá rồi tải lại là qua.
+  if (userRole !== 'client') return loadApp();
+  showScreen('loading');
+  return loadApp()
+    .then(() => { window._appLoaded = true; })
+    .catch(err => {
+      console.error('[loadApp] fatal error:', err);
+      const _retryKey = 'pulse_loadapp_retried_' + (currentUser?.uid || '');
+      if (!sessionStorage.getItem(_retryKey)) {
+        sessionStorage.setItem(_retryKey, '1');
+        if (currentUser) localStorage.removeItem(_USER_CACHE_KEY(currentUser.uid));
+        window.location.reload();
+      } else {
+        window._appLoaded = true;    // đã thử lại rồi — hiện app còn hơn vòng lặp tải
+        showScreen('app');
+      }
+    });
 }
 
 // ── LOAD APP ───────────────────────────────────────────
@@ -770,10 +760,7 @@ async function loadApp() {
   checkRecoveryTab();   // non-blocking — tab chỉ hiện nếu khách có dữ liệu Polar
   checkActiveTab();
   renderAccessAlert();
-  if (userRole === 'coach') {
-    showScreen('app');
-  }
-  // For clients: app stays hidden until skipSlides() is called
+  showScreen('app');
 }
 
 // Khách mà coach muốn thấy đầu tiên khi mở app — hồ sơ tập của chính coach.
@@ -12753,67 +12740,6 @@ h1 span,.login-logo span,.cp-header-title span,.empty-sub strong,.client-badge,.
 .exercise-note-display{margin:4px 12px 12px;padding:8px 12px;background:rgba(255,255,255,0.04);border-left:2px solid rgba(255,255,255,0.25);border-radius:0 8px 8px 0;font-size:13px;color:rgba(255,255,255,0.7);line-height:1.5;}
 </style>
 <script>
-// Slides work immediately — no module dependency
-function nextSlide() {
-  document.getElementById('slide-1').classList.remove('active');
-  const s2 = document.getElementById('slide-2');
-  s2.classList.add('active');
-  // Re-trigger animation on glass card
-  const body = s2.querySelector('.slide-body');
-  if (body) { body.style.animation='none'; body.offsetHeight; body.style.animation=''; }
-}
-function nextSlide2() {
-  document.getElementById('slide-2').classList.remove('active');
-  const s3 = document.getElementById('slide-3');
-  s3.classList.add('active');
-  const body = s3.querySelector('.slide-body');
-  if (body) { body.style.animation='none'; body.offsetHeight; body.style.animation=''; }
-  // Show Android "Thêm ngay" button if native prompt available
-  const pwaBtnEl = document.getElementById('pwa-slide-btn');
-  if (pwaBtnEl && _deferredInstallPrompt) pwaBtnEl.style.display = 'block';
-}
-function nextSlide3() {
-  document.getElementById('slide-3').classList.remove('active');
-  const s4 = document.getElementById('slide-4');
-  s4.classList.add('active');
-  const body = s4.querySelector('.slide-body');
-  if (body) { body.style.animation='none'; body.offsetHeight; body.style.animation=''; }
-}
-function pwaTapAddSlide() {
-  if (_deferredInstallPrompt) {
-    _deferredInstallPrompt.prompt();
-    _deferredInstallPrompt.userChoice.then(() => nextSlide3());
-  } else {
-    nextSlide3();
-  }
-}
-function skipSlides() {
-  window._splashDismissed = true;
-  const splash = document.getElementById('slides-screen');
-  splash.classList.add('splash-fade-out');
-  setTimeout(() => splash.classList.add('hidden'), 450);
-  showScreen('app');
-  // If app data is still loading, show a brief loading state
-  if (!window._appLoaded) {
-    document.getElementById('loading-screen')?.classList.remove('hidden');
-    document.getElementById('app-screen')?.classList.add('hidden');
-    const waitForApp = setInterval(() => {
-      if (window._appLoaded) {
-        clearInterval(waitForApp);
-        showScreen('app');
-      }
-    }, 100);
-    // Safety net: force-show app after 10s to break infinite loading loops
-    setTimeout(() => {
-      if (!window._appLoaded) {
-        console.warn('[skipSlides] 10s timeout — forcing app screen');
-        clearInterval(waitForApp);
-        window._appLoaded = true;
-        showScreen('app');
-      }
-    }, 10000);
-  }
-}
 // All other functions are set by the module on window.*
 // Use a queue for calls that happen before module loads
 window._queue = [];
@@ -12906,148 +12832,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 </head>
 <body>
 
-<!-- SPLASH SCREEN -->
-<div id="slides-screen" class="slides-screen">
-  <div class="splash-bg"></div>
-  <div class="splash-glow"></div>
-  <div class="splash-ring"></div>
-  <div class="splash-ring"></div>
-  <div class="splash-ring"></div>
-  <div class="splash-content">
-    <img src="images/pulse-mark.svg" class="splash-logo" alt="Pulse">
-  </div>
-</div>
-
-<!-- OLD SLIDES (hidden, kept for skipSlides compatibility) -->
-<div id="slides-screen-old" style="display:none;">
-  <!-- Slide 1 -->
-  <div class="slide active" id="slide-1">
-    <video class="slide-video" autoplay muted loop playsinline>
-      <source src="hero-video.mp4" type="video/mp4">
-    </video>
-    <div class="slide-video-overlay"></div>
-    <div class="slide-orb"></div>
-    <div class="slide-body">
-      <div class="slide-tabs">
-        <div class="slide-tab on"></div>
-        <div class="slide-tab"></div>
-        <div class="slide-tab"></div>
-        <div class="slide-tab"></div>
-      </div>
-      <div class="slide-badge">⚡ Pulse by Long Chu</div>
-      <div class="slide-title">TRAIN.<br/>TRACK.<br/><span>CONQUER.</span></div>
-      <div class="slide-desc">Chương trình cá nhân hoá. Theo dõi tiến độ theo thời gian thực cùng coach của bạn.</div>
-      <button class="slide-next" onclick="nextSlide()">TIẾP THEO →</button>
-    </div>
-  </div>
-
-  <!-- Slide 2 -->
-  <div class="slide" id="slide-2">
-    <img class="slide-video" src="/images/z7771642425935_3e0da1fbd1c44b46e46fb67b0cb4605b.jpg" style="object-position:center 30%;" alt="">
-    <div class="slide-video-overlay" style="background:linear-gradient(to bottom,oklch(9% 0 0/0.35) 0%,oklch(9% 0 0/0.15) 30%,oklch(9% 0 0/0.75) 65%,oklch(9% 0 0/0.97) 100%);"></div>
-    <div class="slide-orb" style="background:radial-gradient(circle,oklch(36.7% 0.003 106.6/0.28) 0%,transparent 70%);"></div>
-    <div class="slide-body">
-      <div class="slide-tabs">
-        <div class="slide-tab"></div>
-        <div class="slide-tab on"></div>
-        <div class="slide-tab"></div>
-        <div class="slide-tab"></div>
-      </div>
-      <div class="slide-badge">📈 Progress Tracking</div>
-      <div class="slide-title">BASELINE<br/>→ <span>RESULTS.</span></div>
-      <div class="slide-desc">Đo lường từ ngày đầu. Checkpoint mỗi 4 tuần. Biểu đồ tiến độ rõ ràng từng giai đoạn.</div>
-      <button class="slide-next" onclick="nextSlide2()">TIẾP THEO →</button>
-    </div>
-  </div>
-
-  <!-- Slide 3 — Add to Home Screen guide -->
-  <div class="slide" id="slide-3">
-    <div style="position:absolute;inset:0;background:oklch(9% 0 0);z-index:0;"></div>
-    <div style="position:absolute;inset:0;background-image:linear-gradient(oklch(100% 0 0/0.025) 1px,transparent 1px),linear-gradient(90deg,oklch(100% 0 0/0.025) 1px,transparent 1px);background-size:40px 40px;z-index:1;pointer-events:none;"></div>
-    <div class="slide-orb" style="width:360px;height:360px;bottom:-40px;background:radial-gradient(circle,oklch(36.7% 0.003 106.6/0.20) 0%,transparent 70%);"></div>
-    <!-- Phone mockup centered top -->
-    <div style="position:absolute;top:0;left:0;right:0;height:55%;display:flex;align-items:center;justify-content:center;z-index:3;">
-      <div class="sp-phone">
-        <div class="sp-notch"></div>
-        <div class="sp-browser">
-          <div class="sp-url">longchucoaching.com</div>
-          <div class="sp-share">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#8FDBFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
-          </div>
-        </div>
-        <div class="sp-body">
-          <div class="sp-screen-content">
-            <div class="sp-app-row">
-              <div class="sp-app-icon"><img src="images/pulse-mark.svg" alt="Pulse"></div>
-              <div class="sp-app-name">Pulse</div>
-            </div>
-          </div>
-          <div class="sp-sheet">
-            <div class="sp-sheet-handle"></div>
-            <div class="sp-row">
-              <div class="sp-row-ico"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#8FDBFF" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></div>
-              <div class="sp-row-lbl">Copy Link</div>
-            </div>
-            <div class="sp-row sp-row-add">
-              <div class="sp-row-ico"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#8FDBFF" stroke-width="2.2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="12" y1="17" x2="12" y2="21"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="9.5" y1="10.5" x2="14.5" y2="10.5"/></svg></div>
-              <div class="sp-row-lbl">Add to Home Screen</div>
-            </div>
-            <div class="sp-row">
-              <div class="sp-row-ico"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="oklch(55% 0 0)" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div>
-              <div class="sp-row-lbl">Mail</div>
-            </div>
-            <div class="sp-tap"></div>
-            <div class="sp-done">
-              <div class="sp-done-ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8FDBFF" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>
-              <div class="sp-done-txt">Đã thêm vào<br>màn hình chính!</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-    <!-- Glass card -->
-    <div class="slide-body">
-      <div class="slide-tabs">
-        <div class="slide-tab"></div>
-        <div class="slide-tab"></div>
-        <div class="slide-tab on"></div>
-        <div class="slide-tab"></div>
-      </div>
-      <div class="slide-badge">📲 Cài đặt app</div>
-      <div class="slide-title" style="font-size:clamp(28px,7vw,42px);">THÊM VÀO<br/><span>MÀN HÌNH.</span></div>
-      <div class="sp-steps">
-        <div class="sp-step"><div class="sp-step-num">1</div><div class="sp-step-txt">Bấm nút <strong>Chia sẻ ↑</strong> ở thanh Safari bên dưới</div></div>
-        <div class="sp-step"><div class="sp-step-num">2</div><div class="sp-step-txt">Chọn <strong>Add to Home Screen</strong></div></div>
-        <div class="sp-step"><div class="sp-step-num">3</div><div class="sp-step-txt">Bấm <strong>Add</strong> ở góc trên phải — xong!</div></div>
-      </div>
-      <!-- Android: show native prompt button; iOS: show steps only -->
-      <button class="slide-next" id="pwa-slide-btn" onclick="pwaTapAddSlide()" style="display:none;">THÊM NGAY →</button>
-      <button class="slide-next-ghost" onclick="nextSlide3()">Bỏ qua →</button>
-    </div>
-  </div>
-
-  <!-- Slide 4 — Ready -->
-  <div class="slide" id="slide-4">
-    <div style="position:absolute;inset:0;background:oklch(9% 0 0);z-index:0;"></div>
-    <div style="position:absolute;inset:0;background-image:linear-gradient(oklch(100% 0 0/0.025) 1px,transparent 1px),linear-gradient(90deg,oklch(100% 0 0/0.025) 1px,transparent 1px);background-size:40px 40px;z-index:1;pointer-events:none;"></div>
-    <div class="slide-orb" style="width:420px;height:420px;bottom:-80px;background:radial-gradient(circle,oklch(36.7% 0.003 106.6/0.20) 0%,transparent 70%);"></div>
-    <div class="slide-body">
-      <div class="slide-tabs">
-        <div class="slide-tab"></div>
-        <div class="slide-tab"></div>
-        <div class="slide-tab"></div>
-        <div class="slide-tab on"></div>
-      </div>
-      <div class="slide-badge">🏁 Sẵn sàng</div>
-      <div class="slide-title">BẮT ĐẦU<br/><span>NGAY HÔM NAY.</span></div>
-      <div class="slide-desc">Coach Long Chu sẽ đồng hành cùng bạn từng bước. Chương trình của bạn đang chờ.</div>
-      <div class="slide-coach">Your coach — <strong>Long Chu</strong></div>
-      <button class="slide-next" onclick="skipSlides()" style="animation:slide-glow-pulse 2s ease-in-out infinite;">VÀO APP →</button>
-    </div>
-  </div>
-
-</div>
-</div><!-- end slides-screen-old -->
+<!-- Màn chào khách (logo + slide "Coach Long Chu…") đã bỏ: khách vào thẳng app. -->
 
 <!-- PWA ONBOARDING SCREEN -->
 <div id="pwa-prompt-screen" class="pwa-screen hidden">
