@@ -620,8 +620,6 @@ async function loadApp() {
     if (schTab) schTab.style.display = '';
     const dashTab = document.getElementById('dash-nav-tab');
     if (dashTab) dashTab.style.display = '';
-    const platTab = document.getElementById('platform-nav-tab');
-    if (platTab) platTab.style.display = userIsAdmin ? '' : 'none';
     if (userIsAdmin) loadCoachNames();       // tên coach cho biển "đang quan sát"
     afterClientChange();
     // Youth là công cụ của coach: khách không cần thấy pin test này.
@@ -13325,7 +13323,6 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <div class="nav-tab" data-page="nutrition" onclick="showPage('nutrition')">Nutrition</div>
     <div class="nav-tab" id="youth-nav-tab" data-page="youth" style="display:none" onclick="showPage('youth')">Youth</div>
     <div class="nav-tab" data-page="billing" onclick="showPage('billing')">Billing</div>
-    <div class="nav-tab" id="platform-nav-tab" data-page="platform" style="display:none" onclick="showPage('platform')">Admin</div>
     <div class="nav-tab" data-page="log" onclick="showPage('log')">Log</div>
     <div class="nav-tab" id="schedule-nav-tab" data-page="schedule" style="display:none" onclick="showPage('schedule')">Schedule</div>
   </div>
