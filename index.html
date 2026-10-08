@@ -109,6 +109,7 @@ let _lastPickedExercise = null;
 let _dashVolumeChart = null;
 let exerciseLoads = {};
 let setLoads = {}; // exerciseKey → [kg_set1, kg_set2, ...]
+let _lastSavedTonnage = null; // tonnage buổi vừa lưu — hiện lại đúng số này khi mở lại tóm tắt
 let _saveLoadsFBTimer = null;
 let _loadsHydrated = false; // guard: prevent saving empty data before hydration completes
 let _clientBodyweight = null;     // latest known kg for the active client, from checkpoints
@@ -127,6 +128,59 @@ function parseSetsCount(setsReps, tag) {
   const m = setsReps.match(/^(\d+)\s*[×x]/i);
   return m ? Math.min(parseInt(m[1]), 6) : fallback; // cap at 6 sets
 }
+/**
+ * Đọc chuỗi sets×reps của giáo án để tính TONNAGE (kg × rep).
+ *
+ * Bản cũ có 4 bản sao, cùng một lỗi: số sau dấu × luôn bị coi là số rep.
+ * "4 × 250m" thành 250 rep — đẩy xe 100kg bị tính 100.000kg; "3 × 30s" thành
+ * 30 rep. Dạng có trong giáo án thật (đếm 2026-10-08, 655 bài):
+ *   "3 × 8"  "3 × 6-8"  "2 × 10/bên"  "3 × 30s"  "4 × 250m"  "1 × 5 min"
+ *   "3 x 8.8.8"  "3 × 8/10/12"  "8 rounds × 6"  "3 vòng × 12"  "AMRAP × 10"
+ *   "30 phút"  "400m"  "—"
+ *
+ * Trả về { sets, repsAt(i), lifting, perSide }:
+ *   lifting=false → bài thời gian/quãng đường/calo: KHÔNG có tonnage (vẫn lưu tạ).
+ *   perSide      → "/bên", "/side", "each leg"… — một set là hai bên, tính ×2.
+ *   repsAt(i)    → số rep của set i: "8.8.8" / "8/10/12" theo từng set,
+ *                  khoảng "6-8" lấy số thấp.
+ */
+function parsePrescription(str) {
+  const raw = String(str || '').toLowerCase().replace(/[×]/g, 'x').replace(/[–—]/g, '-').trim();
+  const UNIT = /^\s*\d+(?:[.,]\d+)?(?:\s*-\s*\d+(?:[.,]\d+)?)?\s*(km|m|s|sec|secs|giây|min|mins|mín|phút|cal)(?![a-zà-ỹ])/;
+  const sm = raw.match(/^(\d+)\s*(?:rounds?|vòng|hiệp)?\s*x/);
+  const sets = sm ? Math.max(1, parseInt(sm[1], 10)) : 1;
+  const rest = sm ? raw.slice(sm[0].length) : raw.replace(/^amrap\s*x\s*/, '');
+  const none = { sets, repsAt: () => 0, lifting: false, perSide: false };
+  if (!/\d/.test(rest) || UNIT.test(rest)) return none;
+  const perSide = /\/\s*(bên|side|leg|tay|direction|chiều|each)|each\s+(side|leg)|mỗi\s+bên/.test(rest);
+  const list = rest.match(/^\s*(\d+(?:\s*[./]\s*\d+)+)(?!\s*\d)/);
+  let reps;
+  if (list && !/^\s*\d+\s*\/\s*(bên|side|leg|tay|direction|chiều|each)/.test(rest)) {
+    reps = list[1].split(/[./]/).map(n => parseInt(n, 10)).filter(n => n > 0);
+  } else {
+    const first = rest.match(/\d+/);
+    reps = [parseInt(first[0], 10)];
+  }
+  const mult = perSide ? 2 : 1;
+  return {
+    sets, perSide, lifting: true,
+    repsAt: (i) => (reps[Math.min(i, reps.length - 1)] || 0) * mult,
+  };
+}
+
+/** Tonnage một bài: theo từng set nếu có, không thì sets × tạ chung. 0 cho bài không phải nâng tạ. */
+function exerciseTonnage(setsReps, perSetLoads, fallbackLoad) {
+  const rx = parsePrescription(setsReps);
+  if (!rx.lifting) return 0;
+  const per = (perSetLoads || []).filter(v => Number.isFinite(v) && v > 0);
+  if (per.length) return per.reduce((t, kg, i) => t + kg * rx.repsAt(i), 0);
+  const kg = parseFloat(fallbackLoad);
+  if (!(Number.isFinite(kg) && kg > 0)) return 0;
+  let t = 0;
+  for (let i = 0; i < rx.sets; i++) t += kg * rx.repsAt(i);
+  return t;
+}
+
 // Split "4 × 8" → { sets:'4', reps:'8' } for table columns
 // Handles: "3 x 10", "4 × 8-12", "1 x 45s", "2 x 5 min", "3 x AMRAP", "3 x 10+"
 // If no "N ×" prefix (e.g. AI wrote "250m" without sets count), default sets to 1
@@ -2482,19 +2536,16 @@ async function finishWorkout() {
     const dayPrefix = activeClient.id + '_' + activeDay + '_';
     const doneN = Object.entries(clientState).filter(([k,v]) => v && k.startsWith(dayPrefix)).length;
     const durationMs = window._workoutStartTime ? Date.now() - window._workoutStartTime : 0;
-    // Recompute tonnage from setLoads/exerciseLoads so it shows correctly on re-open
-    let replayVol = 0;
-    if (day) {
-      day.phases.forEach((phase, pi) => {
-        phase.exercises.forEach((ex, ei) => {
-          const k = activeClient.id + '_' + activeDay + '_' + pi + '_' + ei;
-          const perSet = (setLoads[k] || []).filter(v => Number.isFinite(v) && v > 0);
-          const m = (ex.setsReps||'').match(/(\d+)\s*[x×]\s*(\d+)/i);
-          const sets = m ? parseInt(m[1]) : 1, reps = m ? parseInt(m[2]) : 1;
-          if (perSet.length > 0) replayVol += perSet.reduce((s,kg) => s + kg * reps, 0);
-          else { const kg = parseFloat(exerciseLoads[k]); if (kg > 0) replayVol += sets * reps * kg; }
-        });
-      });
+    // Hiện lại đúng con số ĐÃ LƯU. Tính lại từ ô tạ là sai: ô tạ còn số điền
+    // sẵn của mọi bài, kể cả bài không tập.
+    let replayVol = _lastSavedTonnage;
+    if (replayVol == null) {
+      try {
+        const h = await getDocs(query(collection(db, 'clients', activeClient.id, 'workoutHistory'),
+          orderBy('date', 'desc'), limit(10)));
+        const hit = h.docs.find(d => d.data().day === activeDay);
+        replayVol = hit ? (hit.data().totalVolume || 0) : 0;
+      } catch (_e) { replayVol = 0; }
     }
     showWorkoutSummary({ doneN, total, tonnage: Math.round(replayVol), durationMs, streak: 0 });
     return;
@@ -2524,6 +2575,33 @@ async function finishWorkout() {
     }
   } catch(_e) { /* non-critical — proceed if check fails */ }
 
+  // ── Bài có số tạ nhưng chưa tích ──
+  // Ô tạ được ĐIỀN SẴN số của buổi trước cho mọi bài. Bản cũ cộng volume và ghi
+  // lịch sử cho mọi bài có số trong ô — bài không tập vẫn thành "đã tập ở mức
+  // tạ cũ" (đếm 2026-10-08: 11/110 buổi ghi nhiều bài hơn số bài đã tích).
+  // Giờ chỉ bài đã tích mới được tính; bài có tạ mà chưa tích thì hỏi.
+  {
+    const st = exerciseState[activeClient.id] || (exerciseState[activeClient.id] = {});
+    const d0 = getProgram()[activeDay];
+    const pending = [];
+    ((d0 && d0.phases) || []).forEach((phase, pi) => (phase.exercises || []).forEach((ex, ei) => {
+      const k = activeClient.id + '_' + activeDay + '_' + pi + '_' + ei;
+      if (st[k]) return;
+      const hasLoad = (setLoads[k] || []).some(v => Number.isFinite(v) && v > 0)
+        || parseFloat(exerciseLoads[k]) > 0;
+      if (hasLoad) pending.push({ k, name: ex.name || ('Bài ' + (ei + 1)) });
+    }));
+    if (pending.length) {
+      const yes = confirm(pending.length + ' bài có số tạ nhưng CHƯA đánh dấu xong:\n\n'
+        + pending.slice(0, 12).map(p => '• ' + p.name).join('\n')
+        + (pending.length > 12 ? '\n…' : '')
+        + '\n\nOK = đã tập, tính vào buổi này.\nHuỷ = không tập, bỏ ra khỏi volume và lịch sử.');
+      if (yes) pending.forEach(p => { st[p.k] = true; });
+    }
+  }
+  // Chỉ bài đã tích mới vào volume / lịch sử.
+  const _isDone = (k) => !!(exerciseState[activeClient.id] || {})[k];
+
   _workoutLogging = true;
 
   // Pre-compute everything BEFORE try block so catch/finally always have correct values
@@ -2535,26 +2613,13 @@ async function finishWorkout() {
   const _doneN0 = Object.entries(_clientState0).filter(([k,v]) => v && k.startsWith(_dayPrefix0)).length;
   const _durationMs0 = window._workoutStartTime ? Date.now() - window._workoutStartTime : 0;
 
-  function _parseSetsReps0(str) {
-    if (!str) return { sets: 1, reps: 1 };
-    const m = str.match(/(\d+)\s*[x×]\s*(\d+)/i);
-    if (m) return { sets: parseInt(m[1]), reps: parseInt(m[2]) };
-    const single = str.match(/(\d+)/);
-    return { sets: parseInt(single?.[1] || 1), reps: 1 };
-  }
   let _totalVolume0 = 0;
   if (_day0) {
     _day0.phases.forEach((phase, pi) => {
       phase.exercises.forEach((ex, ei) => {
         const key = activeClient.id + '_' + activeDay + '_' + pi + '_' + ei;
-        const perSet = (setLoads[key] || []).filter(v => Number.isFinite(v) && v > 0);
-        const { sets, reps } = _parseSetsReps0(ex.setsReps);
-        if (perSet.length > 0) {
-          _totalVolume0 += perSet.reduce((s, kg) => s + kg * reps, 0);
-        } else {
-          const loadKg = parseFloat(exerciseLoads[key]);
-          if (Number.isFinite(loadKg) && loadKg > 0) _totalVolume0 += sets * reps * loadKg;
-        }
+        if (!_isDone(key)) return;
+        _totalVolume0 += exerciseTonnage(ex.setsReps, setLoads[key], exerciseLoads[key]);
       });
     });
   }
@@ -2584,13 +2649,12 @@ async function finishWorkout() {
       });
     }
 
-    // Calculate total volume (tonnage = sets × reps × kg per exercise)
+    // sets/reps để GHI vào dòng lịch sử (cột REP của bảng) — cùng bộ đọc với
+    // tonnage. reps là số như giáo án viết (một bên), null nếu là bài thời
+    // gian/quãng đường: "4 × 250m" không phải 250 rep.
     function parseSetsReps(str) {
-      if (!str) return { sets: 1, reps: 1 };
-      const m = str.match(/(\d+)\s*[x×]\s*(\d+)/i);
-      if (m) return { sets: parseInt(m[1]), reps: parseInt(m[2]) };
-      const single = str.match(/(\d+)/);
-      return { sets: parseInt(single?.[1] || 1), reps: 1 };
+      const rx = parsePrescription(str);
+      return { sets: rx.sets, reps: rx.lifting ? rx.repsAt(0) / (rx.perSide ? 2 : 1) : null };
     }
     /**
      * A bodyweight row that was ticked but never typed still moved the athlete's
@@ -2612,14 +2676,8 @@ async function finishWorkout() {
       day.phases.forEach((phase, pi) => {
         phase.exercises.forEach((ex, ei) => {
           const exerciseKey = activeClient.id + '_' + activeDay + '_' + pi + '_' + ei;
-          const perSet = perSetFor(ex, exerciseKey);
-          const { sets, reps } = parseSetsReps(ex.setsReps);
-          if (perSet.length > 0) {
-            totalVolume += perSet.reduce((s, kg) => s + kg * reps, 0);
-          } else {
-            const loadKg = parseFloat(exerciseLoads[exerciseKey]);
-            if (Number.isFinite(loadKg) && loadKg > 0) totalVolume += sets * reps * loadKg;
-          }
+          if (!_isDone(exerciseKey)) return;
+          totalVolume += exerciseTonnage(ex.setsReps, perSetFor(ex, exerciseKey), exerciseLoads[exerciseKey]);
         });
       });
     }
@@ -2637,13 +2695,14 @@ async function finishWorkout() {
       day.phases.forEach((phase, pi) => {
         phase.exercises.forEach((ex, ei) => {
           const exerciseKey = activeClient.id + '_' + activeDay + '_' + pi + '_' + ei;
+          // Bài không tập thì không có dòng lịch sử — nếu không, biểu đồ tiến bộ
+          // và mức tạ cao nhất bị kéo theo số điền sẵn của buổi trước.
+          if (!_isDone(exerciseKey)) return;
           const perSet = perSetFor(ex, exerciseKey);
           const loadKg = perSet.length > 0 ? Math.max(...perSet) : parseFloat(exerciseLoads[exerciseKey]);
           if (!Number.isFinite(loadKg) || loadKg <= 0) return;
           const { sets, reps } = parseSetsReps(ex.setsReps);
-          const tonnage = perSet.length > 0
-            ? Math.round(perSet.reduce((s, kg) => s + kg * reps, 0))
-            : Math.round(sets * reps * loadKg);
+          const tonnage = Math.round(exerciseTonnage(ex.setsReps, perSet, loadKg));
           const exerciseRef = doc(db, 'clients', activeClient.id, 'workoutHistory', sessionRef.id, 'exercises', exerciseKey);
           batch.set(exerciseRef, { exerciseKey, loadKg, exerciseName: ex.name || '', day: activeDay, sets, reps, tonnage, setLoads: perSet,
             ...(ex.bw ? { isBodyweight: true, bodyweightKg: _clientBodyweight || null,
@@ -2665,6 +2724,7 @@ async function finishWorkout() {
     const durationMs = window._workoutStartTime ? Date.now() - window._workoutStartTime : 0;
     window._workoutStartTime = null;
     _summaryData = { doneN, total, tonnage: Math.round(totalVolume), durationMs, streak: 0 };
+    _lastSavedTonnage = Math.round(totalVolume);
     // Refresh streak in background
     (async () => {
       try {
@@ -3380,6 +3440,7 @@ function setSetLoad(key, si, rawValue) {
 
 async function hydrateExerciseLoadsForActiveDay() {
   _loadsHydrated = false;
+  _lastSavedTonnage = null;   // đổi khách/buổi: không hiện lại tonnage của buổi khác
   exerciseLoads = {};
   setLoads = {};
   if (!activeClient) return;
@@ -3782,7 +3843,9 @@ function getKgHistoryTable(key, ex) {
       }
     }
 
-    const vol = h.tonnage || sl.filter(v => Number.isFinite(v) && v > 0).reduce((s, v) => s + v * (Number.isFinite(h.reps) ? h.reps : (defaultReps || 1)), 0);
+    // Tính lại bằng bộ đọc hiện tại thay vì tin h.tonnage: dòng ghi TRƯỚC
+    // 2026-10-08 mang tonnage của công thức cũ ("4 × 250m" = 250 rep).
+    const vol = exerciseTonnage(ex?.setsReps, sl, h.kg);
     return `<tr>
       <td class="kht-week">${i + 1}</td>
       <td class="kht-date">${dateStr}</td>
