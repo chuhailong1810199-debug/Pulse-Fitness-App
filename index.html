@@ -1773,82 +1773,134 @@ function dashClientStrip(activeId) {
   </div>`;
 }
 
+
+function dshMeta(c) { return [c.goal, c.level, c.sessionsPerWeek ? c.sessionsPerWeek + ' buổi/tuần' : ''].filter(Boolean).join(' · '); }
+
+function dshAgo(at, now) {
+  var m = Math.round((now - at) / 60000);
+  if (m < 60) return Math.max(1, m) + ' phút trước';
+  var day = function (t) { var d = new Date(t); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
+  var days = Math.round((day(now) - day(at)) / 864e5), d1 = new Date(at);
+  var hm = String(d1.getHours()).padStart(2, '0') + ':' + String(d1.getMinutes()).padStart(2, '0');
+  if (days === 0) return Math.round(m / 60) + ' giờ trước';
+  if (days === 1) return 'hôm qua ' + hm;
+  return ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'][d1.getDay()] + ' ' + hm;
+}
+
+function dshRowsHTML(alerts, total) {
+  if (!alerts.length) return '<div class="dsh-empty"><span class="dsh-empty-tick">✓</span>'
+    + '<span class="dsh-empty-t">Không ai cần chú ý</span>'
+    + '<span class="dsh-empty-s">Cả ' + total + ' khách đều đang đi đúng lịch.</span></div>';
+  return alerts.map(function (a, i) {
+    var mag = a.mag != null ? '<b>' + a.mag + '</b><span>' + escHtml(a.unit || '') + '</span>' : '<b class="dsh-mute">—</b>';
+    return '<div class="dsh-row' + (a.sev ? ' dsh-' + a.sev : '') + '" style="--i:' + i + '"' + (a.hint ? ' title="' + escHtml(a.hint) + '"' : '') + '>'
+      + '<span class="dsh-rank">' + String(i + 1).padStart(2, '0') + '</span>'
+      + '<div class="dsh-who"><span class="dsh-name">' + escHtml(a.c.name) + '</span>'
+      + '<span class="dsh-reason">' + escHtml(a.reason) + '</span>'
+      + '<span class="dsh-meta">' + escHtml(dshMeta(a.c)) + '</span></div>'
+      + '<div class="dsh-mag">' + mag + '</div>'
+      + '<button class="dsh-open" onclick="openClientDash(\'' + escHtml(a.c.id) + '\')">Mở hồ sơ</button></div>';
+  }).join('');
+}
+
+function dshFeedHTML(feed, now) {
+  if (!feed.length) return '<div class="dsh-quiet">7 ngày qua chưa có bữa ăn hay buổi tập nào được ghi.</div>';
+  var TYPE = { nutrition: 'Ăn', workout: 'Tập', photo: 'Ảnh', inbody: 'Đo' };
+  return feed.map(function (f, i) {
+    var repeat = i > 0 && feed[i - 1].name === f.name;   // same client as the row above → name steps back
+    return '<div class="dsh-act" style="--i:' + i + '">'
+      + '<span class="dsh-act-i">' + (TYPE[f.type] || '·') + '</span>'
+      + '<div class="dsh-act-b"><span class="dsh-act-n' + (repeat ? ' dsh-mute' : '') + '">' + escHtml(f.name) + '</span>'
+      + '<span class="dsh-act-s">' + escHtml(f.summary) + '</span></div>'
+      + '<span class="dsh-act-w">' + dshAgo(f.at, now) + '</span></div>';
+  }).join('');
+}
+
+function dshStatsHTML(s) {
+  var pct = s.target ? Math.min(100, Math.round(s.done / s.target * 100)) : 0;
+  var kv = function (cls, label, n) { return '<div class="dsh-kv"><span><i class="dcs-dot ' + cls + '"></i>' + label + '</span><b>' + n + '</b></div>'; };
+  return '<div class="dsh-stat" style="--i:0"><span class="dsh-stat-l">Buổi tập tuần này</span>'
+    + '<span class="dsh-stat-n">' + s.done + '<span class="dsh-mute"> / ' + s.target + '</span></span>'
+    + '<div class="dsh-bar" role="progressbar" aria-valuemin="0" aria-valuemax="' + s.target + '" aria-valuenow="' + s.done + '"><div class="dsh-bar-f" style="width:' + pct + '%"></div></div>'
+    + '<span class="dsh-note">' + pct + '% số buổi cam kết' + (s.capped ? ' · mục tiêu đã giới hạn' : '') + '</span></div>'
+    + '<div class="dsh-stat" style="--i:1"><span class="dsh-stat-l">Gói dịch vụ</span>'
+    + '<span class="dsh-stat-n">' + s.by.none + '<span class="dsh-mute"> / ' + s.total + '</span></span>'
+    + '<span class="dsh-note">khách chưa có gói</span>'
+    + kv('dsh-ok', 'Đang hoạt động', s.by.active) + kv('dsh-warn', 'Sắp hết hạn', s.by.ending) + kv('dsh-bad', 'Đã hết hạn', s.by.expired) + '</div>'
+    + '<div class="dsh-stat" style="--i:2"><span class="dsh-stat-l">InBody quá hạn</span>'
+    + '<span class="dsh-stat-n">' + s.overdue + '<span class="dsh-mute"> / ' + s.total + '</span></span>'
+    + '<span class="dsh-note">quá 8 tuần chưa đo lại</span></div>';
+}
+
+function dshChipsHTML(clients, alerts) {
+  return clients.map(function (c) {
+    var a = alerts.find(function (x) { return x.c.id === c.id; });
+    var cls = !a ? 'dsh-ok' : a.sev === 'red' ? 'dsh-bad' : a.sev === 'amber' ? 'dsh-warn' : 'dsh-mute';
+    var s = !a ? 'Ổn' : (a.mag != null ? a.mag + ' ' + (a.unit || '') : a.reason);
+    return '<button class="dcs-chip" onclick="openClientDash(\'' + escHtml(c.id) + '\')"' + (a ? ' title="' + escHtml(a.reason) + '"' : '') + '>'
+      + '<i class="dcs-dot ' + cls + '"></i><span class="dcs-n">' + escHtml(c.name) + '</span><span class="dcs-s">' + escHtml(s) + '</span></button>';
+  }).join('');
+}
+
+var _dshIntroDone = false;
+function dshIntro(page) {
+  // Call at the end of renderDashboard(), after wrap.innerHTML = ….
+  // First render per app load gets the entrance; every later render (tab revisit, backfill) gets none.
+  var run = !_dshIntroDone;
+  _dshIntroDone = true;
+  page.classList.toggle('dsh-intro', run);
+  if (!run || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  page.querySelectorAll('.dsh-stat-n').forEach(function (el) {
+    var t = el.firstChild;
+    if (!t || t.nodeType !== 3) return;
+    var end = parseInt(t.nodeValue, 10);
+    if (!(end > 1)) return;
+    var start = performance.now() + 150;       // 150ms wait + 600ms count = done at 750ms, then stops
+    t.nodeValue = '0';
+    requestAnimationFrame(function step(now) {
+      var p = Math.min(1, Math.max(0, (now - start) / 600));
+      t.nodeValue = String(Math.round(end * (1 - Math.pow(1 - p, 3))));
+      if (p < 1) requestAnimationFrame(step);
+    });
+  });
+}
+
 function renderDashboard() {
   const wrap = document.getElementById('dash-body');
   if (!wrap || userRole !== 'coach') return;
   const rows = dashRows(), feed = dashFeed(30), st = dashStats();
+  const now = Date.now();
 
-  const alerts = rows.length ? rows.map((r, i) => `
-    <div class="dsh-row dsh-${r.sev}">
-      <span class="dsh-rank">${i + 1}</span>
-      <div class="dsh-who">
-        <div class="dsh-name">${escHtml(r.c.name || r.c.id)}</div>
-        <div class="dsh-meta">${escHtml((r.c.goal || '').slice(0, 34))}${
-          r.c.sessionsPerWeek ? ' · ' + r.c.sessionsPerWeek + ' buổi/tuần' : ''}</div>
-      </div>
-      <div class="dsh-reason"${r.hint ? ' title="' + escHtml(r.hint) + '"' : ''}>${escHtml(r.reason)}</div>
-      <div class="dsh-mag">${r.mag ? r.mag : '—'}<span>${escHtml(r.unit)}</span></div>
-      <button class="dsh-open" onclick="openClientDash('${r.c.id}')">Mở hồ sơ</button>
-    </div>`).join('')
-    : `<div class="dsh-empty">
-         <div class="dsh-empty-tick">✓</div>
-         <div class="dsh-empty-t">Không ai cần nhắc hôm nay</div>
-         <div class="dsh-empty-s">Cả ${st.total} khách đều còn hạn gói, đã thanh toán, có giáo án
-           và vẫn tập trong ngưỡng của mình.</div>
-       </div>`;
-
-  const feedHtml = feed.length ? feed.map(e => `
-    <div class="dsh-act">
-      <span class="dsh-act-i">${_DASH_ICON[e.type] || '•'}</span>
-      <div class="dsh-act-b">
-        <div class="dsh-act-n">${escHtml(e.name)}<span>${escHtml(ACTIVITY_LABEL[e.type] || '')}</span></div>
-        <div class="dsh-act-s">${escHtml(e.summary || '')}</div>
-      </div>
-      <span class="dsh-act-w">${_dashWhen(e.at)}</span>
-    </div>`).join('')
-    : `<div class="dsh-quiet">Chưa có hoạt động nào được ghi. Dữ liệu bắt đầu tích từ lúc
-        tính năng này bật, hoặc bấm <b>Nạp lại dữ liệu cũ</b> bên dưới.</div>`;
-
-  const pct = st.target ? Math.min(100, Math.round(st.done / st.target * 100)) : 0;
   wrap.innerHTML = `
     <div class="dsh-head">
-      <div><h1 class="dsh-h1">Dashboard</h1>
-        <div class="dsh-sub">${st.total} khách đang coach · ${rows.length
-          ? rows.length + ' người cần chú ý' : 'không ai cần chú ý'}</div></div>
-      <button class="dsh-refill" onclick="backfillDashboard(this)">Nạp lại dữ liệu cũ</button>
+      <div><h1 class="dsh-h1">Bảng điều khiển</h1>
+        <div class="dsh-sub">${new Date().toLocaleDateString('vi-VN',
+          { weekday:'long', day:'2-digit', month:'2-digit', year:'numeric' })}
+          · ${st.total} khách · ${rows.length ? rows.length + ' cần chú ý' : 'không ai cần chú ý'}</div></div>
+      <button class="dsh-refill" onclick="backfillDashboard(this)">Tải lại dữ liệu cũ</button>
     </div>
-    ${dashClientStrip(activeClient && activeClient.id)}
+    <div class="dcs-strip">${dshChipsHTML(clientsData || [], rows)}</div>
     <div class="dsh-grid">
       <section class="dsh-col dsh-col-main">
-        <div class="dsh-cap">Cần chú ý<span>xếp theo mức độ khẩn</span></div>
-        ${alerts}
+        <div class="dsh-cap">Cần chú ý<span>${rows.length || ''}</span></div>
+        ${dshRowsHTML(rows, st.total)}
       </section>
       <section class="dsh-col">
         <div class="dsh-cap">Hoạt động gần đây<span>7 ngày</span></div>
-        ${feedHtml}
+        ${feed.length ? dshFeedHTML(feed, now)
+          : '<div class="dsh-quiet">Chưa có hoạt động nào được ghi. Dữ liệu bắt đầu tích từ lúc tính năng này bật, hoặc bấm <b>Tải lại dữ liệu cũ</b> ở trên.</div>'}
       </section>
       <section class="dsh-col dsh-col-side">
         <div class="dsh-cap">Số liệu</div>
-        <div class="dsh-stat">
-          <div class="dsh-stat-l">Buổi tập tuần này</div>
-          <div class="dsh-stat-n">${st.done}<span> / ${st.target}</span></div>
-          <div class="dsh-bar"><div class="dsh-bar-f" style="width:${pct}%"></div></div>
-          ${st.capped ? '<div class="dsh-note">Là con số tối thiểu — mỗi khách chỉ lưu '
-            + ACTIVITY_CAP + ' sự kiện gần nhất.</div>' : ''}
-        </div>
-        <div class="dsh-stat">
-          <div class="dsh-stat-l">Trạng thái gói</div>
-          ${[['active','Đang hoạt động','ok'],['ending','Sắp hết hạn','warn'],
-             ['expired','Đã hết hạn','bad'],['none','Chưa có gói','mute']]
-            .map(([k, label, cls]) => `<div class="dsh-kv dsh-${cls}"><span>${label}</span><b>${st.by[k] || 0}</b></div>`).join('')}
-        </div>
-        <div class="dsh-stat">
-          <div class="dsh-stat-l">Quá hạn đo InBody</div>
-          <div class="dsh-stat-n dsh-${st.overdue ? 'warn' : 'ok'}">${st.overdue}<span> khách</span></div>
-          <div class="dsh-note">Quá 8 tuần kể từ lần đo gần nhất.</div>
-        </div>
+        ${dshStatsHTML(st)}
       </section>
     </div>`;
+
+  // Chuyển động chỉ chạy ở lần dựng ĐẦU TIÊN mỗi lần mở app. Mở lại tab hay
+  // tải lại dữ liệu thì không — renderDashboard() ghi đè toàn bộ innerHTML,
+  // nếu không chặn thì hiệu ứng vào phát lại mỗi lần coach bấm sang tab này.
+  const page = document.getElementById('dash-page');
+  if (page && typeof dshIntro === 'function') dshIntro(page);
 }
 
 /**
@@ -15546,6 +15598,149 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .dcs-chip.on .dcs-n{color:#8FDBFF;}
 .dcs-s{font-size:10px;font-weight:600;color:#8FDBFF;white-space:nowrap;}
 @media(max-width:900px){.dcs-cap{display:none;}}
+
+/* ══ DASHBOARD COACH — khung kinh + chuyen dong lan mo dau (Claude Design, 2026-10-08) ══
+   Ngan sach blur: 3 be mat o desktop (>=1024px), 0 tren dien thoai — khong doi
+   khi du 21 khach va 30 hoat dong. Blur nam tren .dsh-col::before chu KHONG tren
+   .dsh-col: backdrop-filter cung tao containing block cho con position:fixed,
+   dung bay cua transform. */
+/* ═══════════════════════════════════════════════════════════════════════
+   Pulse — coach dashboard: glass panes + first-open motion
+   Scope: #dash-page only. Paste AFTER the existing .dsh-* / .dcs-* rules.
+   Keeps every class name. Grid breakpoints (1024 / 1360 / 1700) are untouched.
+   ═══════════════════════════════════════════════════════════════════════ */
+#dash-page{
+  /* Every fill is a DARK tint from the #211E1D family, never white, so over the
+     sky's brightest pixel (#312C2A) it can only pull the backdrop down. */
+  --dsh-pane:rgba(33,30,29,.45);        /* column glass, ≥1024px, blurred. Worst case → #2A2624 */
+  --dsh-pane-flat:rgba(33,30,29,.62);   /* column, <1024px, NO blur. Worst case → #272322 */
+  --dsh-pane-solid:rgba(33,30,29,.86);  /* browsers without backdrop-filter */
+  --dsh-item:rgba(48,43,41,.42);        /* rows, feed, stats inside a pane: no blur. #302B29 sits under the sky cap, so it can't lift anything above it */
+  --dsh-item-hover:rgba(58,53,50,.6);   /* LOAD-BEARING: lightest surface on the screen (#342F2C worst case). 55% text on it = 5.17:1. Lighten this and .dsh-meta goes first */
+  --dsh-hair:rgba(255,255,255,.07);
+  --dsh-edge:rgba(255,255,255,.1);
+  --dsh-sev-red:#EE5A4F;
+  --dsh-sev-amber:#8FDBFF;              /* kept: .dsh-amber has always drawn the accent blue */
+  --dsh-sev-none:#595755;
+  --dsh-ease:cubic-bezier(.2,.7,.2,1);
+}
+
+/* ── Head + client strip ───────────────────────────────────────────── */
+#dash-page .dsh-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:20px 2px 14px}
+#dash-page .dsh-h1{margin:0;font-size:26px;font-weight:800;letter-spacing:-.01em;color:#fff}
+#dash-page .dsh-sub{margin:4px 0 0;font-size:12.5px;font-weight:500;color:rgba(255,255,255,.55)}
+#dash-page .dsh-refill{min-height:44px;padding:0 16px;border-radius:999px;border:1px solid var(--dsh-edge);background:rgba(33,30,29,.55);color:rgba(255,255,255,.75);font:600 13px 'Figtree',sans-serif;cursor:pointer;transition:background-color .15s,color .15s}
+#dash-page .dsh-refill:hover{background:var(--dsh-item-hover);color:#fff}
+/* 21 chips: no blur, no entrance. Plain dark tint straight over the sky. */
+#dash-page .dcs-chip{flex:none;display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:0 14px 0 12px;border-radius:999px;border:1px solid var(--dsh-hair);background:rgba(33,30,29,.55);color:#fff;font-family:'Figtree',sans-serif;cursor:pointer;transition:background-color .15s,border-color .15s}
+#dash-page .dcs-chip:hover{background:var(--dsh-item-hover);border-color:var(--dsh-edge)}
+#dash-page .dcs-dot{flex:none;display:inline-block;width:8px;height:8px;border-radius:50%;background:currentColor}
+#dash-page .dcs-n{font-size:13px;font-weight:700;white-space:nowrap}
+#dash-page .dcs-s{font-size:11px;font-weight:600;color:rgba(255,255,255,.55);white-space:nowrap;font-variant-numeric:tabular-nums}
+
+/* ── Columns: the only glass on the screen ──────────────────────────── */
+/* The blur lives on ::before, not on .dsh-col. backdrop-filter, like transform,
+   makes its element a containing block for position:fixed descendants. On the
+   pseudo-element it cannot trap the client picker or the AI sheet.
+   isolation:isolate keeps the z-index:-1 pseudo above the sky and below the
+   column's content; it creates neither a containing block nor a backdrop root. */
+#dash-page .dsh-col{position:relative;isolation:isolate;display:flex;flex-direction:column;gap:8px;min-width:0;padding:14px;border-radius:20px;border:1px solid var(--dsh-edge);box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 24px 48px -30px rgba(0,0,0,.75)}
+#dash-page .dsh-col::before{content:"";position:absolute;inset:0;z-index:-1;border-radius:inherit;background:var(--dsh-pane-flat);pointer-events:none}
+@media (min-width:1024px){
+  #dash-page .dsh-col::before{background:var(--dsh-pane);-webkit-backdrop-filter:blur(18px) saturate(125%);backdrop-filter:blur(18px) saturate(125%)}
+}
+@supports not ((-webkit-backdrop-filter:blur(1px)) or (backdrop-filter:blur(1px))){
+  #dash-page .dsh-col::before{background:var(--dsh-pane-solid)}
+}
+/* Never put opacity<1, filter, mask, clip-path or will-change on .dsh-col or any
+   ancestor: each makes a backdrop root and the blur goes blank (a fade-in would
+   show flat panes, then pop the glass in at the end). */
+@media (max-width:520px){#dash-page .dsh-col{padding:10px;border-radius:18px}}
+#dash-page .dsh-cap{display:flex;align-items:center;gap:8px;margin:2px 4px 6px;font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.55)}
+#dash-page .dsh-cap span{padding:2px 8px;border-radius:999px;background:rgba(255,255,255,.07);font-size:11px;letter-spacing:.02em;color:rgba(255,255,255,.75);font-variant-numeric:tabular-nums}
+
+/* ── Alert rows ─────────────────────────────────────────────────────── */
+#dash-page .dsh-row{position:relative;display:grid;grid-template-columns:22px minmax(0,1fr) auto;grid-template-areas:"rank who mag" "rank who open";align-items:center;gap:6px 12px;min-height:64px;padding:12px 12px 12px 16px;border-radius:12px;border:1px solid var(--dsh-hair);background:var(--dsh-item);transition:background-color .15s,border-color .15s}
+@media (min-width:560px){#dash-page .dsh-row{grid-template-columns:22px minmax(0,1fr) auto auto;grid-template-areas:"rank who mag open"}}
+@media (hover:hover){#dash-page .dsh-row:hover{background:var(--dsh-item-hover);border-color:var(--dsh-edge)}}
+/* Severity stripe: was border-left (the border shorthand above resets it); now a
+   pseudo-element so it can draw in. Same three colours, same meaning. */
+#dash-page .dsh-row::before{content:"";position:absolute;left:5px;top:10px;bottom:10px;width:3px;border-radius:3px;background:var(--dsh-sev-none)}
+#dash-page .dsh-row.dsh-red::before{background:var(--dsh-sev-red)}
+#dash-page .dsh-row.dsh-amber::before{background:var(--dsh-sev-amber)}
+#dash-page .dsh-rank{grid-area:rank;align-self:start;padding-top:2px;font-size:11px;font-weight:700;color:rgba(255,255,255,.55);font-variant-numeric:tabular-nums}
+#dash-page .dsh-who{grid-area:who;display:flex;flex-direction:column;gap:2px;min-width:0}
+#dash-page .dsh-name{font-size:14.5px;font-weight:700;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Reason stays near-white: #EE5A4F at 13px is 4.31:1 here, under AA.
+   Colour lives in the stripe and in the big number. */
+#dash-page .dsh-reason{font-size:13px;font-weight:600;color:rgba(255,255,255,.88)}
+#dash-page .dsh-meta{font-size:10.5px;font-weight:500;color:rgba(255,255,255,.55);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#dash-page .dsh-mag{grid-area:mag;justify-self:end;display:flex;flex-direction:column;align-items:flex-end;line-height:1}
+#dash-page .dsh-mag b{font-size:22px;font-weight:800;letter-spacing:-.01em;color:#fff;font-variant-numeric:tabular-nums}
+#dash-page .dsh-red .dsh-mag b{color:var(--dsh-sev-red)}   /* 22px/800 counts as large text: needs 3:1, gets 3.92 */
+#dash-page .dsh-mag span{margin-top:3px;font-size:10.5px;font-weight:600;color:rgba(255,255,255,.55)}
+#dash-page .dsh-open{grid-area:open;justify-self:end;min-height:44px;padding:0 14px;border-radius:999px;border:1px solid rgba(143,219,255,.35);background:transparent;color:#8FDBFF;font:700 12.5px 'Figtree',sans-serif;white-space:nowrap;cursor:pointer;transition:background-color .15s,border-color .15s,transform .12s}
+#dash-page .dsh-open:hover{background:rgba(143,219,255,.1);border-color:rgba(143,219,255,.6)}
+#dash-page .dsh-open:active{transform:scale(.96)}   /* the only transform left in place: a leaf <button>, only while pressed */
+/* First row, when it is red: its button is the one filled action on the screen. */
+#dash-page .dsh-cap + .dsh-row.dsh-red .dsh-open{background:#1C90FF;border-color:#1C90FF;color:#161111}
+#dash-page .dsh-cap + .dsh-row.dsh-red .dsh-open:hover{box-shadow:0 0 0 3px rgba(28,144,255,.28)}
+#dash-page .dsh-open:focus-visible,#dash-page .dsh-refill:focus-visible,#dash-page .dcs-chip:focus-visible{outline:2px solid #8FDBFF;outline-offset:2px}
+
+/* ── Activity feed ──────────────────────────────────────────────────── */
+#dash-page .dsh-act{display:grid;grid-template-columns:34px minmax(0,1fr) auto;align-items:start;gap:10px;min-height:52px;padding:10px 12px;border-radius:12px;border:1px solid var(--dsh-hair);background:var(--dsh-item)}
+#dash-page .dsh-act-i{width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.06);font-size:11px;font-weight:800;color:rgba(255,255,255,.75)}
+#dash-page .dsh-act-b{display:flex;flex-direction:column;gap:2px;min-width:0}
+#dash-page .dsh-act-n{font-size:13px;font-weight:700;color:#fff}
+#dash-page .dsh-act-s{font-size:11.5px;line-height:1.45;color:rgba(255,255,255,.55);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+#dash-page .dsh-act-w{padding-top:2px;font-size:10.5px;font-weight:600;color:rgba(255,255,255,.55);white-space:nowrap;font-variant-numeric:tabular-nums}
+
+/* ── Numbers ────────────────────────────────────────────────────────── */
+#dash-page .dsh-stat{display:flex;flex-direction:column;gap:6px;min-width:0;padding:14px;border-radius:14px;border:1px solid var(--dsh-hair);background:var(--dsh-item)}
+#dash-page .dsh-stat-l{font-size:10.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.55)}
+#dash-page .dsh-stat-n{font-size:32px;font-weight:800;line-height:1.05;letter-spacing:-.02em;color:#fff;font-variant-numeric:tabular-nums}
+#dash-page .dsh-stat-n .dsh-mute{font-size:16px;font-weight:700;letter-spacing:0}
+#dash-page .dsh-bar{height:6px;margin-top:4px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden}
+#dash-page .dsh-bar-f{height:100%;min-width:6px;border-radius:6px;background:#8FDBFF;transform-origin:0 50%}
+#dash-page .dsh-note{font-size:10.5px;font-weight:500;color:rgba(255,255,255,.55)}
+#dash-page .dsh-kv{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:30px;padding-top:6px;border-top:1px solid var(--dsh-hair);font-size:12.5px;font-weight:600;color:rgba(255,255,255,.75)}
+#dash-page .dsh-note + .dsh-kv{margin-top:4px}
+#dash-page .dsh-kv span{display:flex;align-items:center;gap:8px}
+#dash-page .dsh-kv b{font-weight:800;color:#fff;font-variant-numeric:tabular-nums}
+
+/* ── Empty + quiet states ───────────────────────────────────────────── */
+#dash-page .dsh-empty{display:flex;flex-direction:column;align-items:center;gap:6px;padding:34px 16px;text-align:center;border-radius:14px;border:1px dashed var(--dsh-edge)}
+#dash-page .dsh-empty-tick{width:44px;height:44px;margin-bottom:6px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:800;color:#7ED9A0;border:1.5px solid rgba(126,217,160,.45);background:rgba(126,217,160,.08)}
+#dash-page .dsh-empty-t{font-size:15px;font-weight:800;color:#fff}
+#dash-page .dsh-empty-s{font-size:12.5px;color:rgba(255,255,255,.55)}
+#dash-page .dsh-quiet{padding:26px 16px;text-align:center;font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.55);border-radius:14px;border:1px dashed var(--dsh-edge)}
+
+/* ── Semantic (last, so they win) ───────────────────────────────────── */
+#dash-page .dsh-ok{color:#7ED9A0}
+#dash-page .dsh-warn{color:#E6B34A}
+#dash-page .dsh-bad{color:#EE5A4F}    /* dots and ≥19px bold numbers only: fails AA as small text */
+#dash-page .dsh-mute{color:rgba(255,255,255,.55)}
+
+/* ── Motion ─────────────────────────────────────────────────────────────
+   Runs only while #dash-page has .dsh-intro, which dshIntro() sets on the first
+   render per app load. Every entrance uses fill-mode:backwards, so nothing keeps
+   a transform or opacity after it finishes. Columns never animate (see above). */
+@keyframes dsh-in{from{opacity:0;transform:translateY(6px)}}
+@keyframes dsh-draw{from{transform:scaleY(0)}}
+@keyframes dsh-fill{from{transform:scaleX(0)}}
+@keyframes dsh-ping{0%{opacity:0}35%{opacity:1}100%{opacity:0}}
+/* stagger cap: min(i,8) × 30ms = 240ms max. Row 9 onward lands together with row 8. */
+#dash-page.dsh-intro .dsh-row{animation:dsh-in .28s var(--dsh-ease) backwards;animation-delay:calc(min(var(--i,0),8) * 30ms)}
+#dash-page.dsh-intro .dsh-row::before{transform-origin:50% 0;animation:dsh-draw .3s var(--dsh-ease) backwards;animation-delay:calc(min(var(--i,0),8) * 30ms + 100ms)}
+/* one ring, once, on the top row if it is red */
+#dash-page.dsh-intro .dsh-cap + .dsh-row.dsh-red::after{content:"";position:absolute;inset:-1px;border-radius:inherit;box-shadow:0 0 0 2px rgba(238,90,79,.55),0 0 18px rgba(238,90,79,.25);opacity:0;pointer-events:none;animation:dsh-ping .6s ease-out .3s 1 backwards}
+#dash-page.dsh-intro .dsh-act{animation:dsh-in .26s var(--dsh-ease) backwards;animation-delay:calc(120ms + min(var(--i,0),8) * 25ms)}
+#dash-page.dsh-intro .dsh-stat{animation:dsh-in .28s var(--dsh-ease) backwards;animation-delay:calc(80ms + var(--i,0) * 40ms)}
+#dash-page.dsh-intro .dsh-bar-f{animation:dsh-fill .6s cubic-bezier(.3,.7,.2,1) .25s backwards}
+#dash-page.dsh-intro .dsh-empty,#dash-page.dsh-intro .dsh-quiet{animation:dsh-in .28s var(--dsh-ease) backwards}
+@media (prefers-reduced-motion:reduce){
+  #dash-page *,#dash-page *::before,#dash-page *::after{animation:none !important;transition:none !important}
+}
 
 /* ── Client dashboard: một khách, trên máy tính ─────────────────────────── */
 #cdash-page{display:none;}
