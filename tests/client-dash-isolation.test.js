@@ -62,7 +62,18 @@ ok("coach van mo duoc ho so bat ky", async () => {
 // ── renderClientDash: cai gi hien ra cho ai ───────────────────────────
 function mkRender(role, avatar) {
   let html = "";
-  const el = { innerHTML: "", classList: { add() {}, toggle() {}, contains: () => false } };
+  // Phan tu gia: cdBind()/cdDeck() gan su kien va do kich thuoc. Bai kiem nay
+  // chi soi HTML dung ra, nen cac phuong thuc DOM chi can ton tai.
+  const noop = () => {};
+  const el = {
+    innerHTML: "", classList: { add: noop, remove: noop, toggle: noop, contains: () => false },
+    addEventListener: noop, removeEventListener: noop,
+    querySelector: () => null, querySelectorAll: () => [],
+    getBoundingClientRect: () => ({ width: 375, height: 600, left: 0, top: 0 }),
+    scrollTo: noop, scrollLeft: 0, clientWidth: 375, offsetLeft: 0,
+    style: {}, dataset: {}, setAttribute: noop, removeAttribute: noop,
+    hasAttribute: () => false, getAttribute: () => null, closest: () => null,
+  };
   Object.defineProperty(el, "innerHTML", {
     get: () => html, set: (v) => { html = v; }, configurable: true });
   const ctx = {
@@ -74,6 +85,15 @@ function mkRender(role, avatar) {
     _cdash: { clientId: "cindy", byName: {}, sessions: [], loads: {} },
     document: { getElementById: (id) => (id === "cdash-body" ? el : null) },
     loadClientDash: async () => {},
+    loadActive: async () => {},
+    // CD_MQ doc window.matchMedia luc nap khoi; VM khong co window.
+    window: { matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }) },
+    requestAnimationFrame: (f) => { f(0); return 1; },
+    setTimeout: (f) => { if (typeof f === 'function') f(); return 1; },
+    clearTimeout: () => {}, setInterval: () => 1, clearInterval: () => {},
+    performance: { now: () => 0 },
+    cancelAnimationFrame: () => {},
+    matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
     accessStatus: () => ({ state: "active", daysLeft: 20 }),
     ACCESS_LABEL: { active: "Đang hoạt động" },
     _daysSince: () => 2, inactiveThreshold: () => 5,
@@ -81,6 +101,9 @@ function mkRender(role, avatar) {
     cdMuscles: () => [], cdLoadValue: () => "", parseSetsCount: () => 3,
     escHtml: (x) => String(x == null ? "" : x),
     dashClientStrip: () => "<!--DAI-KHACH-->",
+    // Ban moi dung cdChipsHTML(), doc thang clientsData.
+    clientsData: [{ id: "cindy", name: "Cindy" }, { id: "kem", name: "Kem" }],
+    clientAlert: () => null,
     CD_AV_CAM: "<!--CAM-->",
   };
   if (avatar !== undefined) ctx.activeClient.avatar = avatar;
@@ -88,6 +111,11 @@ function mkRender(role, avatar) {
   // Hàm avatar chạy THẬT, cắt từ index.html như mọi hàm khác ở đây.
   vm.runInContext(take("cdHasAvatar"), ctx);
   vm.runInContext(take("cdAvatarHTML"), ctx);
+  // renderClientDash giờ chỉ uỷ quyền cho cdRender; nạp trọn khối cd* để màn
+  // hình được dựng bằng ĐÚNG code đang chạy, không phải bản chép tay.
+  const i0 = s.indexOf("var CD_STEP_GOAL");
+  const i1 = s.indexOf("async function renderClientDash()", i0);
+  vm.runInContext(s.slice(i0, i1), ctx);
   vm.runInContext(take("renderClientDash"), ctx);
   return { get html() { return html; },
     run: () => vm.runInContext("renderClientDash()", ctx) };
@@ -97,7 +125,8 @@ ok("khach KHONG thay nut 'Tat ca khach' va KHONG thay dai khach", async () => {
   const r = mkRender("client"); await r.run();
   assert(r.html.length > 100, "khong render ra gi");
   assert(!/Tất cả khách/.test(r.html), "van con nut quay ve trang tat ca khach");
-  assert(!/DAI-KHACH/.test(r.html), "van con dai chuyen khach");
+  assert(!/DAI-KHACH|cd-chips|openClientDash\(/.test(r.html),
+    "van con duong nhay sang khach khac");
   assert(!/Mở giáo án để sửa/.test(r.html), "khach khong sua giao an, nhan phai khac");
   assert(/Mở giáo án/.test(r.html), "thieu nut mo giao an");
 });
@@ -105,7 +134,7 @@ ok("khach KHONG thay nut 'Tat ca khach' va KHONG thay dai khach", async () => {
 ok("coach VAN thay day du", async () => {
   const r = mkRender("coach"); await r.run();
   assert(/Tất cả khách/.test(r.html), "coach mat nut quay ve");
-  assert(/DAI-KHACH/.test(r.html), "coach mat dai chuyen khach");
+  assert(/cd-chips|openClientDash\(/.test(r.html), "coach mat dai chuyen khach");
   assert(/Mở giáo án để sửa/.test(r.html));
 });
 
@@ -113,7 +142,7 @@ ok("khach van thay phan tap cua minh", async () => {
   const r = mkRender("client"); await r.run();
   assert(/Cindy/.test(r.html), "thieu ten khach");
   assert(/Squat/.test(r.html), "thieu bai tap trong giao an");
-  assert(/Session A|SessionA/.test(r.html), "thieu buoi tap");
+  assert(/Session\s?A|Bu\u1ed5i A|cd-sess/.test(r.html), "thieu buoi tap");
 });
 
 // ── loadClientDash: moi duong dan deu mang id cua chinh khach ─────────
@@ -124,14 +153,14 @@ const AV = "data:image/jpeg;base64," + "A".repeat(64);
 ok("KHACH khong doi duoc anh dai dien", async () => {
   const r = mkRender("client", AV); await r.run();
   assert(/<img src="data:image\/jpeg/.test(r.html), "khach phai thay anh cua chinh minh");
-  assert(!/<button class="cd-av"/.test(r.html), "khach khong duoc co nut doi anh");
+  assert(!/cd-av-cam|cdPickAvatar\(/.test(r.html), "khach khong duoc co nut doi anh");
   assert(!/cdPickAvatar/.test(r.html), "khach khong duoc goi duoc cdPickAvatar");
   assert(!/Bỏ ảnh/.test(r.html), "khach khong duoc co nut bo anh");
 });
 
 ok("COACH doi va bo duoc anh", async () => {
   const r = mkRender("coach", AV); await r.run();
-  assert(/<button class="cd-av"[^>]*onclick="cdPickAvatar\(\)"/.test(r.html), "coach thieu nut doi anh");
+  assert(/cd-av-cam[^>]*onclick="cdPickAvatar\(\)"/.test(r.html), "coach thieu nut doi anh");
   assert(/cdRemoveAvatar\(\)/.test(r.html), "coach thieu nut bo anh khi da co anh");
 });
 

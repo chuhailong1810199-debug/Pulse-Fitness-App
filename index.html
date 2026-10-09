@@ -2501,99 +2501,484 @@ function _cdSquareAvatar(file, px) {
   });
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Pulse — client dashboard (#cdash-page): Dashboard + Active in one screen
+   In renderClientDash(), once _cdash and _activity are loaded:
+       cdRender(document.getElementById('cdash-page'));
+   Uses as-is: userRole, activeClient, _cdash, _activity, cdSetLoad(),
+   showPage(), openClientDash(), cdPickAvatar(), cdRemoveAvatar().
+   cdMuscles() stays untouched; cdMusclesIn() below sums the same way.
+   No requestAnimationFrame, no canvas, nothing runs after the screen settles.
+   ═══════════════════════════════════════════════════════════════════════ */
+var CD_STEP_GOAL = 10000;
+var CD_SUM_N = 4;                                         // exercises previewed on a session card
+var CD_MUS_N = 8;                                         // muscle rows before "Xem tất cả"
+var CD_MQ = window.matchMedia('(min-width: 1024px)');     // same breakpoint as the CSS
+var CD_SCOPES = [['last', 'Buổi gần nhất'], [7, '7 ngày'], [28, '28 ngày']];
+
+// ── Muscle name → body-map region ───────────────────────────────────────
+// Keys are folded by cdFold(): lowercase, no diacritics, single spaces.
+// A name the coach sees under "chưa có trên hình" gets one line here.
+var CD_MUSCLE_MAP = {
+  'chest': ['chest'], 'pectoralis major': ['chest'], 'pecs': ['chest'], 'upper chest': ['chest'], 'lower chest': ['chest'],
+  'anterior deltoid': ['delt-f'], 'front deltoid': ['delt-f'], 'front delts': ['delt-f'],
+  'lateral deltoid': ['delt-s'], 'side deltoid': ['delt-s'], 'medial deltoid': ['delt-s'], 'side delts': ['delt-s'],
+  'rear deltoid': ['delt-r'], 'posterior deltoid': ['delt-r'], 'rear delts': ['delt-r'],
+  'deltoids': ['delt-f', 'delt-s', 'delt-r'], 'shoulders': ['delt-f', 'delt-s', 'delt-r'],
+  'biceps': ['biceps'], 'biceps brachii': ['biceps'], 'brachialis': ['biceps'],
+  'triceps': ['triceps'], 'triceps brachii': ['triceps'],
+  'forearms': ['forearm'], 'brachioradialis': ['forearm'], 'grip': ['forearm'],
+  'abs': ['abs'], 'abdominals': ['abs'], 'rectus abdominis': ['abs'], 'core': ['abs', 'obliques'], 'obliques': ['obliques'],
+  'quads': ['quads'], 'quadriceps': ['quads'], 'adductors': ['adductors'],
+  'hamstrings': ['hams'], 'glutes': ['glutes'], 'gluteus maximus': ['glutes'], 'gluteus medius': ['glutes'],
+  'calves': ['calves'], 'gastrocnemius': ['calves'], 'soleus': ['calves'],
+  'traps': ['traps'], 'trapezius': ['traps'], 'upper traps': ['traps'],
+  'lower traps': ['traps-lo'], 'middle traps': ['traps-lo'], 'mid traps': ['traps-lo'],
+  'rhomboids': ['rhomboids'], 'latissimus dorsi': ['lats'], 'lats': ['lats'], 'teres major': ['teres'],
+  'rotator cuff': ['rotator'], 'infraspinatus': ['rotator'],
+  'erector spinae': ['erectors'], 'lower back': ['erectors']
+};
+// Second chance for names nobody added yet. First match wins, so order matters.
+var CD_MUSCLE_GUESS = [
+  [/(rear|posterior).*delt/, ['delt-r']], [/(front|anterior).*delt/, ['delt-f']], [/(side|lateral|medial).*delt/, ['delt-s']],
+  [/delt|shoulder/, ['delt-f', 'delt-s', 'delt-r']], [/pec|chest/, ['chest']], [/\blats?\b|latissimus/, ['lats']],
+  [/(lower|mid|middle) trap/, ['traps-lo']], [/trap/, ['traps']], [/rhomb/, ['rhomboids']],
+  [/rotator|infraspin|teres minor/, ['rotator']], [/teres/, ['teres']],
+  [/hamstring|biceps femoris/, ['hams']], [/bicep|brachialis/, ['biceps']], [/tricep/, ['triceps']],
+  [/forearm|wrist|grip|brachiorad/, ['forearm']], [/oblique/, ['obliques']], [/\babs?\b|abdom|core/, ['abs']],
+  [/quad|vastus|rectus femoris/, ['quads']], [/glute/, ['glutes']], [/calf|calves|gastroc|soleus/, ['calves']],
+  [/adduct/, ['adductors']], [/erector|lower back|spinal/, ['erectors']]
+];
+var CD_REGION_VI = {
+  'chest': 'ngực', 'delt-f': 'vai trước', 'delt-s': 'vai giữa', 'delt-r': 'vai sau', 'biceps': 'tay trước', 'triceps': 'tay sau',
+  'forearm': 'cẳng tay', 'abs': 'bụng', 'obliques': 'bụng chéo', 'quads': 'đùi trước', 'adductors': 'đùi trong', 'hams': 'đùi sau',
+  'glutes': 'mông', 'calves': 'bắp chân', 'traps': 'cầu vai', 'traps-lo': 'thang giữa', 'rhomboids': 'cơ trám', 'lats': 'xô',
+  'teres': 'cơ tròn lớn', 'rotator': 'chóp xoay', 'erectors': 'cơ dựng sống'
+};
+
+// ── Body figure: front + back, simple shapes, one SVG ───────────────────
+// [region|null, 'e', cx,cy,rx,ry,rot, center] · [region, 'r', x,y,w,h,r, center] · [region, 'p', d, center]
+// Drawn for the figure's left side and mirrored around x=50 unless center is 1. null = not a muscle.
+var CD_FIG = {
+  f: [[null,'e',50,13,8.5,10.5,0,1],[null,'r',46,22,8,8,3,1],['delt-s','e',23.2,43.5,3.6,7.2,-10],['delt-f','e',31,40.5,4.4,6.6,-18],
+      ['chest','e',42.4,44,7.4,7,0],['biceps','e',20.6,60,4.2,8.8,8],['forearm','e',16.8,81,3.6,10,10],[null,'e',14.6,97.5,3,4.5,8],
+      ['abs','r',43.5,53,13,34,5,1],['obliques','e',37.4,70,3.6,13,0],[null,'p','M36,89 L64,89 Q66,95 62,101 L38,101 Q34,95 36,89 Z',1],
+      ['quads','e',40,122,7,18.5,-3],['adductors','e',47.8,107,2,9,0],[null,'e',40.5,145.5,4.6,3.6,0],[null,'e',40.5,166,4.2,14,0],[null,'e',40,185,5,2.8,0]],
+  b: [[null,'e',50,13,8.5,10.5,0,1],[null,'r',46,22,8,8,3,1],['traps','p','M50,23 L63,33.5 L56,37.2 L50,40 L44,37.2 L37,33.5 Z',1],
+      ['traps-lo','p','M50,40.6 L53.4,46 L50,66 L46.6,46 Z',1],['delt-s','e',23.2,43.5,3.6,7.2,-10],['delt-r','e',31,40.5,4.4,6.6,-18],
+      ['rotator','e',37.3,47.6,3.8,4.8,0],['rhomboids','p','M46.2,42.6 L46.2,55 L42.2,51.6 L41.8,44.2 Z'],['teres','e',32.4,54.2,3.4,2.4,-25],
+      ['lats','p','M32.6,57.4 Q38.5,58.8 44.4,59.6 L44.4,79 Q38.6,77 35.4,71 Q32.6,64 32.6,57.4 Z'],['erectors','r',45.4,67,3.8,24,1.9],
+      ['triceps','e',20.6,60,4.2,8.8,8],['forearm','e',16.8,81,3.6,10,10],[null,'e',14.6,97.5,3,4.5,8],['glutes','e',42.2,99,7.8,8,0],
+      ['hams','e',40.4,126.5,6.8,16,-3],[null,'e',40.5,146.5,4.6,3.6,0],['calves','e',40.4,166,5,12.5,0],[null,'e',40.5,181.5,2.6,4.5,0],[null,'e',40,186.5,5,2.8,0]]
+};
+
+// Survives re-renders (cdSetLoad saving, tab revisits); resets per client where it should.
+var _cdd = { id: null, cur: null, open: null, scope: 'last', sel: null, allMus: false, introFor: {}, ctx: null };
+
+function cdEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+function cdFold(s) {
+  var f = typeof _schFold === 'function' ? _schFold(String(s)) : String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd');
+  return f.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+function cdT(at) {
+  if (at == null) return 0;
+  if (typeof at === 'number') return at;
+  if (at instanceof Date) return at.getTime();
+  if (typeof at.toMillis === 'function') return at.toMillis();
+  if (at.seconds != null) return at.seconds * 1000;
+  var t = Date.parse(at); return isNaN(t) ? 0 : t;
+}
+function cdDayIdx(t) { return Math.floor((t - new Date(t).getTimezoneOffset() * 6e4) / 864e5); }
+function cdAgo(t) { return cdDayIdx(Date.now()) - cdDayIdx(t); }
+function cdDM(t) { var d = new Date(t); return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0'); }
+function cdISO(t) { var d = new Date(t); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function cdISOt(s) { var p = String(s).split('-'); return new Date(+p[0], +p[1] - 1, +p[2]).getTime(); }
+function cdRel(t) {
+  var d = cdAgo(t);
+  if (d <= 0) return 'hôm nay';
+  if (d === 1) return 'hôm qua';
+  if (d < 7) return d + ' ngày trước';
+  if (d < 56) return Math.floor(d / 7) + ' tuần trước';
+  return 'ngày ' + cdDM(t);
+}
+function cdCap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+function cdNum(n, dp) { return (Number(n) || 0).toLocaleString('vi-VN', { maximumFractionDigits: dp || 0 }); }
+
+var _cdMapMemo = {}, _cdWarned = {};
+function cdMapMuscle(name) {
+  var k = cdFold(name);
+  if (_cdMapMemo[k]) return _cdMapMemo[k];
+  var r = CD_MUSCLE_MAP[k] ? { regions: CD_MUSCLE_MAP[k], how: 'map' } : null;
+  for (var i = 0; !r && i < CD_MUSCLE_GUESS.length; i++) if (CD_MUSCLE_GUESS[i][0].test(k)) r = { regions: CD_MUSCLE_GUESS[i][1], how: 'guess' };
+  if (!r) r = { regions: [], how: 'none' };
+  if (r.how !== 'map' && !_cdWarned[k]) { _cdWarned[k] = 1; console.warn('[cdash] muscle "' + name + '" ' + (r.how === 'guess' ? 'guessed as ' + r.regions.join('+') : 'has no body region') + ', add it to CD_MUSCLE_MAP'); }
+  return (_cdMapMemo[k] = r);
+}
+
+function cdSessions() {
+  var ss = (_cdash && _cdash.clientId === activeClient.id && _cdash.sessions) || [];
+  return ss.map(function (s) { return Object.assign({}, s, { t: cdT(s.at) }); }).sort(function (a, b) { return b.t - a.t; });
+}
+function cdMusclesIn(scope) {
+  var all = cdSessions();
+  var pick = scope === 'last' ? all.slice(0, 1) : all.filter(function (s) { return cdAgo(s.t) < scope; });
+  var t = {};
+  pick.forEach(function (s) { Object.keys(s.byMuscle || {}).forEach(function (m) { t[m] = (t[m] || 0) + (Number(s.byMuscle[m]) || 0); }); });
+  var list = Object.keys(t).filter(function (m) { return t[m] > 0; }).map(function (m) { return [m, t[m]]; }).sort(function (a, b) { return b[1] - a[1]; });
+  return { list: list, pick: pick, all: all };
+}
+function cdKeys(c) {
+  var p = c.program || {};
+  return Object.keys(p).filter(function (k) { return /^Session[A-E]$/i.test(k) && cdExs(p[k]).length; }).sort();
+}
+function cdExs(day) { var out = []; ((day && day.phases) || []).forEach(function (ph) { (ph.exercises || []).forEach(function (e) { out.push(e); }); }); return out; }
+function cdLetter(k, i) { var m = /^Session([A-E])$/i.exec(k); return m ? m[1].toUpperCase() : String(i + 1); }
+function cdDayName(c, k, i) { var p = (c.program || {})[k] || {}; return 'Buổi ' + cdLetter(k, i) + (p.label ? ' · ' + p.label : ''); }
+function cdNextIdx(keys, ss) { if (!keys.length || !ss.length) return 0; var i = keys.indexOf(ss[0].day); return i < 0 ? 0 : (i + 1) % keys.length; }
+// ADAPT these two to wherever the app keeps the current load the .cd-kg box shows.
+// Uy quyen cho ham that cua app. Khoa that la
+// loads[day].exerciseLoads[clientId_day_pi_ei], khong phai 'pi-ei'.
+function cdLoad(day, pi, ei, bw) {
+  var v = (typeof cdLoadValue === 'function') ? cdLoadValue(day, pi, ei, !!bw) : '';
+  return v === '' || v == null ? null : v;
+}
+// App gom lich su theo TEN BAI (cdTrend), khong theo day/pi/ei.
+function cdLoadHist(exName) {
+  if (typeof cdTrend !== 'function') return [];
+  var t = cdTrend(exName);
+  return (t && t.series) || [];
+}
+
+// ── Pieces ───────────────────────────────────────────────────────────────
+var CD_ICON_CAM = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>';
+var CD_ICON_TICK = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.2 4.2L19 7"/></svg>';
+var CD_ICON_WATCH = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="3.5"/><path d="M9 6l1-3h4l1 3M9 18l1 3h4l1-3M12 9.5V12l1.6 1.2"/></svg>';
+
+function cdHeadHTML(c, isCoach, keys) {
+  var words = String(c.name || '?').trim().split(/\s+/), ini = (words[words.length - 1] || '?').charAt(0).toUpperCase();
+  // Truong avatar la chuoi tu Firestore ghep thang vao src. Chi nhan dung data
+  // URL anh — cdHasAvatar() la cung phep kiem app da dung tu truoc, va co bai
+  // kiem chot (tests/client-dash-isolation.test.js). Escape HTML thoi khong du:
+  // mot URL http la mot pixel theo doi, va chuoi la khong duoc len man hinh.
+  var av = (typeof cdHasAvatar === 'function' && cdHasAvatar(c))
+    ? '<img src="' + c.avatar + '" alt="">' : cdEsc(ini);
+  if (isCoach) {
+    av += '<button class="cd-av-cam" type="button" aria-label="Đổi ảnh đại diện" onclick="cdPickAvatar()">' + CD_ICON_CAM + '</button>';
+    if (typeof cdHasAvatar === 'function' && cdHasAvatar(c)) av += '<button class="cd-av-rm" type="button" aria-label="Xoá ảnh đại diện" onclick="cdRemoveAvatar()">×</button>';
+  }
+  var sub = [c.level, c.goal, c.sessionsPerWeek ? c.sessionsPerWeek + ' buổi/tuần' : ''].filter(Boolean).map(cdEsc).join(' · ');
+  var b = [], lw = cdT(c.lastWorkoutAt), cp = cdT(c.lastCheckpointAt);
+  if (!keys.length) b.push(['cd-warn', 'Chưa có giáo án']);
+  else if (!lw) b.push(['', 'Chưa tập buổi nào']);
+  else if (cdAgo(lw) >= 6) b.push(['cd-warn', 'Chưa tập ' + cdAgo(lw) + ' ngày']);
+  if (cp && Math.floor(cdAgo(cp) / 7) > 8) b.push(['cd-warn', 'Quá hạn đo InBody ' + Math.floor(cdAgo(cp) / 7) + ' tuần']);
+  if (!b.length) b.push(['cd-ok', 'Đúng lịch']);
+  return (isCoach ? '<button class="cd-back" type="button" onclick="showPage(\'dash\')">← Tất cả khách</button>' : '')
+    + '<header class="cd-head"><div class="cd-id"><div class="cd-av">' + av + '</div><div>'
+    + '<h1 class="cd-h1">' + cdEsc(c.name) + '</h1>' + (sub ? '<p class="cd-sub">' + sub + '</p>' : '')
+    + '<div class="cd-badges">' + b.map(function (x) { return '<span class="cd-badge' + (x[0] ? ' ' + x[0] : '') + '">' + x[1] + '</span>'; }).join('') + '</div></div></div>'
+    + (keys.length ? '<button class="cd-goto" type="button" onclick="showPage(\'workout\')">' + (isCoach ? 'Mở giáo án để sửa' : 'Mở giáo án') + '</button>' : '')
+    + '</header>';
+}
+
+// Coach only. If the app already renders this strip with its own function, keep that one here instead.
+function cdChipsHTML(c) {
+  var list = (typeof clientsData !== 'undefined' && clientsData) || [];
+  if (list.length < 2) return '';
+  return '<nav class="cd-chips" aria-label="Chuyển khách">' + list.map(function (x) {
+    var red = typeof clientAlert === 'function' && (clientAlert(x) || {}).sev === 'red';
+    return '<button class="cd-chip" type="button" aria-current="' + (x.id === c.id) + '" onclick="openClientDash(\'' + cdEsc(x.id) + '\')">' + (red ? '<i aria-label="cần chú ý"></i>' : '') + cdEsc(x.name) + '</button>';
+  }).join('') + '</nav>';
+}
+
+function cdStripHTML(c, ss) {
+  var n7 = ss.filter(function (s) { return cdAgo(s.t) < 7; });
+  var vol = n7.reduce(function (a, s) { return a + (Number(s.volume) || 0); }, 0);
+  var lw = cdT(c.lastWorkoutAt) || (ss[0] && ss[0].t) || 0, cp = cdT(c.lastCheckpointAt);
+  var k = function (v, l, cls) { return '<div class="cd-kpi' + (cls ? ' ' + cls : '') + '"><b>' + v + '</b><span>' + l + '</span></div>'; };
+  return '<div class="cd-strip">'
+    + k(n7.length + (c.sessionsPerWeek ? '<small> / ' + c.sessionsPerWeek + '</small>' : ''), 'Buổi trong 7 ngày')
+    + k(lw ? cdCap(cdRel(lw)) : 'Chưa có', 'Lần tập cuối')
+    + k(cdNum(vol) + '<small> kg</small>', 'Khối lượng 7 ngày')
+    + k(cp ? cdCap(cdRel(cp)) : 'Chưa đo', 'Đo InBody', cp && Math.floor(cdAgo(cp) / 7) > 8 ? 'cd-warn' : '')
+    + '</div>';
+}
+
+function cdActivity() {
+  var A = (typeof _activity !== 'undefined' && Array.isArray(_activity)) ? _activity.filter(function (d) { return d && d.date; }) : [];
+  return A.length ? A.slice().sort(function (a, b) { return a.date < b.date ? 1 : -1; }) : null;
+}
+function cdActHTML(A) {
+  var L = A[0], lt = cdISOt(L.date), lag = cdAgo(lt);
+  var src = lag <= 0 ? 'Polar · hôm nay' : lag > 2 ? 'Polar · chưa đồng bộ từ ' + cdDM(lt) : 'Polar · ' + cdRel(lt);
+  var steps = Number(L.steps), hasSteps = L.steps != null, C = 276.46;
+  var off = hasSteps ? (C * (1 - Math.min(1, steps / CD_STEP_GOAL))).toFixed(1) : C;
+  var wk = L.workouts || [], wkc = L.workoutCalories != null ? Number(L.workoutCalories) : (wk.length ? wk.reduce(function (a, w) { return a + (Number(w.calories) || 0); }, 0) : null);
+  var noHr = wk.some(function (w) { return w && w.noHr; });
+  var kpi = function (v, s) { return '<div class="ac-kpi"><span class="ac-kpi-v">' + v + '</span><span class="ac-kpi-s">' + s + '</span></div>'; };
+  var by = {}; A.forEach(function (d) { by[d.date] = d; });
+  var days = [], max = CD_STEP_GOAL, sum = 0, n = 0, hit = 0;
+  for (var i = 6; i >= 0; i--) { var d = by[cdISO(Date.now() - i * 864e5)]; days.push(d && d.steps != null ? Number(d.steps) : null); }
+  days.forEach(function (v) { if (v != null) { sum += v; n++; if (v >= CD_STEP_GOAL) hit++; if (v > max) max = v; } });
+  var bars = days.map(function (v) { return v == null ? '<i class="ac-none" style="height:3px"></i>' : '<i class="' + (v >= CD_STEP_GOAL ? 'ac-hit' : '') + '" style="height:' + Math.max(4, Math.round(38 * v / max)) + 'px"></i>'; }).join('');
+  return '<section class="cd-card cd-act rc-root ac-hero" aria-labelledby="cd-act-t">'
+    + '<div class="cd-card-h"><h2 class="cd-section-title" id="cd-act-t">Hoạt động</h2><span class="cd-src' + (lag > 2 ? ' cd-stale' : '') + '">' + src + '</span></div>'
+    + '<div class="ac-row"><div class="ac-ring"><svg viewBox="0 0 100 100" aria-hidden="true"><circle class="ac-ring-bg" cx="50" cy="50" r="44"/>'
+    + '<circle class="ac-ring-v' + (steps >= CD_STEP_GOAL ? ' ac-goal' : '') + '" cx="50" cy="50" r="44" transform="rotate(-90 50 50)" stroke-dasharray="' + C + '" style="stroke-dashoffset:' + off + ';--c:' + C + '"/></svg>'
+    + '<div class="ac-ring-in"><b>' + (hasSteps ? cdNum(steps) : '—') + '</b><span>/ ' + cdNum(CD_STEP_GOAL) + ' bước' + (lag > 0 ? ' · ' + cdDM(lt) : '') + '</span></div></div>'
+    + '<div class="ac-side">'
+    + kpi(wkc != null ? cdNum(wkc) : '—', wkc != null ? 'kcal buổi tập' + (noHr ? ' · ước tính, đồng hồ không đo nhịp tim' : '') : 'Chưa có buổi tập trên đồng hồ')
+    + kpi(L.activeCalories != null ? cdNum(L.activeCalories) : '—', 'kcal vận động')
+    + kpi(L.calories != null ? cdNum(L.calories) : '—', 'kcal cả ngày')
+    + '</div></div>'
+    + '<div class="ac-tot"><div><span class="ac-tot-v">' + cdNum(sum) + '</span><span class="ac-kpi-s">bước trong 7 ngày · ' + hit + '/' + n + ' ngày đạt ' + cdNum(CD_STEP_GOAL) + '</span></div>'
+    + '<div class="ac-bars" aria-hidden="true">' + bars + '</div></div></section>';
+}
+function cdNoPolarHTML(c, isCoach) {
+  return '<div class="cd-nopolar" role="note">' + CD_ICON_WATCH + '<p><b>Chưa kết nối đồng hồ.</b> '
+    + (isCoach ? 'Bước chân và calo của ' + cdEsc(c.name) + ' sẽ hiện ở đây khi khách kết nối Polar.' : 'Kết nối Polar để thấy bước chân và calo mỗi ngày ở đây.') + '</p></div>';
+}
+
+function cdGeom(s, m) {
+  var t = s[1], f = function (v) { return Math.round((100 - v) * 10) / 10; };
+  if (t === 'e') { var cx = m ? f(s[2]) : s[2], rot = m ? -s[6] : s[6]; return { r: s[0], tag: 'ellipse', a: 'cx="' + cx + '" cy="' + s[3] + '" rx="' + s[4] + '" ry="' + s[5] + '"' + (rot ? ' transform="rotate(' + rot + ' ' + cx + ' ' + s[3] + ')"' : '') }; }
+  if (t === 'r') return { r: s[0], tag: 'rect', a: 'x="' + (m ? f(s[2] + s[4]) : s[2]) + '" y="' + s[3] + '" width="' + s[4] + '" height="' + s[5] + '" rx="' + s[6] + '"' };
+  return { r: s[0], tag: 'path', a: 'd="' + (m ? s[2].replace(/(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/g, function (_, x, y) { return f(+x) + ',' + y; }) : s[2]) + '"' };
+}
+var _cdShapes = {};
+function cdShapes(v) {
+  if (_cdShapes[v]) return _cdShapes[v];
+  var out = [];
+  CD_FIG[v].forEach(function (s) { out.push(cdGeom(s, false)); if (!(s[1] === 'p' ? s[3] : s[7])) out.push(cdGeom(s, true)); });
+  return (_cdShapes[v] = out);
+}
+function cdFigSVG(reg, max, sel) {
+  var order = Object.keys(reg).sort(function (a, b) { return reg[b] - reg[a]; });
+  var g = function (v) {
+    return cdShapes(v).map(function (s) {
+      if (!s.r) return '<' + s.tag + ' class="cd-rg-n" ' + s.a + '/>';
+      var val = reg[s.r] || 0, cls = 'cd-rg', st = '';
+      if (val > 0) { var k = order.indexOf(s.r); cls += ' on'; st = ' style="fill-opacity:' + (0.3 + 0.7 * val / max).toFixed(2) + ';--d:' + Math.min(k, 7) * 50 + 'ms"'; }
+      if (sel.indexOf(s.r) >= 0) cls += ' sel';
+      return '<' + s.tag + ' class="' + cls + '" data-r="' + s.r + '" ' + s.a + st + '/>';
+    }).join('');
+  };
+  return '<svg viewBox="8 0 196 192" role="img" aria-label="Hình cơ thể nhìn trước và sau, tô theo nhóm cơ đã tập. Số liệu ở danh sách bên cạnh.">'
+    + '<g>' + g('f') + '</g><g transform="translate(112 0)">' + g('b') + '</g></svg>';
+}
+
+function cdBodyHTML(c, isCoach) {
+  var R = cdMusclesIn(_cdd.scope), has = R.all.length > 0;
+  var info = R.list.map(function (e) { return { name: e[0], v: e[1], m: cdMapMuscle(e[0]) }; });
+  var reg = {}, max = 0;
+  info.forEach(function (i) { i.m.regions.forEach(function (k) { reg[k] = (reg[k] || 0) + i.v; }); });
+  Object.keys(reg).forEach(function (k) { if (reg[k] > max) max = reg[k]; });
+  var selI = info.filter(function (i) { return i.name === _cdd.sel; })[0];
+  if (!selI) _cdd.sel = null;
+  var sel = selI ? selI.m.regions : [];
+  var fig = '<div class="cd-fig' + (sel.length ? ' has-sel' : '') + '">' + cdFigSVG(reg, max || 1, sel)
+    + '<div class="cd-fig-l" aria-hidden="true"><span>Trước</span><span>Sau</span></div></div>';
+  var scope = has ? '<div class="cd-scope" role="group" aria-label="Khoảng thời gian">' + CD_SCOPES.map(function (s) {
+    return '<button type="button" data-scope="' + s[0] + '" aria-pressed="' + (String(_cdd.scope) === String(s[0])) + '">' + s[1] + '</button>';
+  }).join('') + '</div>' : '';
+  var side = '';
+  if (!has) side = '<p class="cd-mus-empty"><b>Chưa có buổi tập nào được ghi.</b> ' + (isCoach ? 'Hình sẽ tô theo nhóm cơ sau buổi đầu tiên của ' + cdEsc(c.name) + '.' : 'Tập xong buổi đầu tiên, các nhóm cơ bạn đã tập sẽ sáng lên ở đây.') + '</p>';
+  else if (!info.length) side = '<p class="cd-mus-empty"><b>Không có buổi nào trong ' + _cdd.scope + ' ngày qua.</b> Chọn khoảng dài hơn để xem.</p>';
+  else {
+    var s0 = R.pick[0];
+    side = '<p class="cd-mus-cap">' + (_cdd.scope === 'last'
+      ? cdCap(cdRel(s0.t)) + ' · ' + cdEsc(cdDayName(c, s0.day, 0)) + (s0.total ? ' · ' + s0.done + '/' + s0.total + ' bài' : '')
+      : R.pick.length + ' buổi trong ' + _cdd.scope + ' ngày') + ' · đơn vị vol</p>';
+    var show = _cdd.allMus ? info : info.slice(0, CD_MUS_N), top = info[0].v;
+    side += '<ul class="cd-muscle-list">' + show.map(function (i, ix) {
+      var none = !i.m.regions.length;
+      var tag = none ? '<small class="cd-muscle-x">chưa có trên hình</small>' : '<small>' + i.m.regions.map(function (r) { return CD_REGION_VI[r]; }).join(', ') + '</small>';
+      return '<li><button type="button" class="cd-muscle-row' + (none ? ' cd-x' : '') + '" data-mus="' + cdEsc(i.name) + '" aria-pressed="' + (i.name === _cdd.sel) + '">'
+        + '<span class="cd-muscle-rank">' + (ix + 1) + '</span><span class="cd-muscle-name">' + cdEsc(i.name) + tag + '</span>'
+        + '<span class="cd-muscle-bar" aria-hidden="true"><i style="width:' + Math.max(4, Math.round(100 * i.v / top)) + '%"></i></span>'
+        + '<span class="cd-muscle-vol">' + cdNum(i.v, 1) + '</span></button></li>';
+    }).join('') + '</ul>';
+    if (info.length > CD_MUS_N) side += '<button class="cd-mus-more" type="button" data-mus-more>' + (_cdd.allMus ? 'Thu gọn' : 'Xem tất cả ' + info.length + ' nhóm') + '</button>';
+    var nn = info.filter(function (i) { return i.m.how === 'none'; }), gg = info.filter(function (i) { return i.m.how === 'guess'; });
+    if (isCoach && (nn.length || gg.length)) side += '<p class="cd-mus-note">'
+      + (nn.length ? '<b>Chưa có trên hình:</b> ' + nn.map(function (i) { return cdEsc(i.name); }).join(', ') + '. ' : '')
+      + (gg.length ? '<b>Đoán vị trí:</b> ' + gg.map(function (i) { return cdEsc(i.name) + ' → ' + i.m.regions.map(function (r) { return CD_REGION_VI[r]; }).join(', '); }).join('; ') + '. ' : '')
+      + 'Vẫn tính trong danh sách. Thêm vào CD_MUSCLE_MAP để cố định.</p>';
+  }
+  return '<section class="cd-card cd-mus" aria-labelledby="cd-mus-t"><div class="cd-card-h"><h2 class="cd-section-title" id="cd-mus-t">Nhóm cơ</h2>' + scope + '</div>'
+    + '<div class="cd-mus-row">' + fig + '<div>' + side + '</div></div></section>';
+}
+
+function cdSessHTML(c, keys, ss, isCoach) {
+  var head = '<div class="cd-sess-h"><h2 class="cd-section-title" id="cd-sess-t">Giáo án</h2>' + (keys.length ? '<span>' + keys.length + ' buổi</span>' : '') + '</div>';
+  if (!keys.length) return '<section class="cd-sess" aria-labelledby="cd-sess-t">' + head + '<div class="cd-card cd-none">'
+    + (isCoach ? '<p><b>' + cdEsc(c.name) + ' chưa có giáo án.</b> Các buổi tập sẽ hiện ở đây sau khi bạn tạo.</p><button class="cd-goto" type="button" onclick="showPage(\'workout\')">Tạo giáo án</button>'
+               : '<p><b>Coach đang soạn giáo án cho bạn.</b> Các buổi tập sẽ hiện ở đây khi giáo án sẵn sàng.</p>') + '</div></section>';
+  var nx = cdNextIdx(keys, ss);
+  var tabs = '<div class="cd-dtabs" role="tablist" aria-label="Các buổi trong giáo án" style="grid-template-columns:repeat(' + keys.length + ',minmax(0,1fr))">' + keys.map(function (k, i) {
+    return '<button class="cd-dtab" type="button" role="tab" id="cd-dt' + i + '" data-i="' + i + '" aria-controls="cd-day' + i + '" aria-selected="' + (i === _cdd.cur) + '" tabindex="' + (i === _cdd.cur ? 0 : -1) + '">'
+      + '<b>' + cdLetter(k, i) + '</b><span>' + cdEsc(c.program[k].label || '') + '</span></button>';
+  }).join('') + '</div>';
+  var cards = keys.map(function (k, i) {
+    var ex = cdExs(c.program[k]), last = ss.filter(function (s) { return s.day === k; })[0], on = _cdd.open && i === _cdd.cur;
+    var meta = last ? (cdAgo(last.t) < 7 ? '<span class="cd-tick" aria-hidden="true">' + CD_ICON_TICK + '</span>' : '')
+      + '<span>Tập ' + cdRel(last.t) + (last.total ? ' · ' + last.done + '/' + last.total + ' bài' : '') + (last.volume ? ' · ' + cdNum(last.volume) + ' kg' : '') + '</span>' : '<span>Chưa tập buổi này</span>';
+    var sum = ex.slice(0, CD_SUM_N).map(function (e) { return '<li>' + cdEsc(e.name) + '</li>'; }).join('') + (ex.length > CD_SUM_N ? '<li class="cd-more">+ ' + (ex.length - CD_SUM_N) + ' bài nữa</li>' : '');
+    var act = isCoach ? 'xem bài và nhập tạ' : 'xem chi tiết';
+    return '<article class="cd-day' + (i === _cdd.cur ? ' cd-cur' : '') + (on ? ' cd-open-on' : '') + '" id="cd-day' + i + '" data-i="' + i + '">'
+      + '<div class="cd-day-h"><span class="cd-day-n"><b>' + cdLetter(k, i) + '</b>' + cdEsc(c.program[k].label || 'Buổi ' + cdLetter(k, i)) + '</span>'
+      + (i === nx ? '<span class="cd-day-tag">Buổi tới</span>' : '') + '<span class="cd-day-c">' + ex.length + ' bài</span></div>'
+      + '<p class="cd-day-m">' + meta + '</p><ul class="cd-day-sum">' + sum + '</ul>'
+      + '<div class="cd-day-f" aria-hidden="true"><span>' + (on ? 'Đang mở bên dưới' : cdCap(act)) + '</span><span>' + (on ? '▴' : '▾') + '</span></div>'
+      + '<button class="cd-day-open" type="button" aria-expanded="' + on + '" aria-controls="cd-detail-slot" aria-label="' + cdEsc(cdDayName(c, k, i)) + ', ' + act + '"></button></article>';
+  }).join('');
+  return '<section class="cd-sess" aria-labelledby="cd-sess-t">' + head + tabs + '<div class="cd-days">' + cards + '</div>'
+    + '<div id="cd-detail-slot">' + cdDetailHTML(c, keys, isCoach) + '</div></section>';
+}
+function cdSpark(h) {
+  if (!h || h.length < 2) return '';
+  var mn = Math.min.apply(null, h), mx = Math.max.apply(null, h), r = mx - mn || 1;
+  var pts = h.map(function (v, i) { return (i * 34 / (h.length - 1) + 1).toFixed(1) + ',' + (18 - 16 * (v - mn) / r).toFixed(1); }).join(' ');
+  return '<svg class="cd-spark" viewBox="0 0 36 20" aria-hidden="true"><polyline points="' + pts + '" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+}
+function cdDetailHTML(c, keys, isCoach) {
+  if (!_cdd.open || !keys.length) return '';
+  var k = keys[_cdd.cur], p = c.program[k], ph = p.phases || [];
+  var body = ph.map(function (f, pi) {
+    var rows = (f.exercises || []).map(function (e, ei) {
+      var sets = parseInt(e.setsReps, 10) || 3, bw = !!e.bw, kg = cdLoad(k, pi, ei, bw);
+      var load = isCoach
+        ? '<input class="cd-kg" type="number" step="0.5" inputmode="decimal" aria-label="Mức tạ ' + cdEsc(e.name) + '" placeholder="' + (bw ? '+0' : '—') + '" value="' + (kg == null ? '' : kg) + '"'
+          + ' onchange="cdSetLoad(\'' + k + '\', ' + pi + ', ' + ei + ', ' + sets + ', ' + bw + ', this.value, this)"><span class="cd-kg-u">' + (bw ? '+kg' : 'kg') + '</span>' + cdSpark(cdLoadHist(e.name))
+        : (kg == null ? '<span class="cd-kg-u">' + (bw ? 'Thân trọng' : '—') + '</span>' : '<span class="cd-kg-ro">' + (bw ? '+' : '') + cdNum(kg, 1) + '</span><span class="cd-kg-u">kg</span>');
+      return '<div class="cd-ex"><div class="cd-ex-n">' + cdEsc(e.name) + '</div><div class="cd-ex-r">' + [e.setsReps, e.tempo].filter(Boolean).map(cdEsc).join(' · ') + '</div><div class="cd-ex-l">' + load + '</div></div>';
+    }).join('');
+    return rows ? '<div class="cd-ph-b"><div class="cd-ph">' + cdEsc(f.name || 'Phần ' + (pi + 1)) + (f.tag ? '<span>' + cdEsc(f.tag) + '</span>' : '') + '</div>' + rows + '</div>' : '';
+  }).join('');
+  return '<section class="cd-detail" aria-labelledby="cd-detail-t"><div class="cd-detail-h"><h3 id="cd-detail-t">' + cdEsc(cdDayName(c, k, _cdd.cur)) + '</h3>'
+    + '<span>' + cdExs(p).length + ' bài · ' + ph.length + ' phần</span><button class="cd-detail-x" type="button">Thu gọn</button></div><div class="cd-phs">' + body + '</div></section>';
+}
+
+// ── Render + behaviour ───────────────────────────────────────────────────
+function cdRender(page) {
+  page = page || document.getElementById('cdash-page');
+  if (!page || !activeClient) return;
+  var c = activeClient, isCoach = userRole === 'coach', ss = cdSessions(), keys = cdKeys(c), A = cdActivity();
+  if (_cdd.id !== c.id) { _cdd.id = c.id; _cdd.cur = null; _cdd.sel = null; _cdd.allMus = false; }
+  if (_cdd.open === null) _cdd.open = isCoach;                 // coach: loads open by default. Client: summary first
+  if (_cdd.cur === null) _cdd.cur = cdNextIdx(keys, ss);        // land on the session they do next
+  _cdd.cur = Math.max(0, Math.min(_cdd.cur, keys.length - 1));
+  page.innerHTML = cdHeadHTML(c, isCoach, keys)
+    + (isCoach ? cdChipsHTML(c) : '')
+    + cdStripHTML(c, ss)
+    + '<div class="cd-top' + (A ? ' cd-has-act' : '') + '">' + (A ? cdActHTML(A) : '') + cdBodyHTML(c, isCoach) + '</div>'
+    + (A ? '' : cdNoPolarHTML(c, isCoach))
+    + cdSessHTML(c, keys, ss, isCoach);
+  cdBind(page);
+  cdDeck(page);
+  cdIntro(page, c.id);
+}
+function cdRefresh(part) {
+  var page = document.getElementById('cdash-page'), c = activeClient, isCoach = userRole === 'coach';
+  if (part === 'mus') { var m = page.querySelector('.cd-mus'); if (m) m.outerHTML = cdBodyHTML(c, isCoach); return; }
+  var keys = cdKeys(c), slot = page.querySelector('#cd-detail-slot'), x = _cdd.ctx;
+  if (slot) slot.innerHTML = cdDetailHTML(c, keys, isCoach);
+  if (!x) return;
+  x.cards.forEach(function (card, i) {
+    var on = _cdd.open && i === _cdd.cur, f = card.querySelector('.cd-day-f span'), btn = card.querySelector('.cd-day-open');
+    card.classList.toggle('cd-cur', i === _cdd.cur);
+    card.classList.toggle('cd-open-on', on);
+    btn.setAttribute('aria-expanded', String(on));
+    f.textContent = on ? 'Đang mở bên dưới' : (isCoach ? 'Xem bài và nhập tạ' : 'Xem chi tiết');
+    f.nextSibling.textContent = on ? '▴' : '▾';
+  });
+  x.tabs.forEach(function (t, i) { t.setAttribute('aria-selected', String(i === _cdd.cur)); t.tabIndex = i === _cdd.cur ? 0 : -1; });
+}
+function cdDeck(page) {
+  var deck = page.querySelector('.cd-days');
+  if (!deck) { _cdd.ctx = null; return; }
+  _cdd.ctx = { deck: deck, cards: [].slice.call(deck.querySelectorAll('.cd-day')), tabs: [].slice.call(page.querySelectorAll('.cd-dtab')) };
+  cdRoles();
+  if (!CD_MQ.matches) deck.scrollLeft = cdX(_cdd.cur);           // same task as innerHTML: no visible jump
+  var t = 0;
+  deck.addEventListener('scroll', function () { clearTimeout(t); t = setTimeout(cdSettle, 140); }, { passive: true });   // fallback where scrollend is missing
+  deck.addEventListener('scrollend', cdSettle);
+}
+function cdRoles() {
+  var x = _cdd.ctx, mob = !CD_MQ.matches;
+  x.cards.forEach(function (card, i) { if (mob) { card.setAttribute('role', 'tabpanel'); card.setAttribute('aria-labelledby', 'cd-dt' + i); } else { card.removeAttribute('role'); card.removeAttribute('aria-labelledby'); } });
+}
+function cdX(i) { var x = _cdd.ctx; return Math.min(x.cards[i].offsetLeft - x.cards[0].offsetLeft, x.deck.scrollWidth - x.deck.clientWidth); }
+function cdSettle() {
+  var x = _cdd.ctx; if (!x || CD_MQ.matches) return;
+  var s = x.deck.scrollLeft, best = 0;
+  for (var i = 1; i < x.cards.length; i++) if (Math.abs(cdX(i) - s) < Math.abs(cdX(best) - s)) best = i;
+  if (best !== _cdd.cur) { _cdd.cur = best; cdRefresh(); }
+}
+function cdGo(i) {
+  var x = _cdd.ctx; if (!x) return;
+  _cdd.cur = Math.max(0, Math.min(x.cards.length - 1, i));
+  cdRefresh();                                                  // label and detail answer the tap now
+  if (!CD_MQ.matches) x.deck.scrollTo({ left: cdX(_cdd.cur), behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+}
+function cdBind(page) {
+  if (page._cdBound) return;                                    // #cdash-page outlives renders: delegate once
+  page._cdBound = true;
+  page.addEventListener('click', function (e) {
+    var el;
+    if ((el = e.target.closest('.cd-dtab'))) return cdGo(+el.getAttribute('data-i'));
+    if ((el = e.target.closest('.cd-day-open'))) {
+      var i = +el.parentNode.getAttribute('data-i');
+      if (!CD_MQ.matches && i !== _cdd.cur) return cdGo(i);     // a peeking card comes forward first
+      _cdd.open = !(_cdd.open && i === _cdd.cur); _cdd.cur = i; return cdRefresh();
+    }
+    if (e.target.closest('.cd-detail-x')) { _cdd.open = false; return cdRefresh(); }
+    if ((el = e.target.closest('[data-scope]'))) { var v = el.getAttribute('data-scope'); _cdd.scope = v === 'last' ? v : +v; _cdd.sel = null; _cdd.allMus = false; return cdRefresh('mus'); }
+    if ((el = e.target.closest('.cd-muscle-row'))) { var n = el.getAttribute('data-mus'); _cdd.sel = _cdd.sel === n ? null : n; return cdRefresh('mus'); }
+    if (e.target.closest('[data-mus-more]')) { _cdd.allMus = !_cdd.allMus; return cdRefresh('mus'); }
+    if ((el = e.target.closest('.cd-rg.on'))) {                 // shortcut only: the list is the 44px control
+      var r = el.getAttribute('data-r'), hit = cdMusclesIn(_cdd.scope).list.filter(function (m) { return cdMapMuscle(m[0]).regions.indexOf(r) >= 0; })[0];
+      if (hit) { _cdd.sel = _cdd.sel === hit[0] ? null : hit[0]; cdRefresh('mus'); }
+    }
+  });
+  page.addEventListener('keydown', function (e) {
+    var t = e.target.closest && e.target.closest('.cd-dtab'); if (!t || !_cdd.ctx) return;
+    var n = _cdd.ctx.tabs.length, i = +t.getAttribute('data-i'), j = null;
+    if (e.key === 'ArrowRight') j = (i + 1) % n; else if (e.key === 'ArrowLeft') j = (i - 1 + n) % n;
+    else if (e.key === 'Home') j = 0; else if (e.key === 'End') j = n - 1;
+    if (j === null) return;
+    e.preventDefault(); cdGo(j); _cdd.ctx.tabs[j].focus();
+  });
+  CD_MQ.addEventListener('change', function () { if (_cdd.ctx && page.isConnected) { cdRoles(); if (!CD_MQ.matches) _cdd.ctx.deck.scrollLeft = cdX(_cdd.cur); } });
+}
+// Entrance plays once per client per app load: opening Kem, then Nam, each gets it once.
+// Saving a load, changing range, picking a muscle re-render without it.
+var _cdIntroT = 0;
+function cdIntro(page, id) {
+  var run = !_cdd.introFor[id];
+  _cdd.introFor[id] = true;
+  clearTimeout(_cdIntroT);
+  page.classList.toggle('cd-intro', run);
+  if (run) _cdIntroT = setTimeout(function () { page.classList.remove('cd-intro'); }, 1000);   // 350ms stagger + 600ms fade, then nothing
+}
+
 async function renderClientDash() {
   const wrap = document.getElementById('cdash-body');
   if (!wrap || !activeClient) return;
   // Khách xem được dashboard của CHÍNH MÌNH. activeClient của một tài khoản
-  // khách luôn là hồ sơ của họ (loadApp nạp đúng một doc), và luật Firestore
-  // chặn đọc chéo, nên đây chỉ là chuyện bày ra cho đúng người.
-  const isCoach = userRole === 'coach';
+  // khách luôn là hồ sơ của họ, và luật Firestore chặn đọc chéo.
   wrap.innerHTML = '<div class="cd-loading">Đang đọc lịch sử tập…</div>';
   await loadClientDash();
 
-  const c = activeClient, prog = c.program || {};
-  const days = Object.keys(prog).sort();
-  const st = accessStatus(c.access || {});
-  const gap = _daysSince(c.lastWorkoutAt), lim = inactiveThreshold(c);
+  // Màn này đã nuốt tab Hoạt động, nên _activity phải được nạp ở đây. Khách
+  // không có Polar thì truy vấn trả rỗng và cdRender bỏ hẳn thẻ Hoạt động —
+  // không phải hiện "0 bước". Bọc try/catch để một khách thiếu quyền đọc
+  // activity không làm trắng cả dashboard.
+  try { await loadActive(); } catch (e) { console.warn('[cdash] activity:', e && e.message); }
 
-  const cols = days.length ? days.map(d => {
-    const phases = (prog[d] && prog[d].phases) || [];
-    const nEx = phases.reduce((n, p) => n + ((p.exercises || []).length), 0);
-    const recent = ((_cdash && _cdash.sessions) || []).filter(s => s.day === d);
-    const lastAt = recent.length ? recent[0].at : null;
-    return `
-      <section class="cd-day">
-        <header class="cd-day-h">
-          <div><div class="cd-day-n">${escHtml(d.replace('Session', 'Session '))}</div>
-            <div class="cd-day-m">${nEx} bài${lastAt ? ' · tập gần nhất ' + _cdDate(lastAt) : ' · chưa tập lần nào'}</div></div>
-          <div class="cd-day-c">${recent.length ? recent.slice(0, 6).reverse().map(s => {
-            const pctv = s.total ? Math.round((s.done || 0) / s.total * 100) : 0;
-            return `<i class="cd-tick ${pctv >= 90 ? 'full' : pctv >= 50 ? 'part' : 'low'}"
-              title="${s.done ?? '?'}/${s.total ?? '?'} bài"></i>`; }).join('') : ''}</div>
-        </header>
-        ${phases.map((ph, pi) => `
-          <div class="cd-ph">${escHtml(ph.name || '')}</div>
-          ${(ph.exercises || []).map((ex, ei) => {
-            const t = cdTrend(ex.name);
-            const nSets = parseSetsCount(ex.setsReps, ph.tag);
-            const cur = cdLoadValue(d, pi, ei, !!ex.bw);
-            // Chỗ trống hiện số của buổi gần nhất, để coach biết lần trước nâng
-            // bao nhiêu mà không phải rời màn hình này đi tra.
-            const ph0 = ex.bw ? '+0' : (t ? String(t.last) : '—');
-            return `<div class="cd-ex">
-              <div class="cd-ex-n">${escHtml(ex.name || '')}</div>
-              <div class="cd-ex-r">${escHtml(ex.setsReps || '')}</div>
-              <div class="cd-ex-l">
-                <input class="cd-kg" type="number" step="0.5" ${ex.bw ? '' : 'min="0" '}
-                  inputmode="decimal" placeholder="${escHtml(ph0)}" value="${escHtml(cur)}"
-                  title="${nSets} set, tất cả cùng mức tạ này"
-                  onchange="cdSetLoad('${escHtml(d)}',${pi},${ei},${nSets},${ex.bw ? 'true' : 'false'},this.value,this)">
-                <span class="cd-kg-u">kg</span>
-                ${t && t.delta != null && t.delta !== 0
-                  ? '<i class="' + (t.delta > 0 ? 'up' : 'down') + '">'
-                    + (t.delta > 0 ? '+' : '') + t.delta + '</i>' : ''}
-              </div>
-              <div class="cd-ex-s">${t ? _cdSpark(t.series) : ''}</div>
-            </div>`;
-          }).join('')}`).join('')}
-      </section>`;
-  }).join('') : '<div class="cd-empty">Khách này chưa có giáo án. Dùng <b>⚡ Pulse</b> để tạo.</div>';
-
-  const mus = cdMuscles(), maxMus = mus.length ? mus[0][1] : 1;
-  const sess = (_cdash && _cdash.sessions) || [];
-  const totalVol = sess.reduce((n, s) => n + (s.volume || 0), 0);
-
-  wrap.innerHTML = `
-    <div class="cd-head">
-      <div class="cd-id">
-        ${cdAvatarHTML(c, isCoach)}
-        <div style="min-width:0">
-          ${isCoach ? `<div class="cd-back" onclick="showPage('dash')">← Tất cả khách</div>` : ''}
-          <h1 class="cd-h1">${escHtml(c.name || c.id)}</h1>
-          <div class="cd-sub">${escHtml(c.level || '')}${c.sessionsPerWeek ? ' · ' + c.sessionsPerWeek + ' buổi/tuần' : ''}
-            ${c.goal ? ' · ' + escHtml(c.goal) : ''}</div>
-        </div>
-      </div>
-      <div class="cd-badges">
-        ${isCoach && cdHasAvatar(c) ? `<button class="cd-av-rm" onclick="cdRemoveAvatar()">Bỏ ảnh</button>` : ''}
-        ${isCoach ? `<span class="cd-badge bl-badge-${st.state}">${ACCESS_LABEL[st.state]}</span>` : ''}
-        ${gap != null ? `<span class="cd-badge ${gap >= lim ? 'cd-warn' : 'cd-ok'}">Tập gần nhất ${
-          _cdDate(c.lastWorkoutAt)} · ${gap} ngày</span>` : ''}
-        <button class="cd-goto" onclick="showPage('workout')">${
-          isCoach ? 'Mở giáo án để sửa' : 'Mở giáo án'}</button>
-      </div>
-    </div>
-    ${isCoach ? dashClientStrip(c.id) : ''}
-    <div class="cd-strip">
-      <div class="cd-kpi"><span>${sess.length}</span>buổi đã ghi</div>
-      <div class="cd-kpi"><span>${Math.round(totalVol).toLocaleString('vi-VN')}</span>kg tổng khối lượng</div>
-      <div class="cd-kpi"><span>${days.length}</span>session trong giáo án</div>
-      ${mus.length ? `<div class="cd-mus">${mus.map(([m, v]) => `
-        <div class="cd-mus-row"><span>${escHtml(m)}</span>
-          <i style="width:${Math.max(4, Math.round(v / maxMus * 100))}%"></i>
-          <b>${Math.round(v).toLocaleString('vi-VN')}</b></div>`).join('')}</div>` : ''}
-    </div>
-    <div class="cd-days">${cols}</div>`;
+  // cdRender ghi vào #cdash-body chứ KHÔNG phải #cdash-page: #cdash-page còn
+  // chứa <input id="cd-av-input"> của ảnh đại diện, ghi đè là mất nút đổi ảnh.
+  cdRender(wrap);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -6016,9 +6401,12 @@ async function checkActiveTab() {
   if (!tab) return;
   if (!activeClient) { tab.style.display = 'none'; return; }
   try {
-    const snap = await getDocs(query(
+    // Noi dung tab Hoat dong da duoc gop vao dashboard khach, nen tab rieng
+    // luon an. Giu lai ham (va truy van) de sau nay muon tach ra thi doi mot
+    // dong, va de khong co doan goi nao thanh mo coi.
+    await getDocs(query(
       collection(db, 'clients', activeClient.id, 'activity'), limit(1)));
-    tab.style.display = snap.empty ? 'none' : '';
+    tab.style.display = 'none';
   } catch (e) {
     console.warn('[checkActiveTab]', activeClient.id, e.code || '', e.message || e);
     tab.style.display = '';
@@ -15891,6 +16279,228 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 #cdash-page{display:none;}
 #cdash-page.active{display:block;padding:0 20px 100px;max-width:1700px;margin:0 auto;}
 .cd-loading{padding:40px;text-align:center;font-size:13px;color:#8FDBFF;}
+
+/* ══ DASHBOARD KHACH — gop Hoat dong, hinh co the, bo bai session ══════
+   (Claude Design, 2026-10-09). The Hoat dong CHI dung khi co du lieu Polar;
+   20/21 khach khong co, nen trang thai thuong gap la hinh co the chiem het
+   be ngang + mot dong "chua ket noi dong ho". */
+/* ═══════════════════════════════════════════════════════════════════════
+   Pulse — client dashboard (#cdash-page): Dashboard + Active in one screen
+   Paste after the app's existing cd-* / ac-* rules; everything is scoped to
+   #cdash-page so it wins without !important.
+   No transform and no backdrop-filter on any box: the picker and #ai-sheet are
+   position:fixed and a transformed ancestor would re-anchor them. The only
+   transforms live as SVG attributes inside <svg>.
+   ═══════════════════════════════════════════════════════════════════════ */
+#cdash-page{
+  --cd-card:rgba(22,17,17,.78);      /* dark veil over the starfield. Never a white veil: it lifts #312C2A and kills small-text contrast */
+  --cd-line:var(--line,rgba(255,255,255,.12));
+  --cd-amber:#E6B34A;
+  --cd-pad:16px;                     /* side padding. The session deck and chip strip bleed by exactly this much */
+  max-width:1700px;margin:0 auto;
+  padding:14px var(--cd-pad) calc(96px + env(safe-area-inset-bottom));   /* 96 = #ai-fab bottom 24 + 56 + 16 */
+  display:flex;flex-direction:column;gap:14px;
+  color:#fff;font-family:'Figtree',sans-serif;
+}
+#cdash-page *{box-sizing:border-box}
+#cdash-page .cd-card{background:var(--cd-card);border:1px solid var(--cd-line);border-radius:18px;padding:16px}
+#cdash-page .cd-card-h{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 12px;margin-bottom:12px}
+#cdash-page .cd-section-title{margin:0;font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.72)}
+#cdash-page .cd-src{font-size:12.5px;font-weight:600;color:rgba(255,255,255,.65)}
+#cdash-page .cd-src.cd-stale{color:var(--cd-amber)}
+
+/* ── Head ── */
+#cdash-page .cd-back{align-self:flex-start;display:inline-flex;align-items:center;min-height:44px;margin:-8px 0 -8px -6px;padding:0 6px;border:0;background:none;color:var(--accent,#8FDBFF);font:700 14px 'Figtree',sans-serif;cursor:pointer}
+#cdash-page .cd-head{display:flex;flex-wrap:wrap;align-items:center;gap:14px}
+#cdash-page .cd-id{display:flex;align-items:center;gap:14px;flex:1 1 280px;min-width:0}
+#cdash-page .cd-av{position:relative;flex:none;width:58px;height:58px;border-radius:50%;display:grid;place-items:center;background:#2A2523;border:1px solid var(--cd-line);font-size:21px;font-weight:800}
+#cdash-page .cd-av img{width:100%;height:100%;border-radius:50%;object-fit:cover}
+#cdash-page .cd-av-cam,#cdash-page .cd-av-rm{position:absolute;width:28px;height:28px;padding:0;border-radius:50%;border:2px solid #161111;background:#38322F;color:#fff;display:grid;place-items:center;cursor:pointer;font:700 15px/1 'Figtree',sans-serif}
+#cdash-page .cd-av-cam{right:-6px;bottom:-6px}
+#cdash-page .cd-av-rm{right:-6px;top:-6px}
+#cdash-page .cd-av-cam::before,#cdash-page .cd-av-rm::before{content:"";position:absolute;inset:-9px}   /* 46px hit area around a 28px dot */
+#cdash-page .cd-h1{margin:0;font-size:23px;font-weight:800;line-height:1.15;letter-spacing:-.01em;overflow-wrap:anywhere}
+#cdash-page .cd-sub{margin:3px 0 0;font-size:13.5px;line-height:1.4;color:rgba(255,255,255,.75)}
+#cdash-page .cd-badges{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+#cdash-page .cd-badge{display:inline-flex;align-items:center;min-height:26px;padding:0 10px;border-radius:999px;border:1px solid var(--cd-line);font-size:12px;font-weight:700;color:rgba(255,255,255,.8)}
+#cdash-page .cd-badge.cd-ok{color:var(--good,#7ED9A0);border-color:rgba(126,217,160,.35)}
+#cdash-page .cd-badge.cd-warn{color:var(--cd-amber);border-color:rgba(230,179,74,.4)}
+#cdash-page .cd-goto{flex:none;min-height:46px;padding:0 20px;border-radius:999px;border:0;background:var(--accent-strong,#1C90FF);color:var(--on-accent,#161111);font:800 14px 'Figtree',sans-serif;cursor:pointer}
+#cdash-page .cd-goto:focus-visible{outline:2px solid #fff;outline-offset:2px}
+@media (max-width:519.98px){#cdash-page .cd-goto{flex:1 1 100%}}
+
+/* ── Chip strip (coach only) ── */
+#cdash-page .cd-chips{display:flex;gap:8px;margin:0 calc(-1 * var(--cd-pad));padding:0 var(--cd-pad);overflow-x:auto;scrollbar-width:none}
+#cdash-page .cd-chips::-webkit-scrollbar{display:none}
+#cdash-page .cd-chip{flex:none;display:flex;align-items:center;gap:7px;min-height:44px;padding:0 15px;border-radius:999px;border:1px solid var(--cd-line);background:var(--cd-card);color:rgba(255,255,255,.8);font:600 13.5px 'Figtree',sans-serif;cursor:pointer;white-space:nowrap}
+#cdash-page .cd-chip[aria-current="true"]{border-color:rgba(143,219,255,.6);color:#fff}
+#cdash-page .cd-chip i{width:7px;height:7px;border-radius:50%;background:var(--danger,#EE5A4F)}
+
+/* ── KPI strip ── */
+#cdash-page .cd-strip{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+@media (min-width:720px){#cdash-page .cd-strip{grid-template-columns:repeat(4,minmax(0,1fr))}}
+#cdash-page .cd-kpi{min-width:0;padding:12px 14px;border-radius:14px;background:var(--cd-card);border:1px solid var(--cd-line)}
+#cdash-page .cd-kpi b{display:block;font-size:20px;font-weight:800;line-height:1.15;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+#cdash-page .cd-kpi b small{font-size:13px;font-weight:700;color:rgba(255,255,255,.65)}
+#cdash-page .cd-kpi span{display:block;margin-top:3px;font-size:12px;font-weight:600;color:rgba(255,255,255,.7)}
+#cdash-page .cd-kpi.cd-warn b{color:var(--cd-amber)}
+
+/* ── Top: Active (only when Polar has data) + body map ── */
+#cdash-page .cd-top{display:grid;gap:14px}
+@media (min-width:1024px){#cdash-page .cd-top.cd-has-act{grid-template-columns:minmax(340px,5fr) minmax(0,7fr);align-items:start}}
+
+#cdash-page .ac-row{display:flex;align-items:center;gap:16px}
+#cdash-page .ac-ring{position:relative;flex:none;width:128px;height:128px}
+#cdash-page .ac-ring svg{display:block;width:100%;height:100%}
+#cdash-page .ac-ring-bg{fill:none;stroke:rgba(255,255,255,.1);stroke-width:9}
+#cdash-page .ac-ring-v{fill:none;stroke:var(--accent,#8FDBFF);stroke-width:9;stroke-linecap:round}
+#cdash-page .ac-ring-v.ac-goal{stroke:var(--good,#7ED9A0)}
+#cdash-page .ac-ring-in{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+#cdash-page .ac-ring-in b{font-size:24px;font-weight:800;line-height:1;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+#cdash-page .ac-ring-in span{margin-top:4px;font-size:12px;font-weight:600;color:rgba(255,255,255,.7)}
+#cdash-page .ac-side{flex:1;min-width:0;display:grid;gap:11px}
+#cdash-page .ac-kpi{display:flex;flex-direction:column;min-width:0}
+#cdash-page .ac-kpi-v{font-size:19px;font-weight:800;line-height:1.15;font-variant-numeric:tabular-nums}
+#cdash-page .ac-kpi-s{font-size:12px;font-weight:600;line-height:1.35;color:rgba(255,255,255,.7)}
+#cdash-page .ac-tot{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;margin-top:14px;padding-top:12px;border-top:1px solid var(--cd-line)}
+#cdash-page .ac-tot-v{display:block;font-size:19px;font-weight:800;font-variant-numeric:tabular-nums}
+#cdash-page .ac-bars{flex:none;display:flex;align-items:flex-end;gap:4px;height:38px}
+#cdash-page .ac-bars i{width:9px;border-radius:3px 3px 1px 1px;background:rgba(255,255,255,.3)}
+#cdash-page .ac-bars i.ac-hit{background:var(--good,#7ED9A0)}
+#cdash-page .ac-bars i.ac-none{background:rgba(255,255,255,.1)}
+
+/* No Polar: one honest line instead of an empty card or a row of zeros */
+#cdash-page .cd-nopolar{display:flex;align-items:center;gap:12px;min-height:56px;padding:10px 14px;border-radius:14px;border:1px dashed rgba(255,255,255,.2);background:rgba(22,17,17,.62)}
+#cdash-page .cd-nopolar svg{flex:none;color:rgba(255,255,255,.6)}
+#cdash-page .cd-nopolar p{margin:0;font-size:13.5px;line-height:1.45;color:rgba(255,255,255,.78)}
+#cdash-page .cd-nopolar b{color:#fff;font-weight:700}
+
+/* ── Body map ── */
+#cdash-page .cd-mus-row{display:grid;gap:14px}
+@media (min-width:640px){#cdash-page .cd-mus-row{grid-template-columns:minmax(220px,300px) minmax(0,1fr);align-items:start}}
+#cdash-page .cd-fig{width:100%;max-width:330px;margin:0 auto}
+#cdash-page .cd-fig svg{display:block;width:100%;height:auto}
+#cdash-page .cd-fig-l{position:relative;height:18px;margin-top:4px}
+#cdash-page .cd-fig-l span{position:absolute;top:0;width:64px;text-align:center;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.62)}
+#cdash-page .cd-fig-l span:first-child{left:calc(21.4% - 32px)}    /* 21.4% / 78.6% = figure centres inside viewBox 8 0 196 192 */
+#cdash-page .cd-fig-l span:last-child{left:calc(78.6% - 32px)}
+#cdash-page .cd-rg,#cdash-page .cd-rg-n{stroke:#1B1616;stroke-width:1.2;stroke-linejoin:round}   /* stroke = card colour: overlapping shapes read as separate */
+#cdash-page .cd-rg-n{fill:rgba(255,255,255,.05)}
+#cdash-page .cd-rg{fill:rgba(255,255,255,.11);transition:opacity .2s}
+#cdash-page .cd-rg.on{fill:var(--accent,#8FDBFF);cursor:pointer}
+#cdash-page .cd-rg.sel{stroke:#fff;stroke-width:1.8}
+#cdash-page .cd-fig.has-sel .cd-rg.on:not(.sel){opacity:.3}
+#cdash-page .cd-scope{display:flex;border:1px solid var(--cd-line);border-radius:999px;max-width:100%;overflow-x:auto;scrollbar-width:none}
+#cdash-page .cd-scope button{flex:none;min-height:44px;padding:0 14px;border:0;border-radius:999px;background:none;color:rgba(255,255,255,.72);font:700 13px 'Figtree',sans-serif;white-space:nowrap;cursor:pointer}
+#cdash-page .cd-scope button[aria-pressed="true"]{background:rgba(143,219,255,.16);color:#fff}
+#cdash-page .cd-scope button:focus-visible{outline:2px solid var(--accent,#8FDBFF);outline-offset:-2px}
+#cdash-page .cd-mus-cap{margin:0 0 6px;font-size:13px;line-height:1.45;color:rgba(255,255,255,.72)}
+#cdash-page .cd-mus-empty{margin:0;padding:14px;border-radius:14px;border:1px dashed rgba(255,255,255,.2);font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.78)}
+#cdash-page .cd-mus-empty b{color:#fff}
+#cdash-page .cd-muscle-list{display:grid;gap:2px;margin:0;padding:0;list-style:none}
+@media (min-width:1280px){#cdash-page .cd-top:not(.cd-has-act) .cd-muscle-list{grid-template-columns:1fr 1fr;column-gap:20px}}
+#cdash-page .cd-muscle-row{display:grid;grid-template-columns:22px minmax(0,1fr) 56px 42px;align-items:center;gap:10px;width:100%;min-height:46px;padding:5px 8px;border:0;border-radius:10px;background:none;color:#fff;text-align:left;font:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
+#cdash-page .cd-muscle-row:hover{background:rgba(255,255,255,.05)}
+#cdash-page .cd-muscle-row[aria-pressed="true"]{background:rgba(143,219,255,.13)}
+#cdash-page .cd-muscle-row:focus-visible{outline:2px solid var(--accent,#8FDBFF);outline-offset:-2px}
+#cdash-page .cd-muscle-rank{font-size:12px;font-weight:700;color:rgba(255,255,255,.6);font-variant-numeric:tabular-nums}
+#cdash-page .cd-muscle-name{min-width:0;font-size:14px;font-weight:700;line-height:1.25;overflow-wrap:anywhere}
+#cdash-page .cd-muscle-name small{display:block;margin-top:1px;font-size:12px;font-weight:500;color:rgba(255,255,255,.62)}
+#cdash-page .cd-muscle-name small.cd-muscle-x{color:var(--cd-amber)}
+#cdash-page .cd-muscle-bar{height:6px;border-radius:3px;background:rgba(255,255,255,.09);overflow:hidden}
+#cdash-page .cd-muscle-bar i{display:block;height:100%;border-radius:3px;background:var(--accent,#8FDBFF)}
+#cdash-page .cd-x .cd-muscle-bar i{background:rgba(255,255,255,.5)}
+#cdash-page .cd-muscle-vol{font-size:14px;font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
+#cdash-page .cd-mus-more{min-height:44px;margin-top:4px;padding:0 10px;border:0;background:none;color:var(--accent,#8FDBFF);font:700 13.5px 'Figtree',sans-serif;cursor:pointer}
+#cdash-page .cd-mus-note{margin:10px 0 0;padding:10px 12px;border-radius:12px;border:1px solid rgba(230,179,74,.32);background:rgba(230,179,74,.07);font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.82)}
+#cdash-page .cd-mus-note b{color:var(--cd-amber)}
+
+/* ── Session deck: native horizontal scroll, snapped. Same vocabulary as .stats / .exercise-flow ── */
+#cdash-page .cd-sess{display:flex;flex-direction:column;gap:10px}
+#cdash-page .cd-sess-h{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:0 2px}
+#cdash-page .cd-sess-h span{font-size:12.5px;font-weight:600;color:rgba(255,255,255,.65)}
+#cdash-page .cd-dtabs{display:grid;gap:3px;padding:3px;border-radius:15px;border:1px solid var(--cd-line);background:var(--cd-card)}
+#cdash-page .cd-dtab{min-width:0;min-height:50px;padding:4px;border:0;border-radius:12px;background:none;color:rgba(255,255,255,.68);font:inherit;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;-webkit-tap-highlight-color:transparent}
+#cdash-page .cd-dtab b{font-size:16px;font-weight:800;line-height:1.1}
+#cdash-page .cd-dtab span{max-width:100%;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#cdash-page .cd-dtab[aria-selected="true"]{background:rgba(143,219,255,.15);color:#fff}
+#cdash-page .cd-dtab:focus-visible{outline:2px solid var(--accent,#8FDBFF);outline-offset:-2px}
+#cdash-page .cd-days{
+  position:relative;                 /* offsetParent for the cards, so offsetLeft ignores scrolling */
+  display:flex;align-items:stretch;gap:10px;
+  margin:0 calc(-1 * var(--cd-pad));padding:2px var(--cd-pad) 4px;
+  scroll-padding-inline:var(--cd-pad);
+  overflow-x:auto;overflow-y:hidden;  /* sideways only: the window owns vertical scroll, no nested scroller */
+  overscroll-behavior-x:contain;      /* a hard flick past the last session doesn't become browser back */
+  scroll-snap-type:x mandatory;scrollbar-width:none;
+}
+#cdash-page .cd-days::-webkit-scrollbar{display:none}
+#cdash-page .cd-day{position:relative;flex:0 0 calc(100% - 28px);min-width:0;scroll-snap-align:start;scroll-snap-stop:always;display:flex;flex-direction:column;gap:9px;padding:16px;border-radius:18px;background:var(--cd-card);border:1px solid var(--cd-line)}   /* 28px: the next card peeks, so the deck reads as swipeable */
+#cdash-page .cd-day.cd-open-on{border-color:rgba(143,219,255,.6)}
+#cdash-page .cd-day:has(.cd-day-open:active){background:rgba(52,47,44,.86)}
+#cdash-page .cd-day-h{display:flex;align-items:center;gap:8px}
+#cdash-page .cd-day-n{flex:1;min-width:0;font-size:17px;font-weight:800;line-height:1.2;overflow-wrap:anywhere}
+#cdash-page .cd-day-n b{margin-right:8px;color:var(--accent,#8FDBFF)}
+#cdash-page .cd-day-tag{flex:none;padding:3px 9px;border-radius:999px;background:rgba(143,219,255,.15);color:var(--accent,#8FDBFF);font-size:12px;font-weight:800}
+#cdash-page .cd-day-c{flex:none;font-size:12.5px;font-weight:700;color:rgba(255,255,255,.65)}
+#cdash-page .cd-day-m{display:flex;align-items:center;gap:7px;margin:0;font-size:13px;line-height:1.4;color:rgba(255,255,255,.75)}
+#cdash-page .cd-tick{flex:none;width:18px;height:18px;border-radius:50%;display:grid;place-items:center;background:rgba(126,217,160,.16);color:var(--good,#7ED9A0)}
+#cdash-page .cd-day-sum{display:grid;gap:5px;margin:2px 0 0;padding:0;list-style:none;font-size:13.5px;color:rgba(255,255,255,.88)}
+#cdash-page .cd-day-sum li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#cdash-page .cd-day-sum .cd-more{color:rgba(255,255,255,.62)}
+#cdash-page .cd-day-f{display:flex;justify-content:space-between;margin-top:auto;padding-top:11px;border-top:1px solid var(--cd-line);font-size:13.5px;font-weight:700;color:var(--accent,#8FDBFF)}
+/* the whole card is the button; its text is in aria-label */
+#cdash-page .cd-day-open{position:absolute;inset:0;padding:0;border:0;border-radius:inherit;background:none;cursor:pointer;-webkit-tap-highlight-color:transparent}
+#cdash-page .cd-day-open:focus-visible{outline:2px solid var(--accent,#8FDBFF);outline-offset:2px}
+@media (min-width:1024px){
+  #cdash-page .cd-dtabs{display:none}
+  #cdash-page .cd-days{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));margin:0;padding:0;overflow:visible}
+  #cdash-page .cd-day{flex:none}
+}
+
+/* ── Session detail: inline under the deck, not a sheet. No position:fixed, nothing for the iOS keyboard to fight ── */
+#cdash-page .cd-detail{padding:16px;border-radius:18px;background:var(--cd-card);border:1px solid rgba(143,219,255,.38)}
+#cdash-page .cd-detail-h{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px}
+#cdash-page .cd-detail-h h3{flex:1 1 auto;margin:0;font-size:18px;font-weight:800}
+#cdash-page .cd-detail-h span{font-size:12.5px;color:rgba(255,255,255,.68)}
+#cdash-page .cd-detail-x{min-height:44px;padding:0 16px;border-radius:999px;border:1px solid var(--cd-line);background:none;color:rgba(255,255,255,.88);font:700 13px 'Figtree',sans-serif;cursor:pointer}
+@media (min-width:1280px){#cdash-page .cd-phs{columns:2;column-gap:32px}}
+#cdash-page .cd-ph-b{break-inside:avoid;padding-top:8px}
+#cdash-page .cd-ph{display:flex;align-items:center;gap:8px;padding:10px 0 4px;font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.68)}
+#cdash-page .cd-ph span{padding:2px 7px;border-radius:6px;background:rgba(255,255,255,.08);letter-spacing:0}
+#cdash-page .cd-ex{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n l" "r l";column-gap:12px;align-items:center;padding:12px 0 16px;border-top:1px solid rgba(255,255,255,.08)}
+#cdash-page .cd-ex-n{grid-area:n;font-size:15px;font-weight:700;line-height:1.3;overflow-wrap:anywhere}
+#cdash-page .cd-ex-r{grid-area:r;margin-top:2px;font-size:13px;color:rgba(255,255,255,.7);font-variant-numeric:tabular-nums}
+#cdash-page .cd-ex-l{grid-area:l;position:relative;display:flex;align-items:center;gap:6px}
+#cdash-page .cd-kg{width:78px;height:44px;padding:0 10px;border-radius:12px;border:1px solid rgba(255,255,255,.22);background:rgba(0,0,0,.28);color:#fff;font:700 16px 'Figtree',sans-serif;text-align:right;font-variant-numeric:tabular-nums;-moz-appearance:textfield}   /* 16px: anything smaller and iOS Safari zooms the page on focus */
+#cdash-page .cd-kg::-webkit-inner-spin-button,#cdash-page .cd-kg::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+#cdash-page .cd-kg::placeholder{color:rgba(255,255,255,.45)}
+#cdash-page .cd-kg:focus{outline:none;border-color:var(--accent,#8FDBFF);box-shadow:0 0 0 3px rgba(143,219,255,.25)}
+#cdash-page .cd-kg-u{min-width:26px;font-size:13px;font-weight:600;color:rgba(255,255,255,.68)}
+#cdash-page .cd-kg-ro{font-size:17px;font-weight:800;font-variant-numeric:tabular-nums}
+#cdash-page .cd-spark{flex:none;width:36px;height:20px;color:var(--accent,#8FDBFF)}
+/* four save states, each with its own word, not only a colour */
+#cdash-page .cd-kg.cd-kg-saving{border-style:dashed;border-color:var(--accent,#8FDBFF)}
+#cdash-page .cd-kg.cd-kg-saved{border-color:var(--good,#7ED9A0)}
+#cdash-page .cd-kg.cd-kg-err{border-color:var(--danger,#EE5A4F);color:var(--danger-text-raised,#FFA59C)}
+#cdash-page .cd-ex-l::after{position:absolute;right:0;top:100%;margin-top:1px;font-size:12px;font-weight:700;white-space:nowrap}
+#cdash-page .cd-ex-l:has(.cd-kg-saving)::after{content:"Đang lưu…";color:var(--accent,#8FDBFF)}
+#cdash-page .cd-ex-l:has(.cd-kg-saved)::after{content:"Đã lưu";color:var(--good,#7ED9A0)}
+#cdash-page .cd-ex-l:has(.cd-kg-err)::after{content:"Chưa lưu được";color:var(--danger-text-raised,#FFA59C)}
+
+#cdash-page .cd-none{display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px}
+#cdash-page .cd-none p{flex:1 1 260px;margin:0;font-size:14px;line-height:1.55;color:rgba(255,255,255,.78)}
+#cdash-page .cd-none b{color:#fff}
+#cdash-page .cd-loading,#cdash-page .cd-empty{padding:24px 0;text-align:center;font-size:14px;color:rgba(255,255,255,.68)}
+
+/* ── One-time entrance (< 1 s, then nothing runs). cdIntro() adds and removes .cd-intro ── */
+#cdash-page.cd-intro .cd-rg.on{animation:cdRgIn .6s cubic-bezier(.2,.7,.2,1) var(--d,0ms) both}
+@keyframes cdRgIn{from{fill-opacity:0}}
+#cdash-page.cd-intro .ac-ring-v{animation:acRingIn .8s cubic-bezier(.2,.7,.2,1) both}
+@keyframes acRingIn{from{stroke-dashoffset:var(--c)}}
+@media (prefers-reduced-motion:reduce){
+  #cdash-page *,#cdash-page *::before,#cdash-page *::after{animation:none !important;transition:none !important}
+}
 .cd-head{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;flex-wrap:wrap;
   padding:16px 0 14px;border-bottom:1px solid #211E1D;margin-bottom:14px;}
 /* ảnh đại diện khách — 56px, ô trong bộ chọn khách là 34px; ảnh lưu 128px
