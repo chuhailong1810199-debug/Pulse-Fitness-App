@@ -775,10 +775,6 @@ async function loadApp() {
     }
     clientsData  = [{ id: snap.id, ...snap.data() }];
     activeClient = clientsData[0];
-    // Dashboard riêng của khách. Coach đã có tab "Dashboard" trỏ tới trang tất
-    // cả khách, nên tab này chỉ bật cho khách và trỏ thẳng vào hồ sơ của họ.
-    const cdTab = document.getElementById('cdash-nav-tab');
-    if (cdTab) cdTab.style.display = '';
     afterClientChange();
     console.log('[clientId-debug] activeClient.id =', activeClient.id, '| userClientId =', userClientId);
     renderClientBar(false);
@@ -902,6 +898,12 @@ function renderObserveStrip() {
 
 function afterClientChange() {
   renderObserveStrip();
+  // Tab hồ sơ một khách. Trước đây chỉ bật cho khách, nên coach muốn vào màn
+  // này phải bấm "Mở hồ sơ" từ dashboard mỗi lần. Bật cho cả hai vai: với coach
+  // nó trỏ vào khách đang chọn — đúng thứ "Mở hồ sơ" vẫn làm.
+  // Giữ ĐÚNG MỘT chỗ chạm vào thẻ này; hai chỗ bật là có ngày bật nhầm cả hai.
+  const cdTab = document.getElementById('cdash-nav-tab');
+  if (cdTab) cdTab.style.display = activeClient ? '' : 'none';
   const tab = document.querySelector('.nav-tab[data-page="billing"]');
   if (tab) tab.style.display = billingOn() ? '' : 'none';
   if (!billingOn() && document.getElementById('billing-page')?.classList.contains('active')) showPage('workout');
@@ -13816,7 +13818,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   <div id="access-strip"></div>
 
   <div class="nav">
-    <div class="nav-tab" id="cdash-nav-tab" data-page="cdash" style="display:none" onclick="showPage('cdash')">Dashboard</div>
+    <div class="nav-tab" id="cdash-nav-tab" data-page="cdash" style="display:none" onclick="showPage('cdash')">Profile</div>
     <div class="nav-tab" id="dash-nav-tab" data-page="dash" style="display:none" onclick="showPage('dash')">Dashboard</div>
     <div class="nav-tab active" data-page="workout" onclick="showPage('workout')">Workout</div>
     <div class="nav-tab" data-page="progress" onclick="showPage('progress')">Progress</div>

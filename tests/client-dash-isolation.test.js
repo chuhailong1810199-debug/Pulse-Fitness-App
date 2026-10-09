@@ -208,15 +208,16 @@ ok("hai the Dashboard nam dau thanh tab va deu an san", async () => {
   const tabs = [...nav.matchAll(/<div class="nav-tab[^"]*"([^>]*)>([^<]*)</g)]
     .map((m) => ({ attrs: m[1], label: m[2].trim() }));
   assert(tabs.length > 8, "doc duoc " + tabs.length + " tab, bo do hong");
-  assert.strictEqual(tabs[0].label, "Dashboard", "tab dau tien la " + tabs[0].label);
-  assert.strictEqual(tabs[1].label, "Dashboard", "tab thu hai la " + tabs[1].label);
-  assert(/id="cdash-nav-tab"/.test(tabs[0].attrs), "tab dau phai la cdash (cua khach)");
-  assert(/id="dash-nav-tab"/.test(tabs[1].attrs), "tab thu hai phai la dash (cua coach)");
+  assert(/id="cdash-nav-tab"/.test(tabs[0].attrs), "tab dau phai la cdash (ho so mot khach)");
+  assert(/id="dash-nav-tab"/.test(tabs[1].attrs), "tab thu hai phai la dash (tat ca khach)");
   for (const t of tabs.slice(0, 2))
-    assert(/display:none/.test(t.attrs), "the Dashboard phai an san, chi bat theo vai tro");
-  assert.strictEqual(tabs[2].label, "Workout", "sau hai the Dashboard phai la Workout");
-  // Chỉ một trong hai được bật, nếu không coach thấy hai tab cùng tên.
-  assert.strictEqual(tabs.filter((t) => t.label === "Dashboard").length, 2);
+    assert(/display:none/.test(t.attrs), "hai the nay phai an san, chi bat theo vai tro");
+  assert.strictEqual(tabs[2].label, "Workout", "sau hai the do phai la Workout");
+  // Luat that: hai the KHONG duoc trung ten. Truoc day ca hai deu la "Dashboard",
+  // nen chi duoc bat mot cai; gio coach thay ca hai nen ten phai phan biet duoc.
+  assert.notStrictEqual(tabs[0].label, tabs[1].label,
+    'hai tab dau cung ten "' + tabs[0].label + '" — coach thay ca hai se khong biet cai nao la cai nao');
+  assert(tabs[0].label && tabs[1].label, "tab dau khong duoc de trong nhan");
 });
 
 ok("moi the Dashboard chi duoc bat o dung mot cho", async () => {
