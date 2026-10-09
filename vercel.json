@@ -1,5 +1,6 @@
 {
   "routes": [
+    { "src": "/__/(auth|firebase)/(.*)", "dest": "https://fitness-app-a22c8.firebaseapp.com/__/$1/$2" },
     { "src": "/migrate", "dest": "/migrate.html" },
     { "src": "/manifest.json", "dest": "/manifest.json", "headers": { "Content-Type": "application/manifest+json" } },
     { "src": "/(.*\\.html)?", "headers": { "Cache-Control": "no-cache, must-revalidate" }, "continue": true },

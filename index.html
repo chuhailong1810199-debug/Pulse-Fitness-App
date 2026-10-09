@@ -73,9 +73,17 @@ const getMetadata  = (ref) => ref.getMetadata();
 <script>
 
 // ── FIREBASE CONFIG ────────────────────────────────────
+// authDomain = chính tên miền app. iPhone (nhất là app trên màn hình chính)
+// chặn lưu trữ chéo tên miền: đăng nhập chạy ở firebaseapp.com thì trang
+// /__/auth/handler báo "Unable to save initial state … sessionStorage is
+// inaccessible" và khách kẹt ở đó (Cindy 09/10). vercel.json chuyển tiếp
+// /__/auth/* và /__/firebase/* sang firebaseapp.com nên trang đăng nhập cùng
+// tên miền với app. Cần cả URI https://longchucoaching.com/__/auth/handler
+// trong OAuth client (Google Cloud Console → Credentials).
+const AUTH_HOSTS = ['longchucoaching.com'];
 const firebaseConfig = {
   apiKey: "AIzaSyB1RsoFzFv_S0ae2Jkh-2RuZjA5lqGCY_o",
-  authDomain: "fitness-app-a22c8.firebaseapp.com",
+  authDomain: AUTH_HOSTS.includes(location.hostname) ? location.hostname : "fitness-app-a22c8.firebaseapp.com",
   projectId: "fitness-app-a22c8",
   storageBucket: "fitness-app-a22c8.firebasestorage.app",
   messagingSenderId: "583223865664",
