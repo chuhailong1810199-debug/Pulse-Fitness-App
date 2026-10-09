@@ -1890,20 +1890,179 @@ function dshChipsHTML(clients, alerts) {
   }).join('');
 }
 
-var _dshIntroDone = false;
+/* ═══════════════════════════════════════════════════════════════════════
+   Pulse — coach dashboard on phones: swipe deck
+   In renderDashboard(), right after  page.innerHTML = …  :
+       dshDeck(page);
+       dshIntro(page);          // the version below replaces the old one
+   ═══════════════════════════════════════════════════════════════════════ */
+var DSH_SHOW = { main: 6, feed: 8 };          // keep in sync with nth-child(n+8) / (n+10) in the CSS
+var DSH_MQ = window.matchMedia('(max-width: 1023.98px)');
+// Lives in memory: survives re-renders (tab revisit, "Tải lại dữ liệu cũ"), not app reloads.
+var _dsh = { page: 0, all: { main: false, feed: false }, y: [0, 0, 0], ctx: null, ro: null };
+
+function dshTabsHTML(alerts, feed) {
+  var red = alerts.some(function (a) { return a.sev === 'red'; });
+  var tab = function (i, label, extra) {
+    return '<button class="dsh-tab" type="button" role="tab" id="dsh-t' + i + '" data-i="' + i + '" aria-controls="dsh-p' + i + '"'
+      + ' aria-selected="' + (i === 0) + '" tabindex="' + (i === 0 ? 0 : -1) + '">' + label + extra + '</button>';
+  };
+  return '<div class="dsh-tabs" role="tablist" aria-label="Bảng điều khiển">'
+    + tab(0, 'Cần chú ý', (red ? '<i class="dsh-tab-dot" aria-hidden="true"></i>' : '') + '<span>' + alerts.length + '</span>')
+    + tab(1, 'Hoạt động', feed.length ? '<span class="dsh-tab-n2">' + feed.length + '</span>' : '')
+    + tab(2, 'Số liệu', '')
+    + '<i class="dsh-tab-ink" aria-hidden="true"></i></div>';
+}
+
+// Assumes alerts arrive sorted most-urgent first, so the hidden tail is the least urgent.
+// The label still says how many red rows are in it, so nothing urgent hides silently.
+function dshMoreHTML(key, list, noun) {
+  var rest = list.slice(DSH_SHOW[key]);
+  if (!rest.length) return '';
+  var red = rest.filter(function (a) { return a.sev === 'red'; }).length;
+  var more = 'Xem thêm ' + rest.length + ' ' + noun + (red ? ' · ' + red + ' đỏ' : '');
+  return '<button class="dsh-more" type="button" data-dsh-more="' + key + '" aria-expanded="false"'
+    + ' aria-controls="dsh-p' + (key === 'main' ? 0 : 1) + '" data-more="' + escHtml(more) + '" data-less="Thu gọn">' + escHtml(more) + '</button>';
+}
+
+function dshDeck(page) {
+  var grid = page.querySelector('.dsh-grid'), tabs = page.querySelector('.dsh-tabs');
+  if (!grid || !tabs) return;
+  var cols = [].filter.call(grid.children, function (n) { return n.classList.contains('dsh-col'); });
+  _dsh.ctx = { page: page, grid: grid, tabs: tabs, cols: cols, btns: [].slice.call(tabs.querySelectorAll('.dsh-tab')) };
+  page.querySelectorAll('.dsh-more').forEach(function (b) { dshMoreSet(b, _dsh.all[b.getAttribute('data-dsh-more')]); });
+
+  // Restore the page the coach was on. Same task as innerHTML → set before the first paint, so nothing jumps.
+  var i = Math.min(_dsh.page, cols.length - 1);
+  dshMark(i);
+  grid.scrollLeft = dshX(i);
+  dshInk();
+
+  if (!grid._dshBound) {                       // new grid every render; bind its scroll once
+    grid._dshBound = true;
+    var t = 0, raf = 0;
+    grid.addEventListener('scroll', function () {
+      if (!raf) raf = requestAnimationFrame(function () { raf = 0; dshInk(); });
+      clearTimeout(t); t = setTimeout(dshSettle, 150);   // fallback where scrollend is missing (Safari < 18)
+    }, { passive: true });
+    grid.addEventListener('scrollend', dshSettle);
+  }
+  if (!page._dshBound) {                       // #dash-page survives renders; delegate once
+    page._dshBound = true;
+    page.addEventListener('click', function (e) {
+      var t = e.target.closest('.dsh-tab');
+      if (t) { dshGo(+t.getAttribute('data-i')); return; }
+      var m = e.target.closest('.dsh-more');
+      if (m) dshMoreToggle(m);
+    });
+    page.addEventListener('keydown', function (e) {
+      var t = e.target.closest && e.target.closest('.dsh-tab');
+      if (!t || !_dsh.ctx) return;
+      var i = +t.getAttribute('data-i'), n = _dsh.ctx.btns.length, j = null;
+      if (e.key === 'ArrowRight') j = (i + 1) % n;
+      else if (e.key === 'ArrowLeft') j = (i - 1 + n) % n;
+      else if (e.key === 'Home') j = 0;
+      else if (e.key === 'End') j = n - 1;
+      if (j === null) return;
+      e.preventDefault();
+      _dsh.ctx.btns[j].focus();
+      dshGo(j);
+    });
+    DSH_MQ.addEventListener('change', function () { if (page.isConnected && _dsh.ctx) { dshMark(_dsh.page); _dsh.ctx.grid.scrollLeft = dshX(_dsh.page); dshInk(); } });
+  }
+  if (window.ResizeObserver) {                 // fonts loading, rotation, expanding: keep the deck as tall as the current page
+    if (_dsh.ro) _dsh.ro.disconnect();
+    _dsh.ro = new ResizeObserver(function () { dshSync(); dshInk(); });
+    cols.forEach(function (c) { _dsh.ro.observe(c); });
+  }
+}
+
+function dshX(i) { var c = _dsh.ctx.cols; return c[i].offsetLeft - c[0].offsetLeft; }
+function dshNear() {
+  var s = _dsh.ctx.grid.scrollLeft, best = 0;
+  for (var i = 1; i < _dsh.ctx.cols.length; i++) if (Math.abs(dshX(i) - s) < Math.abs(dshX(best) - s)) best = i;
+  return best;
+}
+// Window scrollY at which the pager sticks: the top of the deck.
+function dshAnchor() {
+  var c = _dsh.ctx, cs = getComputedStyle(c.tabs);
+  return c.grid.getBoundingClientRect().top + window.scrollY - c.tabs.offsetHeight - (parseFloat(cs.marginBottom) || 0) - (parseFloat(cs.top) || 0);
+}
+function dshSync() {
+  var c = _dsh.ctx; if (!c) return;
+  if (!DSH_MQ.matches) { c.grid.style.height = ''; return; }
+  c.grid.style.height = (c.cols[_dsh.page].offsetHeight + (parseFloat(getComputedStyle(c.grid).paddingBottom) || 0)) + 'px';
+}
+function dshInk() {
+  var c = _dsh.ctx; if (!c || c.cols.length < 2) return;
+  c.tabs.style.setProperty('--dsh-p', (c.grid.scrollLeft / (dshX(1) || 1)).toFixed(3));
+}
+function dshSel(i) {
+  _dsh.ctx.btns.forEach(function (b, k) { b.setAttribute('aria-selected', String(k === i)); b.tabIndex = k === i ? 0 : -1; });
+}
+function dshMark(i) {
+  var c = _dsh.ctx, mob = DSH_MQ.matches;
+  _dsh.page = i;
+  c.cols.forEach(function (col, k) {
+    var on = k === i;
+    col.classList.toggle('dsh-cur', on);
+    if (mob) { col.setAttribute('role', 'tabpanel'); col.setAttribute('aria-labelledby', 'dsh-t' + k); }
+    else { col.removeAttribute('role'); col.removeAttribute('aria-labelledby'); }
+    col.inert = mob && !on;                    // off-screen pages: out of Tab order and out of the screen reader
+  });
+  dshSel(i);
+  dshSync();
+}
+function dshSettle() {
+  var c = _dsh.ctx; if (!c || !DSH_MQ.matches) return;
+  var i = dshNear(); if (i === _dsh.page) return;
+  var a = dshAnchor(), deep = window.scrollY > a + 1;
+  _dsh.y[_dsh.page] = deep ? window.scrollY - a : 0;   // each page remembers how far down the coach was
+  dshMark(i);
+  if (deep || _dsh.y[i] > 0) window.scrollTo(0, a + _dsh.y[i]);   // also when leaving a page too short to scroll
+}
+function dshGo(i) {
+  var c = _dsh.ctx; if (!c) return;
+  i = Math.max(0, Math.min(c.cols.length - 1, i));
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  dshSel(i);                                   // label answers the tap now; the rest follows when the scroll settles
+  c.grid.scrollTo({ left: dshX(i), behavior: reduce ? 'auto' : 'smooth' });
+  if (reduce) dshSettle();
+}
+function dshMoreSet(b, open) {
+  b.closest('.dsh-col').classList.toggle('dsh-all', !!open);
+  b.setAttribute('aria-expanded', String(!!open));
+  b.textContent = b.getAttribute(open ? 'data-less' : 'data-more');
+}
+function dshMoreToggle(b) {
+  var k = b.getAttribute('data-dsh-more'), open = !_dsh.all[k], a = dshAnchor();
+  _dsh.all[k] = open;
+  dshMoreSet(b, open);
+  dshSync();
+  if (!open && window.scrollY > a) window.scrollTo(0, a);   // collapsing from far down: back to the top of the page
+}
+
+var _dshIntroDone = false, _dshIntroT = 0;
 function dshIntro(page) {
-  // Call at the end of renderDashboard(), after wrap.innerHTML = ….
-  // First render per app load gets the entrance; every later render (tab revisit, backfill) gets none.
+  // First render per app load gets the entrance; later renders get none.
   var run = !_dshIntroDone;
   _dshIntroDone = true;
+  clearTimeout(_dshIntroT);
   page.classList.toggle('dsh-intro', run);
-  if (!run || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  if (!run) return;
+  var mob = DSH_MQ.matches;
+  // Phone: pages not on screen stay still. By the time the coach swipes there it would long be over.
+  if (mob) page.querySelectorAll('.dsh-grid > .dsh-col:not(.dsh-cur)').forEach(function (c) { c.classList.add('dsh-still'); });
+  // Everything is done at 900ms. Dropping the class then means a later swipe or "Xem thêm" can't restart it.
+  _dshIntroT = setTimeout(function () { page.classList.remove('dsh-intro'); }, 900);
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   page.querySelectorAll('.dsh-stat-n').forEach(function (el) {
+    if (mob && el.closest('.dsh-still')) return;
     var t = el.firstChild;
     if (!t || t.nodeType !== 3) return;
     var end = parseInt(t.nodeValue, 10);
     if (!(end > 1)) return;
-    var start = performance.now() + 150;       // 150ms wait + 600ms count = done at 750ms, then stops
+    var start = performance.now() + 150;
     t.nodeValue = '0';
     requestAnimationFrame(function step(now) {
       var p = Math.min(1, Math.max(0, (now - start) / 600));
@@ -1912,6 +2071,33 @@ function dshIntro(page) {
     });
   });
 }
+
+
+/* ── Template changes ─────────────────────────────────────────────────
+// renderDashboard(): the template, changed lines marked ◀
+page.innerHTML = '<div class="dsh-head">…</div>'
+  + '<div class="dcs-strip">' + dshChipsHTML(clients, alerts) + '</div>'
+  + dshTabsHTML(alerts, feed)                                                            // ◀ new
+  + '<div class="dsh-grid">'
+  + '<section class="dsh-col dsh-col-main" id="dsh-p0">'                                 // ◀ id
+  +   '<div class="dsh-cap">Cần chú ý<span>' + alerts.length + '</span></div>'
+  +   dshRowsHTML(alerts, clients.length)
+  +   dshMoreHTML('main', alerts, 'khách')                                               // ◀ new
+  + '</section>'
+  + '<section class="dsh-col dsh-col-feed" id="dsh-p1">'                                 // ◀ class + id
+  +   '<div class="dsh-cap">Hoạt động gần đây<span>7 ngày</span></div>'
+  +   dshFeedHTML(feed, now)
+  +   dshMoreHTML('feed', feed, 'mục')                                                   // ◀ new
+  + '</section>'
+  + '<section class="dsh-col dsh-col-side" id="dsh-p2">'                                 // ◀ id
+  +   '<div class="dsh-cap">Số liệu</div>' + dshStatsHTML(stats)
+  + '</section></div>';
+dshDeck(page);                                                                           // ◀ new, before dshIntro
+dshIntro(page);
+
+// dshRowsHTML(): one attribute on the button, so 21 buttons don't all read "Mở hồ sơ"
++ '<button class="dsh-open" aria-label="Mở hồ sơ ' + escHtml(a.c.name) + '" onclick="openClientDash(\'' + escHtml(a.c.id) + '\')">Mở hồ sơ</button></div>';
+*/
 
 function renderDashboard() {
   const wrap = document.getElementById('dash-body');
@@ -1922,24 +2108,27 @@ function renderDashboard() {
   wrap.innerHTML = `
     <div class="dsh-head">
       <div><h1 class="dsh-h1">Bảng điều khiển</h1>
-        <div class="dsh-sub">${new Date().toLocaleDateString('vi-VN',
+        <p class="dsh-sub">${new Date().toLocaleDateString('vi-VN',
           { weekday:'long', day:'2-digit', month:'2-digit', year:'numeric' })}
-          · ${st.total} khách · ${rows.length ? rows.length + ' cần chú ý' : 'không ai cần chú ý'}</div></div>
+          · ${st.total} khách · ${rows.length ? rows.length + ' cần chú ý' : 'không ai cần chú ý'}</p></div>
       <button class="dsh-refill" onclick="backfillDashboard(this)">Tải lại dữ liệu cũ</button>
     </div>
-    <div class="dcs-strip">${dshChipsHTML(clientsData || [], rows)}</div>
+    <div class="dcs dcs-strip">${dshChipsHTML(clientsData || [], rows)}</div>
+    ${dshTabsHTML(rows, feed)}
     <div class="dsh-grid">
-      <section class="dsh-col dsh-col-main">
-        <div class="dsh-cap">Cần chú ý<span>${rows.length || ''}</span></div>
+      <section class="dsh-col dsh-col-main" id="dsh-p0">
+        <h2 class="dsh-cap">Cần chú ý<span>${rows.length || ''}</span></h2>
         ${dshRowsHTML(rows, st.total)}
+        ${dshMoreHTML('main', rows, 'khách')}
       </section>
-      <section class="dsh-col">
-        <div class="dsh-cap">Hoạt động gần đây<span>7 ngày</span></div>
+      <section class="dsh-col dsh-col-feed" id="dsh-p1">
+        <h2 class="dsh-cap">Hoạt động gần đây<span>7 ngày</span></h2>
         ${feed.length ? dshFeedHTML(feed, now)
           : '<div class="dsh-quiet">Chưa có hoạt động nào được ghi. Dữ liệu bắt đầu tích từ lúc tính năng này bật, hoặc bấm <b>Tải lại dữ liệu cũ</b> ở trên.</div>'}
+        ${dshMoreHTML('feed', feed, 'mục')}
       </section>
-      <section class="dsh-col dsh-col-side">
-        <div class="dsh-cap">Số liệu</div>
+      <section class="dsh-col dsh-col-side" id="dsh-p2">
+        <h2 class="dsh-cap">Số liệu</h2>
         ${dshStatsHTML(st)}
       </section>
     </div>`;
@@ -1948,7 +2137,11 @@ function renderDashboard() {
   // tải lại dữ liệu thì không — renderDashboard() ghi đè toàn bộ innerHTML,
   // nếu không chặn thì hiệu ứng vào phát lại mỗi lần coach bấm sang tab này.
   const page = document.getElementById('dash-page');
-  if (page && typeof dshIntro === 'function') dshIntro(page);
+  if (!page) return;
+  // dshDeck TRUOC dshIntro: no dat scrollLeft trong cung tac vu voi innerHTML,
+  // truoc lan ve dau, nen khoi phuc dung trang coach dang xem ma khong giat.
+  dshDeck(page);
+  dshIntro(page);
 }
 
 /**
@@ -15605,6 +15798,88 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 }
 
 /* ── Client dashboard: một khách, trên máy tính ─────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════
+   Pulse — coach dashboard on phones: three columns → swipe deck
+   Paste AFTER dashboard-glass.css. Everything below 1024px lives in the one
+   media query; the only rule outside it hides the two new elements on desktop.
+   No transform on any ancestor of position:fixed, no backdrop-filter, and no
+   nested vertical scroller: the window keeps vertical scroll, the deck only
+   scrolls sideways.
+   ═══════════════════════════════════════════════════════════════════════ */
+#dash-page .dsh-tabs,#dash-page .dsh-more{display:none}
+
+@media (max-width:1023.98px){
+  #dash-page{
+    --dsh-gutter:20px;                          /* MUST equal #dash-page's side padding: the deck and the pager bleed by exactly this much to reach the screen edge */
+    --dsh-tabs-top:env(safe-area-inset-top,0px); /* where the pager sticks. Add the height of any fixed app header above it */
+  }
+
+  /* ── Client chips ─────────────────────────────────────────────────
+     Hidden on phones: a second sideways-swipe surface right above the deck,
+     and every chip repeats a row of page 1. Jump-to-any-client is the client
+     picker's job (it has search). Keep them with class dsh-keep-strip on #dash-page. */
+  #dash-page:not(.dsh-keep-strip) .dcs-strip{display:none}
+  #dash-page.dsh-keep-strip .dcs-strip{margin-bottom:6px}
+
+  /* Column captions repeat the tab labels one line lower. */
+  #dash-page .dsh-grid > .dsh-col > .dsh-cap{display:none}
+
+  /* ── Pager: the primary way to change page. Swiping is the shortcut. ── */
+  #dash-page .dsh-tabs{
+    position:sticky;top:var(--dsh-tabs-top);z-index:3;   /* dies if an ancestor has overflow:hidden/auto. Use overflow-x:clip there */
+    display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+    margin:0 calc(-1 * var(--dsh-gutter)) 12px;padding:4px var(--dsh-gutter) 0;
+    background:rgba(22,17,17,.94);               /* near-opaque, NO blur: the phone blur budget stays 0 */
+    border-bottom:1px solid var(--dsh-hair);
+  }
+  #dash-page .dsh-tab{display:flex;align-items:center;justify-content:center;gap:7px;min-width:0;min-height:48px;padding:0 4px;border:0;background:none;color:rgba(255,255,255,.55);font:700 13.5px/1 'Figtree',sans-serif;white-space:nowrap;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:color .15s}
+  #dash-page .dsh-tab[aria-selected="true"]{color:#fff}
+  #dash-page .dsh-tab span{padding:3px 7px;border-radius:999px;background:rgba(255,255,255,.08);font-size:11.5px;color:rgba(255,255,255,.75);font-variant-numeric:tabular-nums}
+  #dash-page .dsh-tab-dot{flex:none;width:7px;height:7px;margin-right:-2px;border-radius:50%;background:#EE5A4F}   /* page 1 has a red row: visible from pages 2 and 3 */
+  #dash-page .dsh-tab:focus-visible{outline:2px solid #8FDBFF;outline-offset:-6px;border-radius:12px}
+  /* Ink follows the finger: JS writes --dsh-p (0…2) from scrollLeft, once per frame.
+     A transform on this leaf is safe: it has no position:fixed descendants. */
+  #dash-page .dsh-tab-ink{position:absolute;left:var(--dsh-gutter);bottom:-1px;width:calc((100% - 2 * var(--dsh-gutter)) / 3);height:2px;border-radius:2px;background:#8FDBFF;transform:translateX(calc(var(--dsh-p,0) * 100%));pointer-events:none}
+  @media (max-width:359px){#dash-page .dsh-tab .dsh-tab-n2{display:none}}
+
+  /* ── Deck: native horizontal scroll, snapped ───────────────────────── */
+  #dash-page .dsh-grid{
+    position:relative;                            /* offsetParent for the columns, so their offsetLeft ignores scrolling */
+    display:flex;align-items:flex-start;gap:var(--dsh-gutter);   /* gap = gutter: the next page starts exactly at the screen edge, no peek */
+    margin:0 calc(-1 * var(--dsh-gutter));
+    padding:0 var(--dsh-gutter) calc(88px + env(safe-area-inset-bottom));   /* last row clears #ai-fab (24 + 56 + 8). Drop if #dash-page already pads ≥ 88px */
+    scroll-padding-inline:var(--dsh-gutter);
+    overflow-x:auto;overflow-y:hidden;           /* nobody scrolls the deck vertically; the window does. JS sets height = current page */
+    overscroll-behavior-x:contain;               /* a hard swipe past page 3 doesn't chain into back/forward */
+    scroll-snap-type:x mandatory;                /* same vocabulary as .stats / .exercise-flow */
+    scrollbar-width:none;
+  }
+  #dash-page .dsh-grid::-webkit-scrollbar{display:none}
+  #dash-page .dsh-grid > .dsh-col{flex:0 0 100%;scroll-snap-align:start;scroll-snap-stop:always}   /* stop:always — a fast flick from page 1 lands on 2, not 3 */
+
+  /* ── Alert rows, compact: the whole row is the target ─────────────── */
+  #dash-page .dsh-row{grid-template-columns:22px minmax(0,1fr) auto 12px;grid-template-areas:"rank who mag open";gap:4px 10px;min-height:0;padding:11px 10px 11px 16px}
+  /* "Mở hồ sơ" stretches over the row and draws as ›. The text stays for screen readers (font-size:0 is not hidden). */
+  #dash-page .dsh-open{position:static;min-height:0;padding:0;border:0;background:none !important;box-shadow:none !important;color:rgba(255,255,255,.55) !important;font-size:0;transform:none !important;-webkit-tap-highlight-color:transparent}
+  #dash-page .dsh-open::before{content:"›";font-size:22px;font-weight:600;line-height:1}
+  #dash-page .dsh-open::after{content:"";position:absolute;inset:0;border-radius:inherit}
+  #dash-page .dsh-row:has(.dsh-open:active){background:var(--dsh-item-hover)}
+  #dash-page .dsh-open:focus-visible{outline:none}
+  #dash-page .dsh-open:focus-visible::after{outline:2px solid #8FDBFF;outline-offset:2px}
+
+  /* ── Show 6 + 8, then "Xem thêm". The caption is child 1, so row 7 is child 8.
+     Keep in sync with DSH_SHOW in the JS. ── */
+  #dash-page .dsh-col-main:not(.dsh-all) > .dsh-row:nth-child(n+8),
+  #dash-page .dsh-col-feed:not(.dsh-all) > .dsh-act:nth-child(n+10){display:none}
+  #dash-page .dsh-more{display:flex;align-items:center;justify-content:center;min-height:48px;padding:0 14px;border-radius:12px;border:1px dashed var(--dsh-edge);background:transparent;color:#8FDBFF;font:700 13px 'Figtree',sans-serif;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  #dash-page .dsh-more:focus-visible{outline:2px solid #8FDBFF;outline-offset:2px}
+
+  /* ── Entrance: pages the coach can't see yet stay still. dshIntro() marks them. ── */
+  #dash-page .dsh-still *,#dash-page .dsh-still *::before,#dash-page .dsh-still *::after{animation:none !important}
+}
+/* prefers-reduced-motion: the rule in dashboard-glass.css already kills every
+   animation/transition under #dash-page. Tab taps jump instantly (JS). */
+
 #cdash-page{display:none;}
 #cdash-page.active{display:block;padding:0 20px 100px;max-width:1700px;margin:0 auto;}
 .cd-loading{padding:40px;text-align:center;font-size:13px;color:#8FDBFF;}
