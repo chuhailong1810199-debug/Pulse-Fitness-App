@@ -14,7 +14,7 @@ const ok = (n, f) => { try { f(); console.log("  OK   " + n); }
 
 const i = s.indexOf("function parsePrescription(");
 const j = s.indexOf("// Split \"4 × 8\"", i);
-const { parsePrescription: P, exerciseTonnage: T } = new Function(s.slice(i, j) + "; return { parsePrescription, exerciseTonnage };")();
+const { parsePrescription: P, exerciseTonnage: T, resolveSetLoads: R } = new Function(s.slice(i, j) + "; return { parsePrescription, exerciseTonnage, resolveSetLoads };")();
 const reps = (x) => { const r = P(x); return Array.from({ length: r.sets }, (_, k) => r.repsAt(k)); };
 
 console.log("Volume + muc ta\n");
@@ -57,6 +57,37 @@ ok("tonnage: theo tung set neu co, khong thi sets × ta chung", () => {
   assert.strictEqual(T("3 × 8", [], 50), 3 * 8 * 50);
   assert.strictEqual(T("3 × 8", [null, 0, -5], 0), 0);
 });
+// Sửa 2026-10-10
+ok("interval '8 vòng · 30s mạnh / 30s nhẹ' khong phai 8 rep", () => {
+  for (const x of ["8 vòng · 30s mạnh / 30s nhẹ", "6 vòng · 45s mạnh / 75s nhẹ", "8 vòng · 200m nhanh / 60s đi bộ"]) {
+    assert.strictEqual(P(x).lifting, false, x);
+    assert.strictEqual(T(x, [20], 20), 0, x);
+  }
+  assert.strictEqual(P("8 vòng · 30s mạnh / 30s nhẹ").sets, 8);
+});
+ok("mot ben: /chân, mỗi chân", () => {
+  assert.deepStrictEqual(reps("2 × 8/chân"), [16, 16]);
+  assert.deepStrictEqual(reps("2 × 8 mỗi chân"), [16, 16]);
+  assert.deepStrictEqual(reps("3 × 8 mỗi chữ"), [8, 8, 8]);   // không phải một bên
+});
+ok("o S1 trong khong lam ta S3 don len ghep rep S2", () => {
+  // S1 trống → lấy tạ set sau gần nhất; S2 = 70 × 10, S3 = 80 × 12
+  assert.deepStrictEqual(R("3 × 8/10/12", [null, 70, 80]), [70, 70, 80]);
+  assert.strictEqual(T("3 × 8/10/12", [null, 70, 80]), 70 * 8 + 70 * 10 + 80 * 12);
+});
+ok("o S4 thua (giao an giam 4 → 3 set) khong tinh", () => {
+  assert.strictEqual(T("3 × 8", [60, 60, 60, 60]), 3 * 8 * 60);
+  assert.deepStrictEqual(R("3 × 8", [60, 60, 60, 100]), [60, 60, 60]);
+});
+ok("set khong co o (vong, o cat o 6) lay ta set truoc", () => {
+  assert.strictEqual(T("8 rounds × 10", [20]), 8 * 10 * 20);   // circuit chỉ có 1 ô
+  assert.strictEqual(T("8 × 5", [50, 50, 50, 50, 50, 60]), 5 * 5 * 50 + 3 * 5 * 60);
+  assert.strictEqual(T("4 × 8", [60]), 4 * 8 * 60);              // điền một ô, đã tích = 4 set
+});
+ok("khong ghi so set: so set = so o da dien", () => {
+  assert.strictEqual(T("AMRAP × 10", [20, 20, 20]), 3 * 10 * 20);
+  assert.strictEqual(T("10", [], 30), 10 * 30);
+});
 ok("chu thich trong ngoac khong lam sai: 3 × 10 (giữ 5s)", () => assert.deepStrictEqual(reps("3 × 10 (giữ 5s)"), [10, 10, 10]));
 
 const fi = s.indexOf("async function finishWorkout(");
@@ -75,6 +106,12 @@ ok("finishWorkout: khong con cach doc sets×reps cu", () => {
 ok("mo lai tom tat hien so DA LUU, khong tinh lai tu o ta", () => {
   assert(/let replayVol = _lastSavedTonnage;/.test(fw));
   assert(/_lastSavedTonnage = null;/.test(s), "phải xoá khi đổi khách/buổi");
+});
+
+ok("finishWorkout: luu ta tung set da quy doi, khong loc o trong truoc", () => {
+  assert(/const perSet = resolveSetLoads\(ex\.setsReps, perSetFor\(ex, exerciseKey\), exerciseLoads\[exerciseKey\]\);/.test(fw));
+  assert(!/const typed = \(setLoads\[exerciseKey\] \|\| \[\]\)\.filter/.test(fw), "perSetFor còn lọc ô trống");
+  assert(/_totalVolume0 \+= exerciseTonnage\(ex\.setsReps, perSetFor\(ex, key\)/.test(fw), "đường lỗi phải tính giống đường chính");
 });
 
 ok("bang lich su tung bai tinh lai bang bo doc moi (sua ca dong cu)", () => {

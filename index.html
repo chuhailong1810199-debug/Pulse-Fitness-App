@@ -144,9 +144,10 @@ function parseSetsCount(setsReps, tag) {
  * 30 rep. Dạng có trong giáo án thật (đếm 2026-10-08, 655 bài):
  *   "3 × 8"  "3 × 6-8"  "2 × 10/bên"  "3 × 30s"  "4 × 250m"  "1 × 5 min"
  *   "3 x 8.8.8"  "3 × 8/10/12"  "8 rounds × 6"  "3 vòng × 12"  "AMRAP × 10"
- *   "30 phút"  "400m"  "—"
+ *   "30 phút"  "400m"  "—"  "8 vòng · 30s mạnh / 30s nhẹ" (interval, không phải 8 rep)
  *
- * Trả về { sets, repsAt(i), lifting, perSide }:
+ * Trả về { sets, explicit, repsAt(i), lifting, perSide }:
+ *   explicit     → chuỗi có ghi số set ("3 × …", "8 vòng · …").
  *   lifting=false → bài thời gian/quãng đường/calo: KHÔNG có tonnage (vẫn lưu tạ).
  *   perSide      → "/bên", "/side", "each leg"… — một set là hai bên, tính ×2.
  *   repsAt(i)    → số rep của set i: "8.8.8" / "8/10/12" theo từng set,
@@ -155,15 +156,17 @@ function parseSetsCount(setsReps, tag) {
 function parsePrescription(str) {
   const raw = String(str || '').toLowerCase().replace(/[×]/g, 'x').replace(/[–—]/g, '-').trim();
   const UNIT = /^\s*\d+(?:[.,]\d+)?(?:\s*-\s*\d+(?:[.,]\d+)?)?\s*(km|m|s|sec|secs|giây|min|mins|mín|phút|cal)(?![a-zà-ỹ])/;
-  const sm = raw.match(/^(\d+)\s*(?:rounds?|vòng|hiệp)?\s*x/);
+  const sm = raw.match(/^(\d+)\s*(?:(?:rounds?|vòng|hiệp)\s*[x·:]|x)/);
   const sets = sm ? Math.max(1, parseInt(sm[1], 10)) : 1;
   const rest = sm ? raw.slice(sm[0].length) : raw.replace(/^amrap\s*x\s*/, '');
-  const none = { sets, repsAt: () => 0, lifting: false, perSide: false };
+  const explicit = !!sm;
+  const none = { sets, explicit, repsAt: () => 0, lifting: false, perSide: false };
   if (!/\d/.test(rest) || UNIT.test(rest)) return none;
-  const perSide = /\/\s*(bên|side|leg|tay|direction|chiều|each)|each\s+(side|leg)|mỗi\s+bên/.test(rest);
+  const SIDE = '(bên|side|leg|arm|tay|chân|direction|chiều|each)';
+  const perSide = new RegExp('\\/\\s*' + SIDE + '|each\\s+(side|leg|arm)|mỗi\\s+(bên|chân|tay|chiều)').test(rest);
   const list = rest.match(/^\s*(\d+(?:\s*[./]\s*\d+)+)(?!\s*\d)/);
   let reps;
-  if (list && !/^\s*\d+\s*\/\s*(bên|side|leg|tay|direction|chiều|each)/.test(rest)) {
+  if (list && !new RegExp('^\\s*\\d+\\s*\\/\\s*' + SIDE).test(rest)) {
     reps = list[1].split(/[./]/).map(n => parseInt(n, 10)).filter(n => n > 0);
   } else {
     const first = rest.match(/\d+/);
@@ -171,22 +174,46 @@ function parsePrescription(str) {
   }
   const mult = perSide ? 2 : 1;
   return {
-    sets, perSide, lifting: true,
+    sets, explicit, perSide, lifting: true,
     repsAt: (i) => (reps[Math.min(i, reps.length - 1)] || 0) * mult,
   };
 }
 
-/** Tonnage một bài: theo từng set nếu có, không thì sets × tạ chung. 0 cho bài không phải nâng tạ. */
+/**
+ * Tạ của TỪNG set đã tập, đúng số set giáo án ghi. perSetLoads giữ nguyên vị trí
+ * (ô S1 trống = null), KHÔNG lọc trước — lọc làm tạ S3 dồn lên ghép với rep S2.
+ *  - Ô trống / set không có ô (ô cắt ở 6; circuit "8 rounds × 10" chỉ 1 ô)
+ *    → lấy tạ set gần nhất phía trước (đã tích bài = đã tập đủ set).
+ *  - Ô thừa sau số set (giáo án giảm 4 → 3 set, ô S4 còn số điền sẵn) → bỏ.
+ *  - Không có ô nào → tạ chung (fallbackLoad) cho mọi set.
+ * Chuỗi không ghi số set ("10", "AMRAP × 10"): số set = số ô đã điền.
+ */
+function resolveSetLoads(setsReps, perSetLoads, fallbackLoad) {
+  const rx = parsePrescription(setsReps);
+  const ok = v => Number.isFinite(v) && v > 0;
+  const raw = Array.isArray(perSetLoads) ? perSetLoads.map(v => (v == null || v === '' ? NaN : Number(v))) : [];
+  let last = -1; raw.forEach((v, i) => { if (ok(v)) last = i; });
+  const n = rx.explicit ? rx.sets : Math.max(rx.sets, last + 1);
+  if (last < 0) {
+    const kg = parseFloat(fallbackLoad);
+    return ok(kg) ? Array(n).fill(kg) : [];
+  }
+  const firstOk = raw.find(ok);
+  const out = [];
+  let prev = firstOk;
+  for (let i = 0; i < n; i++) {
+    if (ok(raw[i])) prev = raw[i];
+    out.push(prev);
+  }
+  return out;
+}
+
+/** Tonnage một bài = Σ tạ set × rep set. 0 cho bài không phải nâng tạ. */
 function exerciseTonnage(setsReps, perSetLoads, fallbackLoad) {
   const rx = parsePrescription(setsReps);
   if (!rx.lifting) return 0;
-  const per = (perSetLoads || []).filter(v => Number.isFinite(v) && v > 0);
-  if (per.length) return per.reduce((t, kg, i) => t + kg * rx.repsAt(i), 0);
-  const kg = parseFloat(fallbackLoad);
-  if (!(Number.isFinite(kg) && kg > 0)) return 0;
-  let t = 0;
-  for (let i = 0; i < rx.sets; i++) t += kg * rx.repsAt(i);
-  return t;
+  return resolveSetLoads(setsReps, perSetLoads, fallbackLoad)
+    .reduce((t, kg, i) => t + kg * rx.repsAt(i), 0);
 }
 
 // Split "4 × 8" → { sets:'4', reps:'8' } for table columns
@@ -3251,13 +3278,36 @@ async function finishWorkout() {
   const _doneN0 = Object.entries(_clientState0).filter(([k,v]) => v && k.startsWith(_dayPrefix0)).length;
   const _durationMs0 = window._workoutStartTime ? Date.now() - window._workoutStartTime : 0;
 
+  // sets/reps để GHI vào dòng lịch sử (cột REP của bảng) — cùng bộ đọc với
+  // tonnage. reps là số như giáo án viết (một bên), null nếu là bài thời
+  // gian/quãng đường: "4 × 250m" không phải 250 rep.
+  function parseSetsReps(str) {
+    const rx = parsePrescription(str);
+    return { sets: rx.sets, reps: rx.lifting ? rx.repsAt(0) / (rx.perSide ? 2 : 1) : null };
+  }
+  /**
+   * A bodyweight row that was ticked but never typed still moved the athlete's
+   * own weight. Without this it is dropped by the load > 0 guard below and
+   * gets no history at all — which is why bodyweight had to be typed into the
+   * kg box by hand in the first place. Ô giữ nguyên VỊ TRÍ (trống = null) —
+   * resolveSetLoads cần biết tạ nào thuộc set nào.
+   */
+  const perSetFor = (ex, exerciseKey) => {
+    const raw = setLoads[exerciseKey] || [];
+    if (raw.some(v => Number.isFinite(v) && v > 0) || !ex.bw || !(_clientBodyweight > 0)) return raw;
+    const ticked = (exerciseState[activeClient.id] || {})[exerciseKey];
+    if (!ticked) return raw;
+    const { sets } = parseSetsReps(ex.setsReps);
+    return Array(Math.max(1, sets)).fill(_clientBodyweight);
+  };
+
   let _totalVolume0 = 0;
   if (_day0) {
     _day0.phases.forEach((phase, pi) => {
       phase.exercises.forEach((ex, ei) => {
         const key = activeClient.id + '_' + activeDay + '_' + pi + '_' + ei;
         if (!_isDone(key)) return;
-        _totalVolume0 += exerciseTonnage(ex.setsReps, setLoads[key], exerciseLoads[key]);
+        _totalVolume0 += exerciseTonnage(ex.setsReps, perSetFor(ex, key), exerciseLoads[key]);
       });
     });
   }
@@ -3287,28 +3337,6 @@ async function finishWorkout() {
       });
     }
 
-    // sets/reps để GHI vào dòng lịch sử (cột REP của bảng) — cùng bộ đọc với
-    // tonnage. reps là số như giáo án viết (một bên), null nếu là bài thời
-    // gian/quãng đường: "4 × 250m" không phải 250 rep.
-    function parseSetsReps(str) {
-      const rx = parsePrescription(str);
-      return { sets: rx.sets, reps: rx.lifting ? rx.repsAt(0) / (rx.perSide ? 2 : 1) : null };
-    }
-    /**
-     * A bodyweight row that was ticked but never typed still moved the athlete's
-     * own weight. Without this it is dropped by the load > 0 guard below and
-     * gets no history at all — which is why bodyweight had to be typed into the
-     * kg box by hand in the first place.
-     */
-    const perSetFor = (ex, exerciseKey) => {
-      const typed = (setLoads[exerciseKey] || []).filter(v => Number.isFinite(v) && v > 0);
-      if (typed.length > 0 || !ex.bw || !(_clientBodyweight > 0)) return typed;
-      const ticked = (exerciseState[activeClient.id] || {})[exerciseKey];
-      if (!ticked) return typed;
-      const { sets } = parseSetsReps(ex.setsReps);
-      return Array(Math.max(1, sets)).fill(_clientBodyweight);
-    };
-
     let totalVolume = 0;
     if (day) {
       day.phases.forEach((phase, pi) => {
@@ -3336,8 +3364,9 @@ async function finishWorkout() {
           // Bài không tập thì không có dòng lịch sử — nếu không, biểu đồ tiến bộ
           // và mức tạ cao nhất bị kéo theo số điền sẵn của buổi trước.
           if (!_isDone(exerciseKey)) return;
-          const perSet = perSetFor(ex, exerciseKey);
-          const loadKg = perSet.length > 0 ? Math.max(...perSet) : parseFloat(exerciseLoads[exerciseKey]);
+          // Tạ từng set đã tập (đủ số set, ô thừa bỏ, ô trống lấy set trước).
+          const perSet = resolveSetLoads(ex.setsReps, perSetFor(ex, exerciseKey), exerciseLoads[exerciseKey]);
+          const loadKg = perSet.length > 0 ? Math.max(...perSet) : NaN;
           if (!Number.isFinite(loadKg) || loadKg <= 0) return;
           const { sets, reps } = parseSetsReps(ex.setsReps);
           const tonnage = Math.round(exerciseTonnage(ex.setsReps, perSet, loadKg));
