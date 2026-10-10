@@ -228,6 +228,52 @@ function parseSetsRepsSplit(setsReps) {
 
 const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun','SessionA','SessionB','SessionC','SessionD','SessionE','SessionF','SessionG'];
 const MUSCLE_WEIGHTS = {P:1.0, S:0.5, T:0.333, Q:0.25};
+
+/**
+ * Volume theo nhóm cơ = SỐ SET (từ 2026-10-10): mỗi bài đã tích góp
+ * số set × trọng số vai trò (chính 1, phụ 0,5…). Phần khởi động không tính —
+ * set khởi động không phải set làm việc. Trước đó mỗi BÀI góp đúng một lần dù
+ * 1 hay 5 set; buổi cũ không có muscleUnit:'sets' nên được quy đổi lúc đọc
+ * (legacyMuscleScale) để khung 7/28 ngày không lệch.
+ */
+function isWarmupPhase(phase) {
+  // "Warm-up" / "Warm up" / tag "warmup" / "Khởi động" — phaseRank chỉ khớp "warmup" liền chữ.
+  const t = ((phase && phase.name) || '') + ' ' + ((phase && phase.tag) || '');
+  return /warm[\s-]*up|khởi\s*động/i.test(t);
+}
+function muscleSetsForDay(day, isDone) {
+  const out = {};
+  ((day && day.phases) || []).forEach((phase, pi) => {
+    if (isWarmupPhase(phase)) return;
+    (phase.exercises || []).forEach((ex, ei) => {
+      if (!isDone(pi, ei) || !ex.muscles || typeof ex.muscles !== 'object') return;
+      const sets = parsePrescription(ex.setsReps).sets;
+      Object.entries(ex.muscles).forEach(([muscle, role]) => {
+        const w = MUSCLE_WEIGHTS[role] || 0;
+        if (w > 0) out[muscle] = Math.round(((out[muscle] || 0) + w * sets) * 100) / 100;
+      });
+    });
+  });
+  return out;
+}
+/** Buổi cũ đếm theo bài → nhân số set trung bình của bài (ngoài khởi động) trong buổi đó của giáo án hiện tại. */
+function legacyMuscleScale(dayKey) {
+  const day = (activeClient && activeClient.program || {})[dayKey];
+  let n = 0, t = 0;
+  ((day && day.phases) || []).forEach(ph => {
+    if (isWarmupPhase(ph)) return;
+    (ph.exercises || []).forEach(ex => { n++; t += parsePrescription(ex.setsReps).sets; });
+  });
+  return n ? t / n : 3;
+}
+/** volumeByMuscle của một buổi, luôn tính bằng set. */
+function sessionMuscleSets(v) {
+  const m = (v && v.volumeByMuscle) || {};
+  if (v && v.muscleUnit === 'sets') return m;
+  const k = legacyMuscleScale(v && v.day), out = {};
+  Object.keys(m).forEach(x => { out[x] = Math.round((Number(m[x]) || 0) * k * 100) / 100; });
+  return out;
+}
 const phaseTagClass = {warmup:'phase-warmup',core:'phase-core',strength:'phase-strength',accessories:'phase-accessories',circuit:'phase-accessories'};
 
 // Phase sort order: match tag OR name (case-insensitive)
@@ -2254,7 +2300,7 @@ async function loadClientDash(force) {
     docs.forEach(d => {
       const v = d.data(), dt = v.date && v.date.toDate ? v.date.toDate() : null;
       sessions.push({ id: d.id, day: v.day || '?', done: v.done ?? null, total: v.total ?? null,
-        volume: v.totalVolume || 0, byMuscle: v.volumeByMuscle || {}, at: dt ? dt.toISOString() : null });
+        volume: v.totalVolume || 0, byMuscle: sessionMuscleSets(v), at: dt ? dt.toISOString() : null });
     });
     const per = await Promise.all(docs.map(async d => ({
       at: (d.data().date && d.data().date.toDate ? d.data().date.toDate() : new Date()).toISOString(),
@@ -2815,7 +2861,7 @@ function cdBodyHTML(c, isCoach) {
     var s0 = R.pick[0];
     side = '<p class="cd-mus-cap">' + (_cdd.scope === 'last'
       ? cdCap(cdRel(s0.t)) + ' · ' + cdEsc(cdDayName(c, s0.day, 0)) + (s0.total ? ' · ' + s0.done + '/' + s0.total + ' bài' : '')
-      : R.pick.length + ' buổi trong ' + _cdd.scope + ' ngày') + ' · đơn vị vol</p>';
+      : R.pick.length + ' buổi trong ' + _cdd.scope + ' ngày') + ' · đơn vị: set</p>';
     var show = _cdd.allMus ? info : info.slice(0, CD_MUS_N), top = info[0].v;
     side += '<ul class="cd-muscle-list">' + show.map(function (i, ix) {
       var none = !i.m.regions.length;
@@ -3321,21 +3367,9 @@ async function finishWorkout() {
     const dayPrefix = _dayPrefix0;
     const doneN = _doneN0;
 
-    // Compute volumeByMuscle from completed exercises that have muscles data
-    const volumeByMuscle = {};
-    if (day) {
-      day.phases.forEach((phase, pi) => {
-        phase.exercises.forEach((ex, ei) => {
-          const key = activeClient.id + '_' + activeDay + '_' + pi + '_' + ei;
-          if (clientState[key] && ex.muscles && typeof ex.muscles === 'object') {
-            Object.entries(ex.muscles).forEach(([muscle, role]) => {
-              const weight = MUSCLE_WEIGHTS[role] || 0;
-              if (weight > 0) volumeByMuscle[muscle] = (volumeByMuscle[muscle] || 0) + weight;
-            });
-          }
-        });
-      });
-    }
+    // Set theo nhóm cơ của các bài đã tích (muscleSetsForDay).
+    const volumeByMuscle = muscleSetsForDay(day,
+      (pi, ei) => _isDone(activeClient.id + '_' + activeDay + '_' + pi + '_' + ei));
 
     let totalVolume = 0;
     if (day) {
@@ -3350,7 +3384,7 @@ async function finishWorkout() {
 
     const sessionRef = await addDoc(collection(db, 'clients', activeClient.id, 'workoutHistory'), {
       date: serverTimestamp(), day: activeDay, done: doneN, total,
-      volumeByMuscle, totalVolume: Math.round(totalVolume)
+      volumeByMuscle, muscleUnit: 'sets', totalVolume: Math.round(totalVolume)
     });
     logActivity('workout', activeDay + ' · ' + doneN + '/' + total + ' bài · '
       + Math.round(totalVolume).toLocaleString('vi-VN') + ' kg');
@@ -10003,7 +10037,7 @@ async function renderCoachDashboard() {
     d.setHours(0,0,0,0);
     weeks.forEach(w => { if (d >= w.start && d < w.end) w.sessions++; });
     if (s.volumeByMuscle) {
-      Object.entries(s.volumeByMuscle).forEach(([m, v]) => {
+      Object.entries(sessionMuscleSets(s)).forEach(([m, v]) => {
         muscleVolMap[m] = (muscleVolMap[m] || 0) + v;
       });
     }
@@ -10046,7 +10080,7 @@ async function renderCoachDashboard() {
           <div class="cd-muscle-row">
             <span class="cd-muscle-rank">#${i+1}</span>
             <span class="cd-muscle-name">${m}</span>
-            <span class="cd-muscle-vol">${v.toFixed(1)} vol</span>
+            <span class="cd-muscle-vol">${v.toFixed(1)} set</span>
           </div>`).join('')}
       </div>
     </div>` : ''}

@@ -119,5 +119,41 @@ ok("bang lich su tung bai tinh lai bang bo doc moi (sua ca dong cu)", () => {
   assert(/const vol = exerciseTonnage\(ex\?\.setsReps, sl, h\.kg\);/.test(g));
 });
 
+// Volume theo nhóm cơ = số set (2026-10-10)
+{
+  const a = s.indexOf("const MUSCLE_WEIGHTS"), b = s.indexOf("const phaseTagClass", a);
+  const M = new Function("parsePrescription", "let activeClient = null;\n" + s.slice(a, b)
+    + "; return { muscleSetsForDay, sessionMuscleSets, isWarmupPhase, setClient: c => { activeClient = c; } };")(P);
+  const day = { phases: [
+    { name: "Warm-up", tag: "Warm-up", exercises: [{ setsReps: "2 × 10", muscles: { Glutes: "P" } }] },
+    { name: "💪 Strength", tag: "strength", exercises: [
+      { setsReps: "5 × 5", muscles: { Quads: "P", Glutes: "S" } },
+      { setsReps: "3 × 10/bên", muscles: { Glutes: "P" } },
+      { setsReps: "3 × 12", muscles: { Biceps: "P" } } ] } ] };
+  ok("nhom co tinh theo SO SET × trong so, bo khoi dong va bai chua tich", () => {
+    const r = M.muscleSetsForDay(day, (pi, ei) => !(pi === 1 && ei === 2));
+    assert.deepStrictEqual(r, { Quads: 5, Glutes: 2.5 + 3 });
+  });
+  ok("nhan ra khoi dong: Warm-up / Warm up / warmup / Khởi động", () => {
+    for (const n of ["Warm-up", "🔥 Warm up", "x|warmup", "Khởi động"]) {
+      const [name, tag] = n.split("|"); assert(M.isWarmupPhase({ name, tag }), n);
+    }
+    assert(!M.isWarmupPhase({ name: "💪 Strength", tag: "strength" }));
+  });
+  ok("buoi cu (dem theo bai) quy doi sang set; buoi moi giu nguyen", () => {
+    M.setClient({ program: { SessionA: day } });     // trung bình (5+3+3)/3 set mỗi bài
+    assert.deepStrictEqual(M.sessionMuscleSets({ day: "SessionA", volumeByMuscle: { Quads: 3 } }), { Quads: 11 });
+    assert.deepStrictEqual(M.sessionMuscleSets({ day: "SessionA", muscleUnit: "sets", volumeByMuscle: { Quads: 5 } }), { Quads: 5 });
+  });
+  ok("finishWorkout ghi muscleUnit:'sets' va dung muscleSetsForDay", () => {
+    assert(/volumeByMuscle, muscleUnit: 'sets'/.test(fw));
+    assert(/const volumeByMuscle = muscleSetsForDay\(day,/.test(fw));
+  });
+  ok("moi cho doc volumeByMuscle de cong deu qua sessionMuscleSets", () => {
+    assert(/byMuscle: sessionMuscleSets\(v\)/.test(s));
+    assert(/Object\.entries\(sessionMuscleSets\(s\)\)/.test(s));
+  });
+}
+
 console.log(fails ? "\n" + fails + " HONG" : "\nTAT CA DAT");
 process.exit(fails ? 1 : 0);
