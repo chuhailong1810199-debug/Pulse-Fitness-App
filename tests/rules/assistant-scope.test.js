@@ -60,6 +60,48 @@ const ok = (n, f) => cases.push([n, f]);
     assert(r.rejected && /chỉ quan sát/.test(r.errors[0]), JSON.stringify(r));
   });
 
+  // ── Soạn giáo án: đọc hồ sơ trước + bài phải có trong thư viện (2026-10-12) ──
+  await db.doc("exercises/1").set({ name: "Goblet Squat (Dumbbell)", tool: "Dumbbell", muscles: { QUADS: "P", GLUTES: "S" } });
+  await db.doc("exercises/2").set({ name: "Goblet Squat (Kettlebell)", tool: "Kettlebell", muscles: { QUADS: "P", GLUTES: "S" } });
+  await db.doc("exercises/3").set({ name: "Lat Pulldown", tool: "Cable", muscles: { LATS: "P", BICEPS: "S" } });
+  const newProg = (name) => ({ SessionA: { label: "A", phases: [
+    { name: "Warm-up", tag: "Warm-up", exercises: [{ name: "Cat-cow", setsReps: "1 × 10" }] },
+    { name: "Main", tag: "main", exercises: [{ name, setsReps: "3 × 8" }] }] } });
+  ok("propose_program trong luot tro ly: CHUA doc get_client/get_exercise_loads -> tu choi", async () => {
+    const r = await A.runTool("propose_program", { clientId: "cindy", program: newProg("Lat pull down") }, RA, { read: {} });
+    assert(r.rejected && /get_client và get_exercise_loads/.test(r.errors[0]), JSON.stringify(r));
+  });
+  const READ = { read: { "get_client:cindy": true, "get_exercise_loads:cindy": true } };
+  ok("da doc ho so: bai khop thu vien -> doi ten dung, gan muscles, chuan hoa tag", async () => {
+    const r = await A.runTool("propose_program", { clientId: "cindy", program: newProg("Lat pull down") }, RA, READ);
+    assert(r.needsConfirm, JSON.stringify(r));
+    const ph = r.action.program.SessionA.phases;
+    assert.deepStrictEqual(ph.map((p) => p.tag), ["warmup", "strength"]);
+    assert.strictEqual(ph[1].exercises[0].name, "Lat Pulldown");
+    assert.deepStrictEqual(ph[1].exercises[0].muscles, { LATS: "P", BICEPS: "S" });
+    assert.deepStrictEqual(r.preview.renamed, [["Lat pull down", "Lat Pulldown"]]);
+    assert.strictEqual(ph[0].exercises[0].name, "Cat-cow", "warmup duoc dung bai ngoai thu vien");
+  });
+  ok("bai mo ho (Goblet Squat: Dumbbell/Kettlebell) -> tu choi, liet ke lua chon", async () => {
+    const r = await A.runTool("propose_program", { clientId: "cindy", program: newProg("Goblet Squat") }, RA, READ);
+    assert(r.rejected && /Goblet Squat \(Dumbbell\)/.test(r.errors[0]), JSON.stringify(r));
+  });
+  ok("bai la -> tu choi kem goi y", async () => {
+    const r = await A.runTool("propose_program", { clientId: "cindy", program: newProg("Pulldown thần thánh") }, RA, READ);
+    assert(r.rejected && /không có trong thư viện/.test(r.errors[0]), JSON.stringify(r));
+  });
+  ok("bai DANG CO trong giao an cu giu nguyen ten (lich su ta noi theo ten)", async () => {
+    // giao an cu cua cindy co "Squat" — khong co trong thu vien nhung la bai cu
+    const r = await A.runTool("propose_program", { clientId: "cindy", program: newProg("Squat") }, RA, READ);
+    assert(r.needsConfirm && r.action.program.SessionA.phases[1].exercises[0].name === "Squat", JSON.stringify(r));
+  });
+  ok("propose_new_client: giao an kem theo cung bi kiem thu vien", async () => {
+    const r = await A.runTool("propose_new_client", { name: "Khach Thu", program: newProg("Pulldown thần thánh") }, RA);
+    assert(r.rejected, JSON.stringify(r));
+    const r2 = await A.runTool("propose_new_client", { name: "Khach Thu", program: newProg("Lat Pulldown (Cable)") }, RA);
+    assert(r2.needsConfirm && r2.action.program.SessionA.phases[1].exercises[0].name === "Lat Pulldown", JSON.stringify(r2));
+  });
+
   ok("khong co role -> tu choi, khong doc Firestore", async () => {
     const r = await A.runTool("list_clients", {}, undefined);
     assert(r.error && !r.clients);

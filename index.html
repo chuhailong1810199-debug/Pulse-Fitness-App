@@ -236,11 +236,24 @@ const MUSCLE_WEIGHTS = {P:1.0, S:0.5, T:0.333, Q:0.25};
  * 1 hay 5 set; buổi cũ không có muscleUnit:'sets' nên được quy đổi lúc đọc
  * (legacyMuscleScale) để khung 7/28 ngày không lệch.
  */
-function isWarmupPhase(phase) {
-  // "Warm-up" / "Warm up" / tag "warmup" / "Khởi động" — phaseRank chỉ khớp "warmup" liền chữ.
-  const t = ((phase && phase.name) || '') + ' ' + ((phase && phase.tag) || '');
-  return /warm[\s-]*up|khởi\s*động/i.test(t);
+/**
+ * Tag pha về đúng 4 giá trị: warmup | strength | accessories | circuit.
+ * BẢN SAO của normalizePhaseTag() trong functions/program-lib.js — test
+ * (tests/phase-tag.test.js) chạy cả hai trên cùng bộ tên và đòi kết quả giống nhau.
+ * Tag hợp lệ thì giữ; không thì đoán theo tên + tag cũ ("main", "Warm-up",
+ * "isolation", "core"…). Không đoán được → accessories.
+ */
+const PHASE_TAGS = ['warmup', 'strength', 'accessories', 'circuit'];
+function normPhaseTag(phase) {
+  const tag = String((phase && phase.tag) || '').toLowerCase().trim();
+  if (PHASE_TAGS.includes(tag)) return tag;
+  const t = (String((phase && phase.name) || '') + ' ' + tag).toLowerCase();
+  if (/warm[\s-]*up|khởi\s*động|activation|kích\s*hoạt|\bprep\b|rehab/.test(t)) return 'warmup';
+  if (/circuit|conditioning|finisher|\bwod\b|amrap|emom|interval|cardio|hyrox|metcon|liss|steady|engine/.test(t)) return 'circuit';
+  if (/strength|\bmain\b|heavy|power|plyo|hypertroph|sức\s*mạnh|bài\s*chính|block\s*1\b/.test(t)) return 'strength';
+  return 'accessories';
 }
+function isWarmupPhase(phase) { return normPhaseTag(phase) === 'warmup'; }
 function muscleSetsForDay(day, isDone) {
   const out = {};
   ((day && day.phases) || []).forEach((phase, pi) => {
@@ -276,20 +289,10 @@ function sessionMuscleSets(v) {
 }
 const phaseTagClass = {warmup:'phase-warmup',core:'phase-core',strength:'phase-strength',accessories:'phase-accessories',circuit:'phase-accessories'};
 
-// Phase sort order: match tag OR name (case-insensitive)
-const PHASE_ORDER = ['warmup','strength','accessories','circuit'];
-function phaseRank(phase) {
-  const tag  = (phase.tag  || '').toLowerCase();
-  const name = (phase.name || '').toLowerCase();
-  // Name takes priority over tag (user can rename; tag may be stale)
-  for (let i = 0; i < PHASE_ORDER.length; i++) {
-    if (name.includes(PHASE_ORDER[i])) return i;
-  }
-  for (let i = 0; i < PHASE_ORDER.length; i++) {
-    if (tag.includes(PHASE_ORDER[i])) return i;
-  }
-  return PHASE_ORDER.length;
-}
+// Thứ tự pha: warmup → strength → accessories → circuit, theo tag đã chuẩn hoá.
+// (Bản cũ dò chữ "warmup" trong tên — "Warm-up" có gạch nối rơi xuống cuối.)
+const PHASE_ORDER = PHASE_TAGS;
+function phaseRank(phase) { return PHASE_ORDER.indexOf(normPhaseTag(phase || {})); }
 function sortPhases(phases) {
   return [...phases].sort((a, b) => phaseRank(a) - phaseRank(b));
 }
@@ -1612,7 +1615,7 @@ function renderAIProgramPreview(program, clientName) {
   const preview = document.getElementById('ai-review-preview');
   loading.style.display = 'none';
 
-  const phaseColors = { warmup:'#8FDBFF', strength:'#8FDBFF', accessories:'#44cc88' };
+  const phaseColors = { warmup:'#8FDBFF', strength:'#8FDBFF', accessories:'#44cc88', circuit:'#44cc88' };
   const days = Object.keys(program);
   const totalEx = days.reduce((s, d) => s + (program[d].phases || []).reduce((ps, ph) => ps + (ph.exercises || []).length, 0), 0);
 
@@ -1629,7 +1632,7 @@ function renderAIProgramPreview(program, clientName) {
         <span style="color:rgba(255,255,255,0.55);font-weight:400;font-size:10px;">${(session.label || '').replace(/^SESSION\s+[A-Za-z0-9]+\s*[—\-–]\s*/i,'').trim()}</span>
       </div>`;
     for (const phase of (session.phases || [])) {
-      const col = phaseColors[phase.tag] || '#aaa';
+      const col = phaseColors[normPhaseTag(phase)] || '#aaa';
       html += `<div style="margin-bottom:8px;padding-left:10px;border-left:2px solid ${col}50;">
         <div style="font-size:9px;font-weight:700;color:${col};margin-bottom:5px;text-transform:uppercase;letter-spacing:.6px;">${phase.name}</div>`;
       for (const ex of (phase.exercises || [])) {
@@ -4736,7 +4739,7 @@ function renderExercises() {
         <button class="btn-rename-phase" onclick="startRenamePhase(${pi})">✏ Rename</button>
         <button class="btn-delete-phase" onclick="deletePhase(${pi})">Delete</button>
       </div>
-      <span class="phase-tag ${phaseTagClass[phase.tag]||'phase-warmup'}" id="phase-label-${pi}">${phase.name}</span>
+      <span class="phase-tag ${phaseTagClass[normPhaseTag(phase)]}" id="phase-label-${pi}">${phase.name}</span>
       <div class="phase-rename-row" id="phase-rename-${pi}">
         <input class="phase-rename-input" id="phase-rename-input-${pi}" value="${phase.name.replace(/"/g,'&quot;')}"
           onkeydown="if(event.key==='Enter')saveRenamePhase(${pi});if(event.key==='Escape')cancelRenamePhase(${pi})">
@@ -4745,12 +4748,12 @@ function renderExercises() {
       </div></div>`;
     } else {
       const exCount = phase.exercises?.length || 0;
-      html += `<span class="phase-tag ${phaseTagClass[phase.tag]||'phase-warmup'}">${phase.name}</span><span class="phase-count">${exCount} exercise${exCount!==1?'s':''}</span></div>`;
+      html += `<span class="phase-tag ${phaseTagClass[normPhaseTag(phase)]}">${phase.name}</span><span class="phase-count">${exCount} exercise${exCount!==1?'s':''}</span></div>`;
     }
     // trainer-note-card removed (user request)
     if (!editMode) {
       // (unreachable in edit mode — kept for safety)
-      html += `<div class="exercise-flow phase-flow-${phase.tag||'warmup'}">`;
+      html += `<div class="exercise-flow phase-flow-${normPhaseTag(phase)}">`;
       phase.exercises.forEach((ex, ei) => {
         const key  = activeClient.id+'_'+activeDay+'_'+pi+'_'+ei;
         const done = !!(exerciseState[activeClient.id] && exerciseState[activeClient.id][key]);
@@ -4769,7 +4772,7 @@ function renderExercises() {
             <div class="node-check${done?' done':''}" onclick="event.stopPropagation();toggleExercise('${key}')">${done?'✓':''}</div>
           </div>
           <div class="node-setloads">
-            ${Array.from({length: parseSetsCount(ex.setsReps, phase.tag)}, (_,si) => `
+            ${Array.from({length: parseSetsCount(ex.setsReps, normPhaseTag(phase))}, (_,si) => `
               <label class="set-load-row">
                 <span class="set-load-label">S${si+1}</span>
                 <input class="set-load-input${ex.bw?' set-load-bw':''}" type="number" ${ex.bw?'':'min="0" '}step="0.5" placeholder="${ex.bw?'+0':'—'}"
@@ -4864,8 +4867,8 @@ function renderExercises() {
           <div class="form-group"><label class="form-label">Phase Name</label><input class="form-input" id="new-phase-name" placeholder="05 — Conditioning"></div>
           <div class="form-group"><label class="form-label">Tag</label>
           <select class="form-select" id="new-phase-tag">
-            <option value="warmup">Warmup</option><option value="core">Core</option>
-            <option value="strength">Strength</option><option value="accessories">Accessories</option>
+            <option value="warmup">Warmup</option><option value="strength">Strength</option>
+            <option value="accessories">Accessories / Core</option><option value="circuit">Circuit / Conditioning</option>
           </select></div>
           <div class="form-group full"><label class="form-label">Note</label><input class="form-input" id="new-phase-note" placeholder="15 min · Rest 60s"></div>
         </div>
@@ -8461,7 +8464,7 @@ async function submitPulseFreeForm() {
 
 function renderFreeProgramPreview(program) {
   const preview = document.getElementById('pfm-program-preview');
-  const phaseColors = { warmup:'#8FDBFF', strength:'#8FDBFF', accessories:'#44cc88' };
+  const phaseColors = { warmup:'#8FDBFF', strength:'#8FDBFF', accessories:'#44cc88', circuit:'#44cc88' };
   const days = Object.keys(program);
   const totalEx = days.reduce((s, d) => s + (program[d].phases || []).reduce((ps, ph) => ps + (ph.exercises || []).length, 0), 0);
 
@@ -8478,7 +8481,7 @@ function renderFreeProgramPreview(program) {
         <span style="color:rgba(255,255,255,0.55);font-weight:400;font-size:10px;">${(session.label || '').replace(/^SESSION\s+[A-Za-z0-9]+\s*[—\-–]\s*/i,'').trim()}</span>
       </div>`;
     for (const phase of (session.phases || [])) {
-      const col = phaseColors[phase.tag] || '#aaa';
+      const col = phaseColors[normPhaseTag(phase)] || '#aaa';
       html += `<div style="margin-bottom:8px;padding-left:10px;border-left:2px solid ${col}50;">
         <div style="font-size:9px;font-weight:700;color:${col};margin-bottom:5px;text-transform:uppercase;letter-spacing:.6px;">${phase.name}</div>`;
       for (const ex of (phase.exercises || [])) {
@@ -9544,8 +9547,9 @@ function aiBuildProgramPrompt(d) {
 
   const rules = [
     'Soạn giáo án ' + spw + ' buổi/tuần cho khách mới này. Khoá buổi: ' + keys + '.',
-    'Mỗi buổi chia phase (Warmup → bài chính → phụ trợ/Core), vừa thời lượng ' + (v('dur') || '60 phút') + '.',
-    'Mỗi bài có setsReps, tempo, cue (kỹ thuật + nghỉ bao lâu). Chỉ dùng bài CÓ trong thư viện — không chắc thì search_exercises.',
+    'Theo đúng khung phương pháp của studio (volume theo trình độ, rep theo mục tiêu, chia buổi, tăng tạ, deload).',
+    'Mỗi buổi chia pha theo tag warmup → strength → accessories → circuit (nếu cần), vừa thời lượng ' + (v('dur') || '60 phút') + '.',
+    'Mỗi bài có setsReps, tempo, cue (kỹ thuật + nghỉ bao lâu). Tên bài pha strength/accessories ĐÚNG Y tên search_exercises trả về.',
     'Chọn bài theo đúng dụng cụ ở nơi tập, và tránh/thay bài động vào chỗ chấn thương nếu có.',
     'In bảng giáo án từng buổi cho tao xem, kèm 2–3 câu giải thích vì sao chia như vậy.',
     'Rồi gọi propose_new_client MỘT lần, kèm luôn giáo án vừa soạn' + (email ? ' và Gmail ' + email : '') + ', để tao duyệt.',
@@ -12564,6 +12568,7 @@ h1 span{color:#8FDBFF;}
 .phase-flow-strength .exercise-node{border-left:2px solid rgba(63,63,61,0.65);}
 .phase-flow-accessories .exercise-node{border-left:2px solid rgba(100,200,220,0.45);}
 .phase-flow-core .exercise-node{border-left:2px solid rgba(143,219,255,0.55);}
+.phase-flow-circuit .exercise-node{border-left:2px solid rgba(100,200,220,0.45);}
 .phase-note{font-size:11px;color:rgba(255,255,255,0.55);flex:1;}
 /* ── Trainer Note card ── */
 .trainer-note-card{display:flex;gap:10px;align-items:flex-start;background:oklch(18.4% 0.008 17.9/0.18);border:1px solid oklch(85.5% 0.090 229.5/0.25);border-radius:10px;padding:12px 14px;margin-top:8px;margin-bottom:4px;}

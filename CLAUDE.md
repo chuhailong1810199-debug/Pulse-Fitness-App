@@ -244,3 +244,21 @@ Key routing rules:
 - Architecture review → invoke plan-eng-review
 - Save progress, checkpoint, resume → invoke checkpoint
 - Code quality, health check → invoke health
+
+---
+
+## Trợ lý soạn giáo án — luật cứng (2026-10-12)
+
+- **Khung phương pháp** nằm ở hằng số `METHOD` trong `functions/assistant.js` (volume/tuần theo trình độ,
+  rep theo mục tiêu, chia buổi, thứ tự bài, tăng tạ, deload). Là khung MẶC ĐỊNH — sửa thẳng ở đó khi
+  studio có quy tắc riêng.
+- **Bài phải có trong thư viện**: `propose_program` / `propose_new_client` chạy `resolveProgram()`
+  (`functions/program-lib.js`) — tự đổi tên về đúng thư viện, gắn `muscles`, chuẩn hoá tag. Pha
+  strength/accessories: bài lạ hoặc mơ hồ dụng cụ bị trả lỗi kèm gợi ý. Bài ĐANG CÓ trong giáo án cũ
+  giữ nguyên tên (lịch sử tạ nối theo tên bài).
+- **Tag pha chỉ có 4**: `warmup | strength | accessories | circuit`. App dùng `normPhaseTag()` — bản sao
+  của `normalizePhaseTag()` ở server; `tests/program-lib.test.js` bắt hai bản phải ra cùng kết quả.
+- **Đọc hồ sơ trước khi đề xuất**: trong một lượt trợ lý, `propose_program` bị từ chối nếu chưa gọi
+  `get_client` + `get_exercise_loads` của khách đó.
+- Giáo án cũ: `node scripts/backfill-program-library.js` (chạy thử) / `--write` — chuẩn hoá tag + gắn
+  muscles, KHÔNG đổi tên, KHÔNG bật `bw`, sao lưu vào `profile/program-backup-<ngày>-library`.

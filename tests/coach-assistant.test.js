@@ -174,6 +174,34 @@ ok("muc suy luan duoc dat, khong de mac dinh (Gemini 3 nghi rat dai)", async () 
   }
 });
 
+ok("soan giao an: nghi muc DESIGN (medium) tu luot hai; hoi thuong van low", async () => {
+  assert.strictEqual(A.THINK_DESIGN, "medium");
+  const c = fakeClient([{ calls: [{ name: "list_clients" }] }, { text: "xong" }]);
+  await A.runAssistant({ client: c, model: "m", messages: [{ role: "user", text: "Soạn giáo án 3 buổi cho Kem" }] });
+  assert.strictEqual(c.seen[0].generation_config.thinking_level, A.THINK_DISPATCH);
+  assert.strictEqual(c.seen[1].generation_config.thinking_level, "medium");
+  const c2 = fakeClient([{ calls: [{ name: "list_clients" }] }, { text: "xong" }]);
+  await A.runAssistant({ client: c2, model: "m", messages: [{ role: "user", text: "Cindy tuần này tập mấy buổi?" }] });
+  assert.strictEqual(c2.seen[1].generation_config.thinking_level, A.THINK_COMPOSE);
+  // model tự đi tra thư viện = đang soạn, dù câu hỏi không nói "giáo án"
+  const c3 = fakeClient([{ calls: [{ name: "search_exercises", args: { query: "row" } }] }, { text: "xong" }]);
+  await A.runAssistant({ client: c3, model: "m", messages: [{ role: "user", text: "đổi giúp bài kéo" }] });
+  assert.strictEqual(c3.seen[1].generation_config.thinking_level, "medium");
+});
+ok("khung phuong phap nam trong chi dan: du 6 muc + tag + doc ho so truoc", () => {
+  for (const k of ["1. VOLUME", "2. REP THEO MỤC TIÊU", "3. CHIA BUỔI", "4. THỨ TỰ BÀI", "5. TĂNG TẠ", "6. DELOAD"]) {
+    assert(A.METHOD.includes(k), "thieu muc: " + k);
+  }
+  assert(A.SYSTEM.includes(A.METHOD), "METHOD phai nam trong SYSTEM");
+  assert(/warmup \| strength \| accessories \| circuit/.test(A.SYSTEM));
+  assert(/get_client, get_exercise_loads và\s+get_program/.test(A.SYSTEM));
+});
+ok("propose_program khai bao: bat buoc doc ho so truoc, ten dung thu vien", () => {
+  const t = A.TOOLS.find((x) => x.name === "propose_program");
+  assert(/get_client, get_exercise_loads và get_program/.test(t.description));
+  assert(/ĐÚNG Y/.test(t.parameters.properties.program.description));
+});
+
 ok("thu vien bai tap co cache, khong doc 360 bai moi lan", () => {
   const src = fs.readFileSync(path.join(__dirname, "..", "functions", "assistant.js"), "utf8");
   assert(/function exerciseLibrary/.test(src), "thieu ham cache thu vien");
