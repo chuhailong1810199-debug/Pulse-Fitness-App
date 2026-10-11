@@ -729,7 +729,9 @@ function migrateLocalStorageDayKeys(clientId) {
 }
 
 async function loadApp() {
-  await loadPlatformInfo();
+  // settings/platform chạy SONG SONG với lần đọc khách — trước đây nó chặn
+  // trước mọi thứ, tốn trọn một lượt mạng (~150-300ms) mỗi lần mở app.
+  const _platformP = loadPlatformInfo();
   // Show role badge
   const badge = document.getElementById('role-badge');
   if (badge) {
@@ -738,7 +740,7 @@ async function loadApp() {
   }
 
   if (userRole === 'coach') {
-    await loadAllClients();
+    await Promise.all([loadAllClients(), _platformP]);
     renderClientBar(true);
     const schTab = document.getElementById('schedule-nav-tab');
     if (schTab) schTab.style.display = '';
@@ -807,7 +809,7 @@ async function loadApp() {
         return;
       }
     }
-    let snap = await getDoc(doc(db, 'clients', userClientId));
+    let [snap] = await Promise.all([getDoc(doc(db, 'clients', userClientId)), _platformP]);
     if (!snap.exists) {
       // clientId in the users doc is stale — re-resolve via the email index first
       console.log('[loadApp] client doc missing for', userClientId, '— re-resolving...');
@@ -862,7 +864,6 @@ async function loadApp() {
       return;
     }
 
-    await checkAndShowBaseline();
   }
 
   // ── One-time: migrate old Mon/Wed/Fri localStorage keys → SessionA/B/C ──
@@ -881,10 +882,12 @@ async function loadApp() {
   updateDateDisplay();
   renderDayTabs();
   // ── Parallel fetch: loads + strength history run simultaneously ──
+  // Baseline (khách) chỉ bật một màn phủ — chạy cùng lượt, không chặn trước.
   await Promise.all([
     hydrateExerciseLoadsForActiveDay(),
     loadStrengthHistory(),
-    loadClientBodyweight()
+    loadClientBodyweight(),
+    userRole === 'client' ? checkAndShowBaseline() : null
   ]);
   renderExercises();
   initDaySwipe();
@@ -3653,6 +3656,7 @@ async function uploadVideo(vKey, slot, input) {
       vidData[slot + 'Url'] = url;
       vidData[slot + 'Bytes'] = file.size || 0;
       await setDoc(vidDocRef, vidData);
+      _invalidateVideoDocs();
       bumpStorageUsage(file.size || 0, 'video', 1);
       renderExercises();
     }
@@ -3672,6 +3676,7 @@ async function deleteVideo(vKey, slot) {
     delete d[slot + 'Url'];
     await setDoc(vidDocRef, d);
   }
+  _invalidateVideoDocs();   // không thì bản đọc cũ ghi lại URL vừa xoá vào localStorage
   renderExercises();
 }
 
@@ -3717,40 +3722,68 @@ function updateVideoSlotDOM(vKey, slot, url) {
   </div>`;
 }
 
+/**
+ * Video của khách: MỘT lần đọc cả collection videos cho mỗi khách mỗi phiên.
+ * Bản cũ đọc từng bài một, nối đuôi nhau, cộng 2 lần hỏi Storage (404) cho
+ * mỗi bài chưa có video — và chạy lại sau MỖI lần renderExercises (mỗi lần
+ * tích bài). Đo 2026-10-11: ~30 lượt mạng nối đuôi, ~5 giây mỗi lần mở app.
+ * Tải lên / xoá video phải gọi _invalidateVideoDocs().
+ */
+let _videoDocsCache = null;            // { clientId, p: Promise<{vKey: data}> }
+function _invalidateVideoDocs() { _videoDocsCache = null; }
+function _videoDocs() {
+  const id = activeClient.id;
+  if (!_videoDocsCache || _videoDocsCache.clientId !== id) {
+    const p = getDocs(collection(db, 'clients', id, 'videos'))
+      .then(s => { const m = {}; s.forEach(d => { m[d.id] = d.data() || {}; }); return m; })
+      .catch(() => { _videoDocsCache = null; return {}; });
+    _videoDocsCache = { clientId: id, p };
+  }
+  return _videoDocsCache.p;
+}
+// Storage chỉ còn cho video tải lên trước khi có doc Firestore: hỏi tối đa
+// mỗi tuần một lần cho mỗi ô, không phải mỗi lần mở app.
+const _VIDEO_PROBE_MS = 7 * 864e5;
+function _videoProbeDue(vKey, slot) {
+  try { return Date.now() - (+localStorage.getItem('vprobe_' + slot + '_' + vKey) || 0) > _VIDEO_PROBE_MS; }
+  catch (_e) { return true; }
+}
+function _videoProbed(vKey, slot) {
+  try { localStorage.setItem('vprobe_' + slot + '_' + vKey, String(Date.now())); } catch (_e) {}
+}
+
 async function refreshVideoSlotsFromFirestore(vKeys) {
-  for (const vKey of vKeys) {
+  if (!activeClient) return;
+  const need = vKeys.filter(k => !(getVideoUrl(k, 'coach') && getVideoUrl(k, 'client')));
+  if (!need.length) return;
+  const clientId = activeClient.id;
+  const docs = await _videoDocs();
+  if (!activeClient || activeClient.id !== clientId) return;   // đã đổi khách
+  await Promise.all(need.map(async vKey => {
     const coachCached  = getVideoUrl(vKey, 'coach');
     const clientCached = getVideoUrl(vKey, 'client');
-    if (coachCached && clientCached) continue; // both already in localStorage
+    const d = docs[vKey] || {};
+    let coachUrl  = coachCached  || d.coachUrl  || null;
+    let clientUrl = clientCached || d.clientUrl || null;
 
-    let coachUrl = coachCached, clientUrl = clientCached;
-
-    // 1. Try Firestore
-    try {
-      const snap = await getDoc(doc(db, 'clients', activeClient.id, 'videos', vKey));
-      if (snap.exists) {
-        const d = snap.data();
-        if (d.coachUrl  && !coachUrl)  coachUrl  = d.coachUrl;
-        if (d.clientUrl && !clientUrl) clientUrl = d.clientUrl;
-      }
-    } catch(e) { /* ignore */ }
-
-    // 2. Fallback: try Firebase Storage directly (for videos not yet in Firestore)
-    if (!coachUrl) {
-      try { coachUrl  = await getDownloadURL(ref(storage, getVideoRefPath(vKey, 'coach')));  } catch(e) {}
+    // Fallback: Storage trực tiếp (video cũ chưa có doc Firestore) — tối đa tuần một lần.
+    if (!coachUrl && _videoProbeDue(vKey, 'coach')) {
+      try { coachUrl = await getDownloadURL(ref(storage, getVideoRefPath(vKey, 'coach'))); } catch(e) {}
+      _videoProbed(vKey, 'coach');
     }
-    if (!clientUrl) {
+    if (!clientUrl && _videoProbeDue(vKey, 'client')) {
       try { clientUrl = await getDownloadURL(ref(storage, getVideoRefPath(vKey, 'client'))); } catch(e) {}
+      _videoProbed(vKey, 'client');
     }
-    // If found via Storage, save to Firestore so future loads skip Storage check
-    if ((coachUrl && !coachCached) || (clientUrl && !clientCached)) {
+    // Chỉ ghi Firestore khi URL đến từ Storage (doc chưa có).
+    const fromStorage = (coachUrl && !coachCached && !d.coachUrl) || (clientUrl && !clientCached && !d.clientUrl);
+    if (fromStorage) {
       try {
-        const vidDocRef = doc(db, 'clients', activeClient.id, 'videos', vKey);
-        const existing  = await getDoc(vidDocRef);
-        const vidData   = existing.exists ? existing.data() : {};
-        if (coachUrl  && !coachCached)  vidData.coachUrl  = coachUrl;
-        if (clientUrl && !clientCached) vidData.clientUrl = clientUrl;
-        await setDoc(vidDocRef, vidData);
+        const vidData = { ...d };
+        if (coachUrl)  vidData.coachUrl  = coachUrl;
+        if (clientUrl) vidData.clientUrl = clientUrl;
+        await setDoc(doc(db, 'clients', clientId, 'videos', vKey), vidData);
+        docs[vKey] = vidData;
       } catch(e) {}
     }
 
@@ -3763,7 +3796,7 @@ async function refreshVideoSlotsFromFirestore(vKeys) {
       localStorage.setItem(getVideoUrlKey(vKey, 'client'), clientUrl);
       updateVideoSlotDOM(vKey, 'client', clientUrl);
     }
-  }
+  }));
 }
 
 // ── BASELINE UI ────────────────────────────────────────
@@ -4164,6 +4197,15 @@ async function hydrateExerciseLoadsForActiveDay() {
     } catch (_e) {}
   }
 
+  // Lịch sử buổi trước (dùng ở cuối hàm) được hỏi NGAY, song song với
+  // sessionLoads — trước đây chờ xong cái này mới hỏi cái kia, nhánh dài nhất
+  // lúc mở app tốn thêm một lượt mạng.
+  const _histP = getDocs(query(
+    collection(db, 'clients', activeClient.id, 'workoutHistory'),
+    orderBy('date', 'desc'),
+    limit(20)
+  )).catch(() => null);
+
   // ── Check sessionLoads (real-time kg backup, updated on every input) ──
   try {
     const slSnap = await getDoc(doc(db, 'clients', activeClient.id, 'sessionLoads', activeDay));
@@ -4202,11 +4244,8 @@ async function hydrateExerciseLoadsForActiveDay() {
   // ── Fallback: last completed workout from workoutHistory ──
   // Also checks if today's session was already logged → locks the finish button.
   try {
-    const histSnap = await getDocs(query(
-      collection(db, 'clients', activeClient.id, 'workoutHistory'),
-      orderBy('date', 'desc'),
-      limit(20)
-    ));
+    const histSnap = await _histP;
+    if (!histSnap) return;
     const todayMidnight = new Date(); todayMidnight.setHours(0,0,0,0);
     const latestDaySession = histSnap.docs.find(d => d.data().day === activeDay);
     if (!latestDaySession) return; // no history yet — fine, _loadsHydrated already true
