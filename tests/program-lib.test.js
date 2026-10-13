@@ -98,3 +98,20 @@ test('o chon tag khi them pha chi con 4 gia tri chuan', () => {
   const sel = s.slice(s.indexOf('id="new-phase-tag"'), s.indexOf('</select>', s.indexOf('id="new-phase-tag"')));
   assert.deepStrictEqual([...sel.matchAll(/value="(\w+)"/g)].map((x) => x[1]), L.PHASE_TAGS);
 });
+
+test('bai cu (keepNames) KHONG tu bat bw — so kg cu se doi nghia (Sang: 35 thanh -37)', () => {
+  const lib = L.buildLibIndex([{ name: 'Pull Up (Band)', tool: 'Bodyweight', muscles: { LAT: 'P' } },
+    { name: 'Normal Push up (Bodyweight)', tool: 'Bodyweight', muscles: { CHEST: 'P' } }]);
+  const p = { SessionA: { phases: [{ name: 'Main', tag: 'strength', exercises: [
+    { name: 'Pull Up (Band)', setsReps: '3 × 8' }, { name: 'Normal Push up (Bodyweight)', setsReps: '3 × 10' }] }] } };
+  const ex = L.resolveProgram(p, lib, { keepNames: new Set(['Pull Up (Band)']) }).program.SessionA.phases[0].exercises;
+  assert.strictEqual(ex[0].bw, undefined, 'bai cu khong duoc bat bw');
+  assert.strictEqual(ex[1].bw, true, 'bai moi bodyweight thi bat');
+});
+
+test('coachApply thay HAN giao an (update), khong set-merge tron buoi cu', () => {
+  const s = fs.readFileSync(path.join(__dirname, '..', 'functions', 'index.js'), 'utf8');
+  const f = s.slice(s.indexOf('exports.coachApply'), s.indexOf('exports.', s.indexOf('exports.coachApply') + 10));
+  assert.ok(/await ref\.update\(\{ program: act\.program \}\)/.test(f));
+  assert.ok(!/set\(\{ program: act\.program \}, \{ merge: true \}\)/.test(f));
+});

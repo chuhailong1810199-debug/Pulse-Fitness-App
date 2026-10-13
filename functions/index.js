@@ -3411,7 +3411,9 @@ exports.coachApply = onCall(
           program: old, replacedAt: new Date().toISOString(), by: email,
         }).catch((e) => console.warn("[coachApply] không lưu được bản cũ:", e.message));
       }
-      await ref.set({ program: act.program }, { merge: true });
+      // update, KHÔNG set-merge: merge trộn map lồng nhau — các buổi cũ không có
+      // trong giáo án mới (SessionE…) vẫn nằm lại và hiện ra trong app.
+      await ref.update({ program: act.program });
       console.log(`[coachApply] giáo án -> ${act.clientId}: ${v.stats.days} buổi, ${v.stats.exercises} bài`);
       return { ok: true, clientId: act.clientId, ...v.stats };
     }

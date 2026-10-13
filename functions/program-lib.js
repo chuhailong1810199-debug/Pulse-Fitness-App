@@ -166,7 +166,11 @@ function resolveProgram(prog, idx, o = {}) {
               matched++;
               const y = { ...x };
               if (r.ex.muscles && typeof r.ex.muscles === "object" && Object.keys(r.ex.muscles).length) y.muscles = r.ex.muscles;
-              if (setBw && /body\s*weight|^bw$/i.test(String(r.ex.tool || "")) && y.bw === undefined) y.bw = true;
+              // Bài CŨ (keepNames) không bao giờ tự bật bw: số kg đã ghi của bài đó sẽ
+              // đổi nghĩa thành "tạ thêm vào thân". Sang 2026-10-13: Pull Up (Band) 35
+              // hiện thành −37 (35 − 72 kg cân nặng).
+              const isOld = keep.has(String(x.name || "").trim());
+              if (setBw && !isOld && /body\s*weight|^bw$/i.test(String(r.ex.tool || "")) && y.bw === undefined) y.bw = true;
               if (rename && !keep.has(String(x.name || "").trim()) && r.ex.name !== x.name) {
                 renamed.push([x.name, r.ex.name]); y.name = r.ex.name;
               }
