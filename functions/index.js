@@ -3461,6 +3461,14 @@ exports.coachApply = onCall(
         coachUid: (request.auth && request.auth.uid) || null,
         createdAt: new Date().toISOString(),
         createdBy: "coachAssistant",
+        // Lớp nhóm: một hồ sơ cho cả lớp (validateNewClient đã bắt email trống).
+        ...(act.isGroup === true ? {
+          isGroup: true,
+          groupFormat: String(act.groupFormat || ""),
+          groupSize: Number.isInteger(Number(act.groupSize)) ? Number(act.groupSize) : null,
+          durationMin: Number.isInteger(Number(act.durationMin)) ? Number(act.durationMin) : null,
+          equipment: String(act.equipment || "").slice(0, 500),
+        } : {}),
       });
       if (String(act.healthConditions || "").trim()) {
         await ref.collection("profile").doc("data").set({

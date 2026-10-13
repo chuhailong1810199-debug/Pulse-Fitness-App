@@ -262,3 +262,7 @@ Key routing rules:
   `get_client` + `get_exercise_loads` của khách đó.
 - Giáo án cũ: `node scripts/backfill-program-library.js` (chạy thử) / `--write` — chuẩn hoá tag + gắn
   muscles, KHÔNG đổi tên, KHÔNG bật `bw`, sao lưu vào `profile/program-backup-<ngày>-library`.
+- **Lớp nhóm** = một hồ sơ `clients` có `isGroup: true` + `groupFormat` (`hyrox|strength|circuit`),
+  `groupSize`, `durationMin`, `equipment`; `email: ''`, tên bắt đầu "Lớp ·". Tạo qua trợ lý (form "Soạn giáo án
+  lớp nhóm" → `propose_new_client` isGroup → `coachApply`). Luật soạn ở `GROUP_METHOD` (assistant.js). Lớp không
+  báo "chưa tập/InBody/gói" (`clientAlert`), không bật billing; `propose_program` cho lớp chỉ đòi `get_client`.

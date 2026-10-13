@@ -202,6 +202,26 @@ ok("propose_program khai bao: bat buoc doc ho so truoc, ten dung thu vien", () =
   assert(/ĐÚNG Y/.test(t.parameters.properties.program.description));
 });
 
+// ── Lớp nhóm (2026-10-13) ──
+ok("lop nhom: kieu lop, so nguoi, thoi luong duoc kiem; KHONG email; level Mixed chi cho lop", () => {
+  assert(A.validateNewClient({ name: "HYROX sáng", isGroup: true, groupFormat: "hyrox", groupSize: 10, durationMin: 60, level: "Mixed" }).ok);
+  assert(!A.validateNewClient({ name: "X", isGroup: true, groupFormat: "yoga" }).ok, "kieu lop la phai bi chan");
+  assert(!A.validateNewClient({ name: "X", isGroup: true, groupFormat: "circuit", email: "a@gmail.com" }).ok, "lop co email phai bi chan");
+  assert(!A.validateNewClient({ name: "X", isGroup: true, groupFormat: "circuit", groupSize: 100 }).ok);
+  assert(!A.validateNewClient({ name: "X", level: "Mixed" }).ok, "khach 1-1 khong dung Mixed");
+});
+ok("ten lop luon co tien to 'Lop ·'", () => {
+  assert.strictEqual(A.groupName("HYROX sáng T3"), "Lớp · HYROX sáng T3");
+  assert.strictEqual(A.groupName("Lớp boxing tối"), "Lớp boxing tối");
+});
+ok("chi dan + tool khai bao lop nhom", () => {
+  assert(A.SYSTEM.includes(A.GROUP_METHOD));
+  for (const k of ["DỤNG CỤ THEO SỐ NGƯỜI", "ĐỒNG HỒ", "Dễ / Chuẩn / Khó", "hyrox", "strength", "circuit"]) assert(A.GROUP_METHOD.includes(k), k);
+  const t = A.TOOLS.find((x) => x.name === "propose_new_client").parameters.properties;
+  for (const k of ["isGroup", "groupFormat", "groupSize", "durationMin", "equipment"]) assert(t[k], "thieu tham so " + k);
+  assert(A.designIntent("soạn giáo án lớp nhóm HYROX"));
+});
+
 ok("thu vien bai tap co cache, khong doc 360 bai moi lan", () => {
   const src = fs.readFileSync(path.join(__dirname, "..", "functions", "assistant.js"), "utf8");
   assert(/function exerciseLibrary/.test(src), "thieu ham cache thu vien");
@@ -317,7 +337,8 @@ ok("emailKey luon ve chu thuong — chi muc phan biet hoa thuong", () => {
 ok("ghi email PHAI chiem chi muc TRUOC, va lui lai duoc", () => {
   const src = fs.readFileSync(path.join(__dirname, "..", "functions", "index.js"), "utf8");
   const i = src.indexOf('act.kind === "create_client"');
-  const blk = src.slice(i, i + 3000);
+  // Cắt tới hết khối tạo khách (không theo độ dài cố định — thêm trường mới là trượt).
+  const blk = src.slice(i, src.indexOf("[coachApply] tạo khách", i));
   const claim = blk.indexOf('collection("clientEmails")');
   const write = blk.indexOf("ref.set({");
   assert(claim > -1, "khong chiem chi muc /clientEmails");
