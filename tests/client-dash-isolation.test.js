@@ -202,6 +202,38 @@ ok("khong co luat grid nao xe doi the .cd-mus", async () => {
     + " — se xe doi the chua hinh co the");
 });
 
+ok("the moi khong mang class bi luat layout cu cua tab khac chiem", async () => {
+  // LUAT CHUNG, khong chi khoa rieng chu "ac-hero".
+  // Da gap HAI lan cung mot kieu: ban thiet ke moi dung lai ten class ma CSS cu
+  // cua tab khac dang so huu, luat cu van ap va be nat the moi.
+  //   .cd-mus  — danh sach nhom co chia hai cot  -> xe doi THE chua hinh
+  //   .ac-hero — luoi 2 cot cua tab Active       -> tieu de/.ac-row/dong tong
+  //              bi xep canh nhau, ba chip KPI tut tu 114px xuong 48px
+  //              ("0kcal / buoi / tap", moi tu mot dong)
+  // Ca hai deu IM LANG: khong loi, khong canh bao, chi nhin man hinh moi thay.
+  // Nen: moi class tren the cua dashboard gop phai KHONG co luat layout nao
+  // ngoai pham vi #cdash-page dat len. Muon dat luoi cho the nay thi scope vao
+  // #cdash-page, de tab khac doi CSS khong keo do man nay.
+  const css = [...s.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join("\n")
+    .replace(/\/\*[\s\S]*?\*\//g, "");
+  const secs = [...s.matchAll(/<section class="(cd-card[^"]*)"/g)].map((m) => m[1]);
+  assert(secs.length >= 2, "khong tim thay the .cd-card nao — regex da lac khoi code that");
+  const toks = [...new Set(secs.flatMap((x) => x.split(/\s+/)).filter(Boolean))];
+  const bad = [];
+  for (const t of toks) {
+    for (const m of css.matchAll(/([^{}]*)\{([^}]*)\}/g)) {
+      const sel = m[1].trim(), body = m[2];
+      if (sel.includes("#cdash-page")) continue;          // scope dung -> co y
+      if (!new RegExp("\\." + t.replace(/[-]/g, "\\-") + "(?![-\\w])").test(sel)) continue;
+      if (/grid-template-columns|display\s*:\s*grid|display\s*:\s*flex/.test(body))
+        bad.push(t + " <- " + sel.replace(/\s+/g, " ").slice(0, 80));
+    }
+  }
+  assert.strictEqual(bad.length, 0,
+    "luat layout ngoai #cdash-page dang chiem class cua the dashboard gop:\n       "
+    + bad.join("\n       ") + "\n       — day la kieu loi da be the Nhom co va the Hoat dong");
+});
+
 ok("cau bao rong khong chen thang _cdd.scope vao 'N ngay qua'", async () => {
   // _cdd.scope la 'last' | 7 | 28. Chen thang vao cau dem ngay thi khi dang o
   // "Buoi gan nhat" se ra "Khong co buoi nao trong last ngay qua".

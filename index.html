@@ -2804,7 +2804,11 @@ function cdActHTML(A) {
   for (var i = 6; i >= 0; i--) { var d = by[cdISO(Date.now() - i * 864e5)]; days.push(d && d.steps != null ? Number(d.steps) : null); }
   days.forEach(function (v) { if (v != null) { sum += v; n++; if (v >= CD_STEP_GOAL) hit++; if (v > max) max = v; } });
   var bars = days.map(function (v) { return v == null ? '<i class="ac-none" style="height:3px"></i>' : '<i class="' + (v >= CD_STEP_GOAL ? 'ac-hit' : '') + '" style="height:' + Math.max(4, Math.round(38 * v / max)) + 'px"></i>'; }).join('');
-  return '<section class="cd-card cd-act rc-root ac-hero" aria-labelledby="cd-act-t">'
+  // KHONG mang class ac-hero: do la luat cu cua tab Active
+  // (.ac-hero{display:grid;grid-template-columns:1fr 1.05fr}) va no bien CA
+  // section nay thanh luoi 2 cot, nen tieu de / .ac-row / dong tong bi xep canh
+  // nhau thay vi chong len. Hang 2 cot that la .ac-row ben trong.
+  return '<section class="cd-card cd-act rc-root" aria-labelledby="cd-act-t">'
     + '<div class="cd-card-h"><h2 class="cd-section-title" id="cd-act-t">Hoạt động</h2><span class="cd-src' + (lag > 2 ? ' cd-stale' : '') + '">' + src + '</span></div>'
     + '<div class="ac-row"><div class="ac-ring"><svg viewBox="0 0 100 100" aria-hidden="true"><circle class="ac-ring-bg" cx="50" cy="50" r="44"/>'
     + '<circle class="ac-ring-v' + (steps >= CD_STEP_GOAL ? ' ac-goal' : '') + '" cx="50" cy="50" r="44" transform="rotate(-90 50 50)" stroke-dasharray="' + C + '" style="stroke-dashoffset:' + off + ';--c:' + C + '"/></svg>'
