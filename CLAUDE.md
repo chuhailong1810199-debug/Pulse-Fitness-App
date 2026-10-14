@@ -70,7 +70,7 @@ free one → allowed.
 
 When deleting a client, remove **all** of: the `clients/{id}` doc, every subcollection
 (`assessment`, `checkpoints`, `workoutHistory`, `nutrition`, `progressPhotos`, `videos`,
-`sessionLoads`), the `clientEmails/{email}` entry, and any `users` doc pointing at it.
+`sessionLoads`, `aiChat`, `programBackups`), the `clientEmails/{email}` entry, and any `users` doc pointing at it.
 Deleting a Firestore doc does *not* delete its subcollections — that is how the orphaned
 records were created in the first place.
 
@@ -266,3 +266,9 @@ Key routing rules:
   `groupSize`, `durationMin`, `equipment`; `email: ''`, tên bắt đầu "Lớp ·". Tạo qua trợ lý (form "Soạn giáo án
   lớp nhóm" → `propose_new_client` isGroup → `coachApply`). Luật soạn ở `GROUP_METHOD` (assistant.js). Lớp không
   báo "chưa tập/InBody/gói" (`clientAlert`), không bật billing; `propose_program` cho lớp chỉ đòi `get_client`.
+- **Lý do chọn bài** (2026-10-15): mỗi buổi có `focus`, mỗi bài pha strength/accessories có `why` — lưu CÙNG
+  giáo án. `checkRationale()` chặn đề xuất thiếu. App hiện `why` ở ô "i" và `focus` dưới tiêu đề buổi, cho MỌI người
+  (coach + khách). Hỏi "vì sao tập bài X" → trợ lý trả lời từ `why` đã lưu; không có thì phải nói rõ là suy luận.
+- **Chat theo khách**: tab tên khách trong khung trợ lý (hoặc nút "Hỏi AI về khách này" trên hồ sơ). Lưu ở
+  `clients/{id}/aiChat` — chỉ hàm nền `coachAssistant` ghi (`thread: true`), coach của khách + admin đọc, KHÁCH
+  KHÔNG đọc. Form "Hôm nay khách không khoẻ" → chỉnh buổi cho hôm nay theo `EXPLAIN_METHOD`, KHÔNG đổi giáo án gốc.

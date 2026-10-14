@@ -50,6 +50,7 @@ const STRANGER = { uid: "u_x", email: "la@gmail.com", ...V };
     await db.doc("exercises/squat").set({ name: "Squat" });                       // thư viện gốc
     await db.doc("exercises/a_bai").set({ name: "Bài của A", ownerUid: "coachA" });
     await db.doc("clients/cindy/checkpoints/c1").set({ weight: 58 });
+    await db.doc("clients/cindy/aiChat/m1").set({ role: "assistant", text: "lý do chọn bài", at: new Date() });
     await db.doc("clients/sang/checkpoints/c1").set({ weight: 50 });
     await db.doc("clients/cindy/invoices/i1").set({ status: "unpaid", kind: "access", planId: "pro", amount: 1 });
     await db.doc("clientEmails/cindy@gmail.com").set({ clientId: "cindy" });
@@ -66,6 +67,15 @@ const STRANGER = { uid: "u_x", email: "la@gmail.com", ...V };
     return env.authenticatedContext(uid, claims).firestore();
   };
   const q = (who, coll, uid) => db(who).collection(coll).where("coachUid", "==", uid).get();
+
+  // ── Chat coach ↔ trợ lý theo khách (aiChat) ────────────────────
+  const chat = (who) => db(who).collection("clients/cindy/aiChat");
+  ok("aiChat: coach cua khach doc duoc", () => assertSucceeds(chat(COACH_A).get()));
+  ok("aiChat: admin doc duoc (quan sat)", () => assertSucceeds(chat(ADMIN).get()));
+  ok("aiChat: coach khac KHONG doc", () => assertFails(chat(COACH_B).get()));
+  ok("aiChat: CHINH KHACH khong doc (trao doi noi bo cua coach)", () => assertFails(chat(CINDY).get()));
+  ok("aiChat: coach KHONG tu ghi — chi ham nen ghi", () => assertFails(chat(COACH_A).add({ role: "user", text: "x" })));
+  ok("aiChat: khach KHONG ghi", () => assertFails(chat(CINDY).add({ role: "user", text: "x" })));
 
   // ── Danh sách khách ────────────────────────────────────────────
   ok("admin goc truy van tran clients", () => assertSucceeds(db(ADMIN).collection("clients").get()));

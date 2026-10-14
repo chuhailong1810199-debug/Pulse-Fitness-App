@@ -29,7 +29,7 @@ test('prompt lop: isGroup, groupFormat, khoa buoi, khong email, dung cu nguyen v
 
 test('form lop co o an kind=group de aiFormSend chon dung bo dung prompt', () => {
   assert.match(build._aiGroupForm(), /name="kind" value="group"/);
-  assert.match(s, /data\.kind === 'group' \? aiBuildGroupPrompt\(data\) : aiBuildProgramPrompt\(data\)/);
+  assert.match(s, /data\.kind === 'group' \? aiBuildGroupPrompt\(data\)\s*: data\.kind === 'ready' \? aiBuildReadyPrompt\(/);
 });
 
 test('canh bao dashboard: lop chi bao khi chua co giao an', () => {

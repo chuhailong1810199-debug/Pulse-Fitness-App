@@ -326,6 +326,9 @@ service cloud.firestore {
       // Bước chân, calo ngày và buổi tập kéo từ Polar. Tách khỏi recovery vì
       // đây là dữ liệu hoạt động ban ngày, không phải hồi phục ban đêm.
       match /activity/{d=**}       { allow read: if canRead(clientId); allow write: if canAccess(clientId); }
+      // Chat coach ↔ trợ lý về khách này: trao đổi NỘI BỘ của coach — khách không
+      // đọc. Chỉ hàm nền coachAssistant ghi (Admin SDK bỏ qua luật).
+      match /aiChat/{d=**}         { allow read: if canView(clientId); allow write: if false; }
     }
   }
 }
