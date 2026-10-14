@@ -2864,7 +2864,9 @@ function cdBodyHTML(c, isCoach) {
   }).join('') + '</div>' : '';
   var side = '';
   if (!has) side = '<p class="cd-mus-empty"><b>Chưa có buổi tập nào được ghi.</b> ' + (isCoach ? 'Hình sẽ tô theo nhóm cơ sau buổi đầu tiên của ' + cdEsc(c.name) + '.' : 'Tập xong buổi đầu tiên, các nhóm cơ bạn đã tập sẽ sáng lên ở đây.') + '</p>';
-  else if (!info.length) side = '<p class="cd-mus-empty"><b>Không có buổi nào trong ' + _cdd.scope + ' ngày qua.</b> Chọn khoảng dài hơn để xem.</p>';
+  else if (!info.length) side = '<p class="cd-mus-empty">' + (_cdd.scope === 'last'
+    ? '<b>Buổi gần nhất chưa ghi nhóm cơ nào.</b> Chọn 7 hoặc 28 ngày để xem rộng hơn.'
+    : '<b>Không có buổi nào trong ' + _cdd.scope + ' ngày qua.</b> Chọn khoảng dài hơn để xem.') + '</p>';
   else {
     var s0 = R.pick[0];
     side = '<p class="cd-mus-cap">' + (_cdd.scope === 'last'
@@ -16732,8 +16734,9 @@ button.cd-av:focus-visible{outline:2px solid #8FDBFF;outline-offset:2px;}
 @media(max-width:900px){.cd-strip{grid-template-columns:repeat(3,1fr);}}
 .cd-kpi{font-size:10.5px;color:#8FDBFF;white-space:nowrap;}
 .cd-kpi span{display:block;font-size:22px;font-weight:900;color:#F4F1FB;letter-spacing:-.7px;line-height:1.1;}
-.cd-mus{min-width:0;display:grid;grid-template-columns:1fr 1fr;gap:3px 16px;}
-@media(max-width:1200px){.cd-mus{grid-template-columns:1fr;}}
+/* .cd-mus cu (danh sach nhom co chia hai cot) da go: ban moi dung chinh ten
+   class do cho THE chua hinh, nen luat grid cu xe doi the va lam chu tran ra
+   ngoai. Danh sach gio dung .cd-muscle-*. */
 .cd-mus-row{display:grid;grid-template-columns:78px 1fr 56px;align-items:center;gap:8px;font-size:10.5px;color:#8FDBFF;}
 .cd-mus-row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .cd-mus-row i{height:5px;border-radius:99px;background:#8FDBFF;display:block;}
