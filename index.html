@@ -13927,7 +13927,11 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   </div>
 
   <!-- ── BILLING ──────────────────────────────────────────────────────── -->
-  <div id="dash-page"><div id="dash-body"></div></div>
+  <!-- dsh-keep-strip: giu dai chip chon khach tren dien thoai. Ban thiet ke
+       an no di (mot dai vuot ngang thu hai ngay tren bo bai), nhung tren may
+       that coach khong tim ra duong doi khach trong tab nay. Trang 1 dang rut
+       gon con 6 khach nen 15 chip con lai khong trung voi gi. -->
+  <div id="dash-page" class="dsh-keep-strip"><div id="dash-body"></div></div>
   <div id="platform-page"><div id="platform-body"></div></div>
   <div id="cdash-page"><div id="cdash-body"></div>
     <input type="file" id="cd-av-input" accept="image/*" style="display:none" onchange="cdAvatarPicked(this)">

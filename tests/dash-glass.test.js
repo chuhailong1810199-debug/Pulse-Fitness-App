@@ -133,6 +133,21 @@ must(uncapped.length === 0,
 must(!/\.dsh-col\s*\{[^}]*opacity\s*:\s*0/.test(block),
   "co opacity:0 tren .dsh-col — cot thanh backdrop root, blur se trang tron suot luc fade");
 
+// ── tren dien thoai coach phai doi duoc khach ngay trong tab nay ─────────
+// Ban thiet ke an dai chip duoi 1024px (mot dai vuot ngang thu hai ngay tren
+// bo bai). Tren may that coach khong tim ra duong doi khach, nen bat lai bang
+// .dsh-keep-strip. Neu ai do go lop do ma van giu luat an thi loi quay lai y
+// nguyen — va no im lang, chi thay khi cam dien thoai len.
+const hideStrip = /#dash-page:not\(\.dsh-keep-strip\)\s*\.dcs-strip\{[^}]*display:\s*none/.test(block);
+// Bien tu: "dsh-keep-stripX" khong duoc tinh la dat.
+const keepsStrip = /id="dash-page"[^>]*class="[^"]*(?:^|\s|")dsh-keep-strip(?=\s|"|$)/.test(s)
+  || /class="[^"]*\bdsh-keep-strip\b[^"]*"[^>]*id="dash-page"/.test(s)
+  || (/id="dash-page"[^>]*class="([^"]*)"/.exec(s) || [,""])[1].split(/\s+/).includes("dsh-keep-strip");
+console.log("Dai chip tren dien thoai: " + (!hideStrip ? "khong co luat an" : keepsStrip ? "an nhung da bat lai" : "BI AN"));
+must(!hideStrip || keepsStrip,
+  "duoi 1024px dai chip .dcs-strip bi an ma #dash-page khong co lop dsh-keep-strip"
+  + " — coach cam dien thoai se khong co cho nao doi khach trong tab Dashboard");
+
 console.log("\nKiem dashboard kinh");
 if (bad.length) { console.log("\n" + bad.map((b) => "  HONG " + b).join("\n")); process.exit(1); }
 console.log("TAT CA DAT — ngan sach blur, tran tuong phan va chot chuyen dong deu con");
