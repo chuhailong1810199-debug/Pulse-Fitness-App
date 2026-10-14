@@ -144,9 +144,10 @@ function parseSetsCount(setsReps, tag) {
  * 30 rep. Dạng có trong giáo án thật (đếm 2026-10-08, 655 bài):
  *   "3 × 8"  "3 × 6-8"  "2 × 10/bên"  "3 × 30s"  "4 × 250m"  "1 × 5 min"
  *   "3 x 8.8.8"  "3 × 8/10/12"  "8 rounds × 6"  "3 vòng × 12"  "AMRAP × 10"
- *   "30 phút"  "400m"  "—"
+ *   "30 phút"  "400m"  "—"  "8 vòng · 30s mạnh / 30s nhẹ" (interval, không phải 8 rep)
  *
- * Trả về { sets, repsAt(i), lifting, perSide }:
+ * Trả về { sets, explicit, repsAt(i), lifting, perSide }:
+ *   explicit     → chuỗi có ghi số set ("3 × …", "8 vòng · …").
  *   lifting=false → bài thời gian/quãng đường/calo: KHÔNG có tonnage (vẫn lưu tạ).
  *   perSide      → "/bên", "/side", "each leg"… — một set là hai bên, tính ×2.
  *   repsAt(i)    → số rep của set i: "8.8.8" / "8/10/12" theo từng set,
@@ -155,15 +156,17 @@ function parseSetsCount(setsReps, tag) {
 function parsePrescription(str) {
   const raw = String(str || '').toLowerCase().replace(/[×]/g, 'x').replace(/[–—]/g, '-').trim();
   const UNIT = /^\s*\d+(?:[.,]\d+)?(?:\s*-\s*\d+(?:[.,]\d+)?)?\s*(km|m|s|sec|secs|giây|min|mins|mín|phút|cal)(?![a-zà-ỹ])/;
-  const sm = raw.match(/^(\d+)\s*(?:rounds?|vòng|hiệp)?\s*x/);
+  const sm = raw.match(/^(\d+)\s*(?:(?:rounds?|vòng|hiệp)\s*[x·:]|x)/);
   const sets = sm ? Math.max(1, parseInt(sm[1], 10)) : 1;
   const rest = sm ? raw.slice(sm[0].length) : raw.replace(/^amrap\s*x\s*/, '');
-  const none = { sets, repsAt: () => 0, lifting: false, perSide: false };
+  const explicit = !!sm;
+  const none = { sets, explicit, repsAt: () => 0, lifting: false, perSide: false };
   if (!/\d/.test(rest) || UNIT.test(rest)) return none;
-  const perSide = /\/\s*(bên|side|leg|tay|direction|chiều|each)|each\s+(side|leg)|mỗi\s+bên/.test(rest);
+  const SIDE = '(bên|side|leg|arm|tay|chân|direction|chiều|each)';
+  const perSide = new RegExp('\\/\\s*' + SIDE + '|each\\s+(side|leg|arm)|mỗi\\s+(bên|chân|tay|chiều)').test(rest);
   const list = rest.match(/^\s*(\d+(?:\s*[./]\s*\d+)+)(?!\s*\d)/);
   let reps;
-  if (list && !/^\s*\d+\s*\/\s*(bên|side|leg|tay|direction|chiều|each)/.test(rest)) {
+  if (list && !new RegExp('^\\s*\\d+\\s*\\/\\s*' + SIDE).test(rest)) {
     reps = list[1].split(/[./]/).map(n => parseInt(n, 10)).filter(n => n > 0);
   } else {
     const first = rest.match(/\d+/);
@@ -171,22 +174,46 @@ function parsePrescription(str) {
   }
   const mult = perSide ? 2 : 1;
   return {
-    sets, perSide, lifting: true,
+    sets, explicit, perSide, lifting: true,
     repsAt: (i) => (reps[Math.min(i, reps.length - 1)] || 0) * mult,
   };
 }
 
-/** Tonnage một bài: theo từng set nếu có, không thì sets × tạ chung. 0 cho bài không phải nâng tạ. */
+/**
+ * Tạ của TỪNG set đã tập, đúng số set giáo án ghi. perSetLoads giữ nguyên vị trí
+ * (ô S1 trống = null), KHÔNG lọc trước — lọc làm tạ S3 dồn lên ghép với rep S2.
+ *  - Ô trống / set không có ô (ô cắt ở 6; circuit "8 rounds × 10" chỉ 1 ô)
+ *    → lấy tạ set gần nhất phía trước (đã tích bài = đã tập đủ set).
+ *  - Ô thừa sau số set (giáo án giảm 4 → 3 set, ô S4 còn số điền sẵn) → bỏ.
+ *  - Không có ô nào → tạ chung (fallbackLoad) cho mọi set.
+ * Chuỗi không ghi số set ("10", "AMRAP × 10"): số set = số ô đã điền.
+ */
+function resolveSetLoads(setsReps, perSetLoads, fallbackLoad) {
+  const rx = parsePrescription(setsReps);
+  const ok = v => Number.isFinite(v) && v > 0;
+  const raw = Array.isArray(perSetLoads) ? perSetLoads.map(v => (v == null || v === '' ? NaN : Number(v))) : [];
+  let last = -1; raw.forEach((v, i) => { if (ok(v)) last = i; });
+  const n = rx.explicit ? rx.sets : Math.max(rx.sets, last + 1);
+  if (last < 0) {
+    const kg = parseFloat(fallbackLoad);
+    return ok(kg) ? Array(n).fill(kg) : [];
+  }
+  const firstOk = raw.find(ok);
+  const out = [];
+  let prev = firstOk;
+  for (let i = 0; i < n; i++) {
+    if (ok(raw[i])) prev = raw[i];
+    out.push(prev);
+  }
+  return out;
+}
+
+/** Tonnage một bài = Σ tạ set × rep set. 0 cho bài không phải nâng tạ. */
 function exerciseTonnage(setsReps, perSetLoads, fallbackLoad) {
   const rx = parsePrescription(setsReps);
   if (!rx.lifting) return 0;
-  const per = (perSetLoads || []).filter(v => Number.isFinite(v) && v > 0);
-  if (per.length) return per.reduce((t, kg, i) => t + kg * rx.repsAt(i), 0);
-  const kg = parseFloat(fallbackLoad);
-  if (!(Number.isFinite(kg) && kg > 0)) return 0;
-  let t = 0;
-  for (let i = 0; i < rx.sets; i++) t += kg * rx.repsAt(i);
-  return t;
+  return resolveSetLoads(setsReps, perSetLoads, fallbackLoad)
+    .reduce((t, kg, i) => t + kg * rx.repsAt(i), 0);
 }
 
 // Split "4 × 8" → { sets:'4', reps:'8' } for table columns
@@ -201,22 +228,71 @@ function parseSetsRepsSplit(setsReps) {
 
 const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun','SessionA','SessionB','SessionC','SessionD','SessionE','SessionF','SessionG'];
 const MUSCLE_WEIGHTS = {P:1.0, S:0.5, T:0.333, Q:0.25};
+
+/**
+ * Volume theo nhóm cơ = SỐ SET (từ 2026-10-10): mỗi bài đã tích góp
+ * số set × trọng số vai trò (chính 1, phụ 0,5…). Phần khởi động không tính —
+ * set khởi động không phải set làm việc. Trước đó mỗi BÀI góp đúng một lần dù
+ * 1 hay 5 set; buổi cũ không có muscleUnit:'sets' nên được quy đổi lúc đọc
+ * (legacyMuscleScale) để khung 7/28 ngày không lệch.
+ */
+/**
+ * Tag pha về đúng 4 giá trị: warmup | strength | accessories | circuit.
+ * BẢN SAO của normalizePhaseTag() trong functions/program-lib.js — test
+ * (tests/phase-tag.test.js) chạy cả hai trên cùng bộ tên và đòi kết quả giống nhau.
+ * Tag hợp lệ thì giữ; không thì đoán theo tên + tag cũ ("main", "Warm-up",
+ * "isolation", "core"…). Không đoán được → accessories.
+ */
+const PHASE_TAGS = ['warmup', 'strength', 'accessories', 'circuit'];
+function normPhaseTag(phase) {
+  const tag = String((phase && phase.tag) || '').toLowerCase().trim();
+  if (PHASE_TAGS.includes(tag)) return tag;
+  const t = (String((phase && phase.name) || '') + ' ' + tag).toLowerCase();
+  if (/warm[\s-]*up|khởi\s*động|activation|kích\s*hoạt|\bprep\b|rehab/.test(t)) return 'warmup';
+  if (/circuit|conditioning|finisher|\bwod\b|amrap|emom|interval|cardio|hyrox|metcon|liss|steady|engine/.test(t)) return 'circuit';
+  if (/strength|\bmain\b|heavy|power|plyo|hypertroph|sức\s*mạnh|bài\s*chính|block\s*1\b/.test(t)) return 'strength';
+  return 'accessories';
+}
+function isWarmupPhase(phase) { return normPhaseTag(phase) === 'warmup'; }
+function muscleSetsForDay(day, isDone) {
+  const out = {};
+  ((day && day.phases) || []).forEach((phase, pi) => {
+    if (isWarmupPhase(phase)) return;
+    (phase.exercises || []).forEach((ex, ei) => {
+      if (!isDone(pi, ei) || !ex.muscles || typeof ex.muscles !== 'object') return;
+      const sets = parsePrescription(ex.setsReps).sets;
+      Object.entries(ex.muscles).forEach(([muscle, role]) => {
+        const w = MUSCLE_WEIGHTS[role] || 0;
+        if (w > 0) out[muscle] = Math.round(((out[muscle] || 0) + w * sets) * 100) / 100;
+      });
+    });
+  });
+  return out;
+}
+/** Buổi cũ đếm theo bài → nhân số set trung bình của bài (ngoài khởi động) trong buổi đó của giáo án hiện tại. */
+function legacyMuscleScale(dayKey) {
+  const day = (activeClient && activeClient.program || {})[dayKey];
+  let n = 0, t = 0;
+  ((day && day.phases) || []).forEach(ph => {
+    if (isWarmupPhase(ph)) return;
+    (ph.exercises || []).forEach(ex => { n++; t += parsePrescription(ex.setsReps).sets; });
+  });
+  return n ? t / n : 3;
+}
+/** volumeByMuscle của một buổi, luôn tính bằng set. */
+function sessionMuscleSets(v) {
+  const m = (v && v.volumeByMuscle) || {};
+  if (v && v.muscleUnit === 'sets') return m;
+  const k = legacyMuscleScale(v && v.day), out = {};
+  Object.keys(m).forEach(x => { out[x] = Math.round((Number(m[x]) || 0) * k * 100) / 100; });
+  return out;
+}
 const phaseTagClass = {warmup:'phase-warmup',core:'phase-core',strength:'phase-strength',accessories:'phase-accessories',circuit:'phase-accessories'};
 
-// Phase sort order: match tag OR name (case-insensitive)
-const PHASE_ORDER = ['warmup','strength','accessories','circuit'];
-function phaseRank(phase) {
-  const tag  = (phase.tag  || '').toLowerCase();
-  const name = (phase.name || '').toLowerCase();
-  // Name takes priority over tag (user can rename; tag may be stale)
-  for (let i = 0; i < PHASE_ORDER.length; i++) {
-    if (name.includes(PHASE_ORDER[i])) return i;
-  }
-  for (let i = 0; i < PHASE_ORDER.length; i++) {
-    if (tag.includes(PHASE_ORDER[i])) return i;
-  }
-  return PHASE_ORDER.length;
-}
+// Thứ tự pha: warmup → strength → accessories → circuit, theo tag đã chuẩn hoá.
+// (Bản cũ dò chữ "warmup" trong tên — "Warm-up" có gạch nối rơi xuống cuối.)
+const PHASE_ORDER = PHASE_TAGS;
+function phaseRank(phase) { return PHASE_ORDER.indexOf(normPhaseTag(phase || {})); }
 function sortPhases(phases) {
   return [...phases].sort((a, b) => phaseRank(a) - phaseRank(b));
 }
@@ -656,7 +732,9 @@ function migrateLocalStorageDayKeys(clientId) {
 }
 
 async function loadApp() {
-  await loadPlatformInfo();
+  // settings/platform chạy SONG SONG với lần đọc khách — trước đây nó chặn
+  // trước mọi thứ, tốn trọn một lượt mạng (~150-300ms) mỗi lần mở app.
+  const _platformP = loadPlatformInfo();
   // Show role badge
   const badge = document.getElementById('role-badge');
   if (badge) {
@@ -665,7 +743,7 @@ async function loadApp() {
   }
 
   if (userRole === 'coach') {
-    await loadAllClients();
+    await Promise.all([loadAllClients(), _platformP]);
     renderClientBar(true);
     const schTab = document.getElementById('schedule-nav-tab');
     if (schTab) schTab.style.display = '';
@@ -734,7 +812,7 @@ async function loadApp() {
         return;
       }
     }
-    let snap = await getDoc(doc(db, 'clients', userClientId));
+    let [snap] = await Promise.all([getDoc(doc(db, 'clients', userClientId)), _platformP]);
     if (!snap.exists) {
       // clientId in the users doc is stale — re-resolve via the email index first
       console.log('[loadApp] client doc missing for', userClientId, '— re-resolving...');
@@ -785,7 +863,6 @@ async function loadApp() {
       return;
     }
 
-    await checkAndShowBaseline();
   }
 
   // ── One-time: migrate old Mon/Wed/Fri localStorage keys → SessionA/B/C ──
@@ -804,10 +881,12 @@ async function loadApp() {
   updateDateDisplay();
   renderDayTabs();
   // ── Parallel fetch: loads + strength history run simultaneously ──
+  // Baseline (khách) chỉ bật một màn phủ — chạy cùng lượt, không chặn trước.
   await Promise.all([
     hydrateExerciseLoadsForActiveDay(),
     loadStrengthHistory(),
-    loadClientBodyweight()
+    loadClientBodyweight(),
+    userRole === 'client' ? checkAndShowBaseline() : null
   ]);
   renderExercises();
   initDaySwipe();
@@ -869,7 +948,7 @@ async function loadPlatformInfo() {
  */
 function billingOn(c) {
   c = c || activeClient;
-  return !!(c && _platformAdminUid && c.coachUid === _platformAdminUid);
+  return !!(c && !c.isGroup && _platformAdminUid && c.coachUid === _platformAdminUid);
 }
 
 async function loadCoachNames() {
@@ -1538,7 +1617,7 @@ function renderAIProgramPreview(program, clientName) {
   const preview = document.getElementById('ai-review-preview');
   loading.style.display = 'none';
 
-  const phaseColors = { warmup:'#8FDBFF', strength:'#8FDBFF', accessories:'#44cc88' };
+  const phaseColors = { warmup:'#8FDBFF', strength:'#8FDBFF', accessories:'#44cc88', circuit:'#44cc88' };
   const days = Object.keys(program);
   const totalEx = days.reduce((s, d) => s + (program[d].phases || []).reduce((ps, ph) => ps + (ph.exercises || []).length, 0), 0);
 
@@ -1555,7 +1634,7 @@ function renderAIProgramPreview(program, clientName) {
         <span style="color:rgba(255,255,255,0.55);font-weight:400;font-size:10px;">${(session.label || '').replace(/^SESSION\s+[A-Za-z0-9]+\s*[—\-–]\s*/i,'').trim()}</span>
       </div>`;
     for (const phase of (session.phases || [])) {
-      const col = phaseColors[phase.tag] || '#aaa';
+      const col = phaseColors[normPhaseTag(phase)] || '#aaa';
       html += `<div style="margin-bottom:8px;padding-left:10px;border-left:2px solid ${col}50;">
         <div style="font-size:9px;font-weight:700;color:${col};margin-bottom:5px;text-transform:uppercase;letter-spacing:.6px;">${phase.name}</div>`;
       for (const ex of (phase.exercises || [])) {
@@ -2229,7 +2308,7 @@ async function loadClientDash(force) {
     docs.forEach(d => {
       const v = d.data(), dt = v.date && v.date.toDate ? v.date.toDate() : null;
       sessions.push({ id: d.id, day: v.day || '?', done: v.done ?? null, total: v.total ?? null,
-        volume: v.totalVolume || 0, byMuscle: v.volumeByMuscle || {}, at: dt ? dt.toISOString() : null });
+        volume: v.totalVolume || 0, byMuscle: sessionMuscleSets(v), at: dt ? dt.toISOString() : null });
     });
     const per = await Promise.all(docs.map(async d => ({
       at: (d.data().date && d.data().date.toDate ? d.data().date.toDate() : new Date()).toISOString(),
@@ -2790,7 +2869,7 @@ function cdBodyHTML(c, isCoach) {
     var s0 = R.pick[0];
     side = '<p class="cd-mus-cap">' + (_cdd.scope === 'last'
       ? cdCap(cdRel(s0.t)) + ' · ' + cdEsc(cdDayName(c, s0.day, 0)) + (s0.total ? ' · ' + s0.done + '/' + s0.total + ' bài' : '')
-      : R.pick.length + ' buổi trong ' + _cdd.scope + ' ngày') + ' · đơn vị vol</p>';
+      : R.pick.length + ' buổi trong ' + _cdd.scope + ' ngày') + ' · đơn vị: set</p>';
     var show = _cdd.allMus ? info : info.slice(0, CD_MUS_N), top = info[0].v;
     side += '<ul class="cd-muscle-list">' + show.map(function (i, ix) {
       var none = !i.m.regions.length;
@@ -3011,6 +3090,12 @@ const _daysSince = iso => {
 
 /** Lý do khẩn nhất của một khách, hoặc null nếu không có gì. */
 function clientAlert(c) {
+  // Lớp nhóm: không gói, không hoá đơn, không InBody, không "chưa tập" —
+  // chỉ báo khi lớp chưa có giáo án.
+  if (c && c.isGroup) {
+    return (!c.program || !Object.keys(c.program).length)
+      ? { kind:'noprogram', sev:'amber', reason:'Lớp chưa có giáo án', mag:0, unit:'' } : null;
+  }
   const st = accessStatus(c.access || {});
   if (st.state === 'expired')
     return { kind:'expired', sev:'red', reason:'Gói đã hết hạn', mag:-st.daysLeft, unit:'ngày' };
@@ -3253,13 +3338,36 @@ async function finishWorkout() {
   const _doneN0 = Object.entries(_clientState0).filter(([k,v]) => v && k.startsWith(_dayPrefix0)).length;
   const _durationMs0 = window._workoutStartTime ? Date.now() - window._workoutStartTime : 0;
 
+  // sets/reps để GHI vào dòng lịch sử (cột REP của bảng) — cùng bộ đọc với
+  // tonnage. reps là số như giáo án viết (một bên), null nếu là bài thời
+  // gian/quãng đường: "4 × 250m" không phải 250 rep.
+  function parseSetsReps(str) {
+    const rx = parsePrescription(str);
+    return { sets: rx.sets, reps: rx.lifting ? rx.repsAt(0) / (rx.perSide ? 2 : 1) : null };
+  }
+  /**
+   * A bodyweight row that was ticked but never typed still moved the athlete's
+   * own weight. Without this it is dropped by the load > 0 guard below and
+   * gets no history at all — which is why bodyweight had to be typed into the
+   * kg box by hand in the first place. Ô giữ nguyên VỊ TRÍ (trống = null) —
+   * resolveSetLoads cần biết tạ nào thuộc set nào.
+   */
+  const perSetFor = (ex, exerciseKey) => {
+    const raw = setLoads[exerciseKey] || [];
+    if (raw.some(v => Number.isFinite(v) && v > 0) || !ex.bw || !(_clientBodyweight > 0)) return raw;
+    const ticked = (exerciseState[activeClient.id] || {})[exerciseKey];
+    if (!ticked) return raw;
+    const { sets } = parseSetsReps(ex.setsReps);
+    return Array(Math.max(1, sets)).fill(_clientBodyweight);
+  };
+
   let _totalVolume0 = 0;
   if (_day0) {
     _day0.phases.forEach((phase, pi) => {
       phase.exercises.forEach((ex, ei) => {
         const key = activeClient.id + '_' + activeDay + '_' + pi + '_' + ei;
         if (!_isDone(key)) return;
-        _totalVolume0 += exerciseTonnage(ex.setsReps, setLoads[key], exerciseLoads[key]);
+        _totalVolume0 += exerciseTonnage(ex.setsReps, perSetFor(ex, key), exerciseLoads[key]);
       });
     });
   }
@@ -3273,43 +3381,9 @@ async function finishWorkout() {
     const dayPrefix = _dayPrefix0;
     const doneN = _doneN0;
 
-    // Compute volumeByMuscle from completed exercises that have muscles data
-    const volumeByMuscle = {};
-    if (day) {
-      day.phases.forEach((phase, pi) => {
-        phase.exercises.forEach((ex, ei) => {
-          const key = activeClient.id + '_' + activeDay + '_' + pi + '_' + ei;
-          if (clientState[key] && ex.muscles && typeof ex.muscles === 'object') {
-            Object.entries(ex.muscles).forEach(([muscle, role]) => {
-              const weight = MUSCLE_WEIGHTS[role] || 0;
-              if (weight > 0) volumeByMuscle[muscle] = (volumeByMuscle[muscle] || 0) + weight;
-            });
-          }
-        });
-      });
-    }
-
-    // sets/reps để GHI vào dòng lịch sử (cột REP của bảng) — cùng bộ đọc với
-    // tonnage. reps là số như giáo án viết (một bên), null nếu là bài thời
-    // gian/quãng đường: "4 × 250m" không phải 250 rep.
-    function parseSetsReps(str) {
-      const rx = parsePrescription(str);
-      return { sets: rx.sets, reps: rx.lifting ? rx.repsAt(0) / (rx.perSide ? 2 : 1) : null };
-    }
-    /**
-     * A bodyweight row that was ticked but never typed still moved the athlete's
-     * own weight. Without this it is dropped by the load > 0 guard below and
-     * gets no history at all — which is why bodyweight had to be typed into the
-     * kg box by hand in the first place.
-     */
-    const perSetFor = (ex, exerciseKey) => {
-      const typed = (setLoads[exerciseKey] || []).filter(v => Number.isFinite(v) && v > 0);
-      if (typed.length > 0 || !ex.bw || !(_clientBodyweight > 0)) return typed;
-      const ticked = (exerciseState[activeClient.id] || {})[exerciseKey];
-      if (!ticked) return typed;
-      const { sets } = parseSetsReps(ex.setsReps);
-      return Array(Math.max(1, sets)).fill(_clientBodyweight);
-    };
+    // Set theo nhóm cơ của các bài đã tích (muscleSetsForDay).
+    const volumeByMuscle = muscleSetsForDay(day,
+      (pi, ei) => _isDone(activeClient.id + '_' + activeDay + '_' + pi + '_' + ei));
 
     let totalVolume = 0;
     if (day) {
@@ -3324,7 +3398,7 @@ async function finishWorkout() {
 
     const sessionRef = await addDoc(collection(db, 'clients', activeClient.id, 'workoutHistory'), {
       date: serverTimestamp(), day: activeDay, done: doneN, total,
-      volumeByMuscle, totalVolume: Math.round(totalVolume)
+      volumeByMuscle, muscleUnit: 'sets', totalVolume: Math.round(totalVolume)
     });
     logActivity('workout', activeDay + ' · ' + doneN + '/' + total + ' bài · '
       + Math.round(totalVolume).toLocaleString('vi-VN') + ' kg');
@@ -3338,8 +3412,9 @@ async function finishWorkout() {
           // Bài không tập thì không có dòng lịch sử — nếu không, biểu đồ tiến bộ
           // và mức tạ cao nhất bị kéo theo số điền sẵn của buổi trước.
           if (!_isDone(exerciseKey)) return;
-          const perSet = perSetFor(ex, exerciseKey);
-          const loadKg = perSet.length > 0 ? Math.max(...perSet) : parseFloat(exerciseLoads[exerciseKey]);
+          // Tạ từng set đã tập (đủ số set, ô thừa bỏ, ô trống lấy set trước).
+          const perSet = resolveSetLoads(ex.setsReps, perSetFor(ex, exerciseKey), exerciseLoads[exerciseKey]);
+          const loadKg = perSet.length > 0 ? Math.max(...perSet) : NaN;
           if (!Number.isFinite(loadKg) || loadKg <= 0) return;
           const { sets, reps } = parseSetsReps(ex.setsReps);
           const tonnage = Math.round(exerciseTonnage(ex.setsReps, perSet, loadKg));
@@ -3592,6 +3667,7 @@ async function uploadVideo(vKey, slot, input) {
       vidData[slot + 'Url'] = url;
       vidData[slot + 'Bytes'] = file.size || 0;
       await setDoc(vidDocRef, vidData);
+      _invalidateVideoDocs();
       bumpStorageUsage(file.size || 0, 'video', 1);
       renderExercises();
     }
@@ -3611,6 +3687,7 @@ async function deleteVideo(vKey, slot) {
     delete d[slot + 'Url'];
     await setDoc(vidDocRef, d);
   }
+  _invalidateVideoDocs();   // không thì bản đọc cũ ghi lại URL vừa xoá vào localStorage
   renderExercises();
 }
 
@@ -3656,40 +3733,68 @@ function updateVideoSlotDOM(vKey, slot, url) {
   </div>`;
 }
 
+/**
+ * Video của khách: MỘT lần đọc cả collection videos cho mỗi khách mỗi phiên.
+ * Bản cũ đọc từng bài một, nối đuôi nhau, cộng 2 lần hỏi Storage (404) cho
+ * mỗi bài chưa có video — và chạy lại sau MỖI lần renderExercises (mỗi lần
+ * tích bài). Đo 2026-10-11: ~30 lượt mạng nối đuôi, ~5 giây mỗi lần mở app.
+ * Tải lên / xoá video phải gọi _invalidateVideoDocs().
+ */
+let _videoDocsCache = null;            // { clientId, p: Promise<{vKey: data}> }
+function _invalidateVideoDocs() { _videoDocsCache = null; }
+function _videoDocs() {
+  const id = activeClient.id;
+  if (!_videoDocsCache || _videoDocsCache.clientId !== id) {
+    const p = getDocs(collection(db, 'clients', id, 'videos'))
+      .then(s => { const m = {}; s.forEach(d => { m[d.id] = d.data() || {}; }); return m; })
+      .catch(() => { _videoDocsCache = null; return {}; });
+    _videoDocsCache = { clientId: id, p };
+  }
+  return _videoDocsCache.p;
+}
+// Storage chỉ còn cho video tải lên trước khi có doc Firestore: hỏi tối đa
+// mỗi tuần một lần cho mỗi ô, không phải mỗi lần mở app.
+const _VIDEO_PROBE_MS = 7 * 864e5;
+function _videoProbeDue(vKey, slot) {
+  try { return Date.now() - (+localStorage.getItem('vprobe_' + slot + '_' + vKey) || 0) > _VIDEO_PROBE_MS; }
+  catch (_e) { return true; }
+}
+function _videoProbed(vKey, slot) {
+  try { localStorage.setItem('vprobe_' + slot + '_' + vKey, String(Date.now())); } catch (_e) {}
+}
+
 async function refreshVideoSlotsFromFirestore(vKeys) {
-  for (const vKey of vKeys) {
+  if (!activeClient) return;
+  const need = vKeys.filter(k => !(getVideoUrl(k, 'coach') && getVideoUrl(k, 'client')));
+  if (!need.length) return;
+  const clientId = activeClient.id;
+  const docs = await _videoDocs();
+  if (!activeClient || activeClient.id !== clientId) return;   // đã đổi khách
+  await Promise.all(need.map(async vKey => {
     const coachCached  = getVideoUrl(vKey, 'coach');
     const clientCached = getVideoUrl(vKey, 'client');
-    if (coachCached && clientCached) continue; // both already in localStorage
+    const d = docs[vKey] || {};
+    let coachUrl  = coachCached  || d.coachUrl  || null;
+    let clientUrl = clientCached || d.clientUrl || null;
 
-    let coachUrl = coachCached, clientUrl = clientCached;
-
-    // 1. Try Firestore
-    try {
-      const snap = await getDoc(doc(db, 'clients', activeClient.id, 'videos', vKey));
-      if (snap.exists) {
-        const d = snap.data();
-        if (d.coachUrl  && !coachUrl)  coachUrl  = d.coachUrl;
-        if (d.clientUrl && !clientUrl) clientUrl = d.clientUrl;
-      }
-    } catch(e) { /* ignore */ }
-
-    // 2. Fallback: try Firebase Storage directly (for videos not yet in Firestore)
-    if (!coachUrl) {
-      try { coachUrl  = await getDownloadURL(ref(storage, getVideoRefPath(vKey, 'coach')));  } catch(e) {}
+    // Fallback: Storage trực tiếp (video cũ chưa có doc Firestore) — tối đa tuần một lần.
+    if (!coachUrl && _videoProbeDue(vKey, 'coach')) {
+      try { coachUrl = await getDownloadURL(ref(storage, getVideoRefPath(vKey, 'coach'))); } catch(e) {}
+      _videoProbed(vKey, 'coach');
     }
-    if (!clientUrl) {
+    if (!clientUrl && _videoProbeDue(vKey, 'client')) {
       try { clientUrl = await getDownloadURL(ref(storage, getVideoRefPath(vKey, 'client'))); } catch(e) {}
+      _videoProbed(vKey, 'client');
     }
-    // If found via Storage, save to Firestore so future loads skip Storage check
-    if ((coachUrl && !coachCached) || (clientUrl && !clientCached)) {
+    // Chỉ ghi Firestore khi URL đến từ Storage (doc chưa có).
+    const fromStorage = (coachUrl && !coachCached && !d.coachUrl) || (clientUrl && !clientCached && !d.clientUrl);
+    if (fromStorage) {
       try {
-        const vidDocRef = doc(db, 'clients', activeClient.id, 'videos', vKey);
-        const existing  = await getDoc(vidDocRef);
-        const vidData   = existing.exists ? existing.data() : {};
-        if (coachUrl  && !coachCached)  vidData.coachUrl  = coachUrl;
-        if (clientUrl && !clientCached) vidData.clientUrl = clientUrl;
-        await setDoc(vidDocRef, vidData);
+        const vidData = { ...d };
+        if (coachUrl)  vidData.coachUrl  = coachUrl;
+        if (clientUrl) vidData.clientUrl = clientUrl;
+        await setDoc(doc(db, 'clients', clientId, 'videos', vKey), vidData);
+        docs[vKey] = vidData;
       } catch(e) {}
     }
 
@@ -3702,7 +3807,7 @@ async function refreshVideoSlotsFromFirestore(vKeys) {
       localStorage.setItem(getVideoUrlKey(vKey, 'client'), clientUrl);
       updateVideoSlotDOM(vKey, 'client', clientUrl);
     }
-  }
+  }));
 }
 
 // ── BASELINE UI ────────────────────────────────────────
@@ -4103,6 +4208,15 @@ async function hydrateExerciseLoadsForActiveDay() {
     } catch (_e) {}
   }
 
+  // Lịch sử buổi trước (dùng ở cuối hàm) được hỏi NGAY, song song với
+  // sessionLoads — trước đây chờ xong cái này mới hỏi cái kia, nhánh dài nhất
+  // lúc mở app tốn thêm một lượt mạng.
+  const _histP = getDocs(query(
+    collection(db, 'clients', activeClient.id, 'workoutHistory'),
+    orderBy('date', 'desc'),
+    limit(20)
+  )).catch(() => null);
+
   // ── Check sessionLoads (real-time kg backup, updated on every input) ──
   try {
     const slSnap = await getDoc(doc(db, 'clients', activeClient.id, 'sessionLoads', activeDay));
@@ -4141,11 +4255,8 @@ async function hydrateExerciseLoadsForActiveDay() {
   // ── Fallback: last completed workout from workoutHistory ──
   // Also checks if today's session was already logged → locks the finish button.
   try {
-    const histSnap = await getDocs(query(
-      collection(db, 'clients', activeClient.id, 'workoutHistory'),
-      orderBy('date', 'desc'),
-      limit(20)
-    ));
+    const histSnap = await _histP;
+    if (!histSnap) return;
     const todayMidnight = new Date(); todayMidnight.setHours(0,0,0,0);
     const latestDaySession = histSnap.docs.find(d => d.data().day === activeDay);
     if (!latestDaySession) return; // no history yet — fine, _loadsHydrated already true
@@ -4636,7 +4747,7 @@ function renderExercises() {
         <button class="btn-rename-phase" onclick="startRenamePhase(${pi})">✏ Rename</button>
         <button class="btn-delete-phase" onclick="deletePhase(${pi})">Delete</button>
       </div>
-      <span class="phase-tag ${phaseTagClass[phase.tag]||'phase-warmup'}" id="phase-label-${pi}">${phase.name}</span>
+      <span class="phase-tag ${phaseTagClass[normPhaseTag(phase)]}" id="phase-label-${pi}">${phase.name}</span>
       <div class="phase-rename-row" id="phase-rename-${pi}">
         <input class="phase-rename-input" id="phase-rename-input-${pi}" value="${phase.name.replace(/"/g,'&quot;')}"
           onkeydown="if(event.key==='Enter')saveRenamePhase(${pi});if(event.key==='Escape')cancelRenamePhase(${pi})">
@@ -4645,12 +4756,12 @@ function renderExercises() {
       </div></div>`;
     } else {
       const exCount = phase.exercises?.length || 0;
-      html += `<span class="phase-tag ${phaseTagClass[phase.tag]||'phase-warmup'}">${phase.name}</span><span class="phase-count">${exCount} exercise${exCount!==1?'s':''}</span></div>`;
+      html += `<span class="phase-tag ${phaseTagClass[normPhaseTag(phase)]}">${phase.name}</span><span class="phase-count">${exCount} exercise${exCount!==1?'s':''}</span></div>`;
     }
     // trainer-note-card removed (user request)
     if (!editMode) {
       // (unreachable in edit mode — kept for safety)
-      html += `<div class="exercise-flow phase-flow-${phase.tag||'warmup'}">`;
+      html += `<div class="exercise-flow phase-flow-${normPhaseTag(phase)}">`;
       phase.exercises.forEach((ex, ei) => {
         const key  = activeClient.id+'_'+activeDay+'_'+pi+'_'+ei;
         const done = !!(exerciseState[activeClient.id] && exerciseState[activeClient.id][key]);
@@ -4669,7 +4780,7 @@ function renderExercises() {
             <div class="node-check${done?' done':''}" onclick="event.stopPropagation();toggleExercise('${key}')">${done?'✓':''}</div>
           </div>
           <div class="node-setloads">
-            ${Array.from({length: parseSetsCount(ex.setsReps, phase.tag)}, (_,si) => `
+            ${Array.from({length: parseSetsCount(ex.setsReps, normPhaseTag(phase))}, (_,si) => `
               <label class="set-load-row">
                 <span class="set-load-label">S${si+1}</span>
                 <input class="set-load-input${ex.bw?' set-load-bw':''}" type="number" ${ex.bw?'':'min="0" '}step="0.5" placeholder="${ex.bw?'+0':'—'}"
@@ -4764,8 +4875,8 @@ function renderExercises() {
           <div class="form-group"><label class="form-label">Phase Name</label><input class="form-input" id="new-phase-name" placeholder="05 — Conditioning"></div>
           <div class="form-group"><label class="form-label">Tag</label>
           <select class="form-select" id="new-phase-tag">
-            <option value="warmup">Warmup</option><option value="core">Core</option>
-            <option value="strength">Strength</option><option value="accessories">Accessories</option>
+            <option value="warmup">Warmup</option><option value="strength">Strength</option>
+            <option value="accessories">Accessories / Core</option><option value="circuit">Circuit / Conditioning</option>
           </select></div>
           <div class="form-group full"><label class="form-label">Note</label><input class="form-input" id="new-phase-note" placeholder="15 min · Rest 60s"></div>
         </div>
@@ -8361,7 +8472,7 @@ async function submitPulseFreeForm() {
 
 function renderFreeProgramPreview(program) {
   const preview = document.getElementById('pfm-program-preview');
-  const phaseColors = { warmup:'#8FDBFF', strength:'#8FDBFF', accessories:'#44cc88' };
+  const phaseColors = { warmup:'#8FDBFF', strength:'#8FDBFF', accessories:'#44cc88', circuit:'#44cc88' };
   const days = Object.keys(program);
   const totalEx = days.reduce((s, d) => s + (program[d].phases || []).reduce((ps, ph) => ps + (ph.exercises || []).length, 0), 0);
 
@@ -8378,7 +8489,7 @@ function renderFreeProgramPreview(program) {
         <span style="color:rgba(255,255,255,0.55);font-weight:400;font-size:10px;">${(session.label || '').replace(/^SESSION\s+[A-Za-z0-9]+\s*[—\-–]\s*/i,'').trim()}</span>
       </div>`;
     for (const phase of (session.phases || [])) {
-      const col = phaseColors[phase.tag] || '#aaa';
+      const col = phaseColors[normPhaseTag(phase)] || '#aaa';
       html += `<div style="margin-bottom:8px;padding-left:10px;border-left:2px solid ${col}50;">
         <div style="font-size:9px;font-weight:700;color:${col};margin-bottom:5px;text-transform:uppercase;letter-spacing:.6px;">${phase.name}</div>`;
       for (const ex of (phase.exercises || [])) {
@@ -9234,7 +9345,9 @@ function _aiFmt(t) {
 function aiPaint() {
   const log = document.getElementById('ai-log');
   if (!log) return;
-  if (_aiForm && !_aiMsgs.length) { log.innerHTML = _aiNewClientForm(); log.scrollTop = 0; return; }
+  if (_aiForm && !_aiMsgs.length) {
+    log.innerHTML = _aiForm === 'group' ? _aiGroupForm() : _aiNewClientForm(); log.scrollTop = 0; return;
+  }
   if (!_aiMsgs.length) {
     log.innerHTML = '<div class="ai-hi">'
       + '<p>Hỏi gì về khách và giáo án cũng được. Tao tự tra dữ liệu thật trong app.</p>'
@@ -9245,6 +9358,9 @@ function aiPaint() {
       + '<button type="button" class="ai-eg ai-eg-main" onclick="aiFormOpen()">'
         + '<span class="ai-eg-t">Soạn giáo án cho khách mới</span>'
         + '<span class="ai-eg-s">Điền thông tin khách, không cần gõ prompt</span></button>'
+      + '<button type="button" class="ai-eg ai-eg-main" onclick="aiFormOpen(\'group\')">'
+        + '<span class="ai-eg-t">Soạn giáo án lớp nhóm</span>'
+        + '<span class="ai-eg-s">HYROX · Strength nhóm nhỏ · Circuit — điền số người, dụng cụ</span></button>'
       + ['Giáo án của Kem có hợp trình độ không',
           'Khách nào lâu chưa tập nhất',
           'Gợi ý bài thay cho Romanian Deadlift']
@@ -9277,6 +9393,7 @@ function _aiCard(m, i) {
   } else if (a.kind === 'create_client') {
     rows.push(['Tên', p.name]);
     rows.push(['Id', p.clientId]);
+    if (a.isGroup) rows.push(['Lớp nhóm', p.group || 'có']);
     rows.push(['Trình độ', p.level]);
     if (p.goal) rows.push(['Mục tiêu', p.goal]);
     rows.push(['Buổi/tuần', String(p.sessionsPerWeek)]);
@@ -9284,10 +9401,10 @@ function _aiCard(m, i) {
       ? (p.program || []).map((x) => x.day + ' (' + x.exercises + ')').join(', ') : 'chưa có']);
     // Gmail là ô nhập chứ không phải chữ: model hay quên truyền email vào
     // propose_new_client, và thiếu nó thì khách không đăng nhập được. Coach
-    // điền/sửa ngay trên thẻ trước khi bấm Đồng ý.
-    rows.push(['Gmail', null]);
+    // điền/sửa ngay trên thẻ trước khi bấm Đồng ý. Lớp nhóm không đăng nhập.
+    if (!a.isGroup) rows.push(['Gmail', null]);
   }
-  const title = a.kind === 'apply_program' ? 'Đẩy giáo án' : 'Tạo khách mới';
+  const title = a.kind === 'apply_program' ? 'Đẩy giáo án' : (a.isGroup ? 'Tạo lớp nhóm' : 'Tạo khách mới');
   const editable = !m.state || m.state === 'chờ' || String(m.state).indexOf('lỗi') === 0;
   const body = rows.map(([k, v]) => {
     if (v === null) {
@@ -9405,8 +9522,75 @@ function _aiNewClientForm() {
     + '</div></form>';
 }
 
-function aiFormOpen() {
-  _aiForm = true; aiPaint();
+// ── Form "Soạn giáo án lớp nhóm" ──────────────────────────────────────
+// Lớp = một hồ sơ isGroup (functions/assistant.js GROUP_METHOD). Cùng nút gửi
+// với form khách (aiFormSend), phân biệt bằng ô ẩn kind=group.
+const _AI_GF_FORMATS = [['hyrox', 'HYROX / conditioning'], ['strength', 'Strength nhóm nhỏ'], ['circuit', 'Circuit giảm mỡ']];
+function _aiGroupForm() {
+  const f = (label, ctrl, wide) => '<label class="ai-nf-f' + (wide ? ' wide' : '') + '">'
+    + '<span>' + label + '</span>' + ctrl + '</label>';
+  const opt = (arr, sel) => arr.map((v) => '<option' + (v === sel ? ' selected' : '') + '>' + escHtml(v) + '</option>').join('');
+  return '<form class="ai-nf" id="ai-nf" onsubmit="aiFormSend(event)" novalidate>'
+    + '<input type="hidden" name="kind" value="group">'
+    + '<div class="ai-nf-h">Giáo án lớp nhóm</div>'
+    + '<p class="ai-nf-sub">Một lớp = một hồ sơ trong app. Dụng cụ ghi kèm SỐ LƯỢNG để trợ lý chia trạm.</p>'
+    + '<div class="ai-nf-g">'
+      + f('Tên lớp *', '<input name="name" required autocomplete="off" placeholder="VD: HYROX sáng T3-T5">', true)
+      + f('Kiểu lớp *', '<select name="format">' + _AI_GF_FORMATS.map(([v, t]) => '<option value="' + v + '">' + escHtml(t) + '</option>').join('') + '</select>', true)
+      + f('Số người / buổi', '<input name="size" type="number" inputmode="numeric" min="2" max="40" placeholder="VD: 10">')
+      + f('Mỗi buổi', '<select name="dur">' + opt(['45 phút', '60 phút', '75 phút'], '60 phút') + '</select>')
+      + f('Buổi / tuần', '<select name="spw">' + opt(['1', '2', '3', '4', '5'], '2') + '</select>')
+      + f('Trình độ', '<select name="level">' + opt(['Mixed', 'Beginner', 'Intermediate', 'Advanced'], 'Mixed') + '</select>')
+      + f('Dụng cụ có sẵn *', '<textarea name="equipment" rows="3" required placeholder="VD: 3 SkiErg, 2 Row, 1 sled, 10 cặp tạ đơn 5–20 kg, 8 wall ball 6/9 kg, 6 KB 12–24 kg"></textarea>', true)
+      + f('Mục tiêu lớp', '<textarea name="goal" rows="2" placeholder="VD: chuẩn bị giải HYROX tháng 12, thể lực chung"></textarea>', true)
+      + f('Ghi chú / hạn chế', '<textarea name="notes" rows="2" placeholder="VD: phòng không có chỗ chạy — dùng máy chạy; nhiều học viên đau gối"></textarea>', true)
+    + '</div>'
+    + '<div class="ai-nf-err" id="ai-nf-err" role="alert"></div>'
+    + '<div class="ai-nf-btns">'
+      + '<button type="button" class="ai-cf-cancel" onclick="aiFormClose()">Huỷ</button>'
+      + '<button type="submit" class="ai-cf-yes">Soạn giáo án lớp</button>'
+    + '</div></form>';
+}
+
+/** Dữ liệu form lớp -> { prompt, show } hoặc { error }. Không đụng DOM, test được. */
+function aiBuildGroupPrompt(d) {
+  const v = (k) => String(d[k] == null ? '' : d[k]).trim();
+  const name = v('name'), fmt = v('format'), equip = v('equipment');
+  if (!name) return { error: 'Thiếu tên lớp.' };
+  const F = Object.fromEntries(_AI_GF_FORMATS);
+  if (!F[fmt]) return { error: 'Chọn kiểu lớp.' };
+  if (!equip) return { error: 'Ghi dụng cụ có sẵn (kèm số lượng) để trợ lý chia trạm.' };
+  const spw = Math.min(5, Math.max(1, parseInt(v('spw'), 10) || 2));
+  const size = parseInt(v('size'), 10);
+  const dur = parseInt(v('dur'), 10) || 60;
+  const keys = Array.from({ length: spw }, (_, i) => 'Session' + String.fromCharCode(65 + i)).join(', ');
+  const info = [
+    ['Tên lớp', name],
+    ['Kiểu lớp', F[fmt] + ' (groupFormat: ' + fmt + ')'],
+    ['Số người mỗi buổi', size > 0 ? String(size) : 'chưa rõ — giả định 8–10 và nói ra'],
+    ['Thời lượng', dur + ' phút'],
+    ['Số buổi/tuần', String(spw)],
+    ['Trình độ', v('level') || 'Mixed'],
+    ['Dụng cụ', equip],
+    ['Mục tiêu', v('goal')],
+    ['Ghi chú / hạn chế', v('notes')],
+  ].filter(([, x]) => x).map(([k, x]) => '- ' + k + ': ' + x).join('\n');
+  const rules = [
+    'Soạn giáo án LỚP NHÓM ' + spw + ' buổi/tuần theo mục LỚP NHÓM trong chỉ dẫn. Khoá buổi: ' + keys + '.',
+    'Chia trạm / theo cặp / theo lượt dựa đúng SỐ dụng cụ ở trên và số người; mỗi khối chạy bằng một đồng hồ.',
+    'Mỗi bài chính có 3 mức Dễ / Chuẩn / Khó trong cue. Tổng thời gian khớp ' + dur + ' phút, tính cả chuyển trạm.',
+    'In bảng từng buổi kèm dòng Setup (dụng cụ chuẩn bị), rồi gọi propose_new_client MỘT lần với isGroup: true, '
+      + 'groupFormat "' + fmt + '"' + (size > 0 ? ', groupSize ' + size : '') + ', durationMin ' + dur
+      + ', equipment như trên, level "' + (v('level') || 'Mixed') + '", KHÔNG email, kèm giáo án.',
+  ];
+  const prompt = 'Lớp nhóm mới:\n' + info + '\n\nYêu cầu:\n' + rules.map((r, i) => (i + 1) + '. ' + r).join('\n');
+  const show = 'Soạn giáo án lớp nhóm: ' + name + ' · ' + F[fmt] + (size > 0 ? ' · ' + size + ' người' : '')
+    + ' · ' + spw + ' buổi/tuần';
+  return { prompt, show, email: '' };
+}
+
+function aiFormOpen(kind) {
+  _aiForm = kind === 'group' ? 'group' : 'client'; aiPaint();
   setTimeout(() => { const i = document.querySelector('#ai-nf [name="name"]'); if (i) i.focus(); }, 60);
 }
 function aiFormClose() { _aiForm = false; aiPaint(); }
@@ -9444,8 +9628,9 @@ function aiBuildProgramPrompt(d) {
 
   const rules = [
     'Soạn giáo án ' + spw + ' buổi/tuần cho khách mới này. Khoá buổi: ' + keys + '.',
-    'Mỗi buổi chia phase (Warmup → bài chính → phụ trợ/Core), vừa thời lượng ' + (v('dur') || '60 phút') + '.',
-    'Mỗi bài có setsReps, tempo, cue (kỹ thuật + nghỉ bao lâu). Chỉ dùng bài CÓ trong thư viện — không chắc thì search_exercises.',
+    'Theo đúng khung phương pháp của studio (volume theo trình độ, rep theo mục tiêu, chia buổi, tăng tạ, deload).',
+    'Mỗi buổi chia pha theo tag warmup → strength → accessories → circuit (nếu cần), vừa thời lượng ' + (v('dur') || '60 phút') + '.',
+    'Mỗi bài có setsReps, tempo, cue (kỹ thuật + nghỉ bao lâu). Tên bài pha strength/accessories ĐÚNG Y tên search_exercises trả về.',
     'Chọn bài theo đúng dụng cụ ở nơi tập, và tránh/thay bài động vào chỗ chấn thương nếu có.',
     'In bảng giáo án từng buổi cho tao xem, kèm 2–3 câu giải thích vì sao chia như vậy.',
     'Rồi gọi propose_new_client MỘT lần, kèm luôn giáo án vừa soạn' + (email ? ' và Gmail ' + email : '') + ', để tao duyệt.',
@@ -9465,7 +9650,8 @@ function aiFormSend(ev) {
   if (_aiBusy) return;
   const form = document.getElementById('ai-nf');
   if (!form) return;
-  const r = aiBuildProgramPrompt(Object.fromEntries(new FormData(form).entries()));
+  const data = Object.fromEntries(new FormData(form).entries());
+  const r = data.kind === 'group' ? aiBuildGroupPrompt(data) : aiBuildProgramPrompt(data);
   if (r.error) {
     const e = document.getElementById('ai-nf-err');
     if (e) e.textContent = r.error;
@@ -9976,7 +10162,7 @@ async function renderCoachDashboard() {
     d.setHours(0,0,0,0);
     weeks.forEach(w => { if (d >= w.start && d < w.end) w.sessions++; });
     if (s.volumeByMuscle) {
-      Object.entries(s.volumeByMuscle).forEach(([m, v]) => {
+      Object.entries(sessionMuscleSets(s)).forEach(([m, v]) => {
         muscleVolMap[m] = (muscleVolMap[m] || 0) + v;
       });
     }
@@ -10019,7 +10205,7 @@ async function renderCoachDashboard() {
           <div class="cd-muscle-row">
             <span class="cd-muscle-rank">#${i+1}</span>
             <span class="cd-muscle-name">${m}</span>
-            <span class="cd-muscle-vol">${v.toFixed(1)} vol</span>
+            <span class="cd-muscle-vol">${v.toFixed(1)} set</span>
           </div>`).join('')}
       </div>
     </div>` : ''}
@@ -12464,6 +12650,7 @@ h1 span{color:#8FDBFF;}
 .phase-flow-strength .exercise-node{border-left:2px solid rgba(63,63,61,0.65);}
 .phase-flow-accessories .exercise-node{border-left:2px solid rgba(100,200,220,0.45);}
 .phase-flow-core .exercise-node{border-left:2px solid rgba(143,219,255,0.55);}
+.phase-flow-circuit .exercise-node{border-left:2px solid rgba(100,200,220,0.45);}
 .phase-note{font-size:11px;color:rgba(255,255,255,0.55);flex:1;}
 /* ── Trainer Note card ── */
 .trainer-note-card{display:flex;gap:10px;align-items:flex-start;background:oklch(18.4% 0.008 17.9/0.18);border:1px solid oklch(85.5% 0.090 229.5/0.25);border-radius:10px;padding:12px 14px;margin-top:8px;margin-bottom:4px;}

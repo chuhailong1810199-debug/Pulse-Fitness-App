@@ -12,13 +12,20 @@
  *   mình đáp  { type:"function_result", call_id, name, result }
  */
 const { canManageDoc, canViewDoc } = require("./authz.js");
+const { buildLibIndex, resolveProgram, PHASE_TAGS } = require("./program-lib.js");
 const { getFirestore } = require("firebase-admin/firestore");
 
 /** Trần số vòng gọi tool cho một câu hỏi. */
-const MAX_STEPS = 6;
+const MAX_STEPS = 8;   // soạn giáo án: đọc hồ sơ → tra thư viện → đề xuất → (sửa lỗi) → trả lời
 /** Mức suy luận: "minimal" | "low" | "medium" | "high". Xem chú thích ở vòng lặp. */
 const THINK_DISPATCH = "minimal";
 const THINK_COMPOSE = "low";
+/** Soạn / sửa giáo án: nghĩ sâu hơn — chậm vài giây, đổi lại chia volume, thứ tự bài chặt hơn. */
+const THINK_DESIGN = "medium";
+/** Câu hỏi nào tính là "soạn giáo án" — xem designIntent(). */
+const DESIGN_RE = /giáo\s*án|program|soạn|thiết\s*kế|lên\s*lịch\s*tập|buổi\s*tập|session|đổi\s*bài|thay\s*bài|lớp\s*nhóm|group\s*class/i;
+/** Kiểu lớp nhóm (clients.groupFormat). */
+const GROUP_FORMATS = ["hyrox", "strength", "circuit"];
 /** Trần số bản ghi mỗi tool trả về, để một câu hỏi không kéo cả kho dữ liệu. */
 const CAP = 40;
 
@@ -102,7 +109,8 @@ const TOOLS = [
     description:
       "Đề xuất đẩy một giáo án cho khách. KHÔNG ghi ngay — chỉ gửi cho coach duyệt, " +
       "coach bấm đồng ý thì mới lưu. Khoá buổi bắt buộc SessionA, SessionB… " +
-      "Gọi get_program trước để biết giáo án cũ, và nói rõ đổi những gì.",
+      "BẮT BUỘC gọi get_client, get_exercise_loads và get_program của khách này trước " +
+      "(server từ chối nếu chưa đọc; LỚP NHÓM chỉ cần get_client + get_program), và nói rõ đổi những gì.",
     parameters: {
       type: "object",
       properties: {
@@ -111,7 +119,8 @@ const TOOLS = [
           type: "object",
           description:
             "{ SessionA: { label, phases: [ { name, tag, exercises: " +
-            "[ { name, setsReps, tempo, cue } ] } ] } }",
+            "[ { name, setsReps, tempo, cue } ] } ] } }. tag CHỈ một trong: " + PHASE_TAGS.join(" | ") +
+            ". name phải là tên ĐÚNG Y như search_exercises trả về (pha warmup/circuit được dùng bài ngoài thư viện).",
         },
         summary: { type: "string", description: "một câu nói rõ thay đổi gì so với giáo án cũ" },
       },
@@ -137,6 +146,12 @@ const TOOLS = [
         sessionsPerWeek: { type: "integer", description: "1–7" },
         notes: { type: "string" },
         healthConditions: { type: "string", description: "chấn thương, bệnh lý coach vừa kể" },
+        isGroup: { type: "boolean",
+          description: "true = đây là LỚP NHÓM (một hồ sơ cho cả lớp), không phải một người. Lớp không có email." },
+        groupFormat: { type: "string", description: "Chỉ khi isGroup: " + GROUP_FORMATS.join(" | ") },
+        groupSize: { type: "integer", description: "Chỉ khi isGroup: số học viên thường có mặt (2–40)" },
+        durationMin: { type: "integer", description: "Chỉ khi isGroup: thời lượng một buổi lớp, phút" },
+        equipment: { type: "string", description: "Chỉ khi isGroup: dụng cụ có sẵn KÈM SỐ LƯỢNG, đúng như coach kể" },
         program: { type: "object", description: "giáo án ban đầu, cùng dạng propose_program" },
       },
       required: ["name"],
@@ -192,12 +207,38 @@ async function exerciseLibrary(db) {
 }
 
 /**
+ * Bộ khớp thư viện cho một lần đề xuất. Tên bài đang có trong giáo án cũ được
+ * GIỮ NGUYÊN (chỉ gắn muscles): lịch sử tạ nối theo tên bài, đổi tên là đứt.
+ * Thư viện đọc hỏng / rỗng → không chặn được gì, nên trả lỗi thay vì cho qua.
+ */
+async function libFor(db, oldProgram) {
+  const lib = await exerciseLibrary(db).catch(() => []);
+  if (!lib.length) {
+    return { errors: ["Không đọc được thư viện bài tập để kiểm tên bài. Thử lại sau."], resolve: null };
+  }
+  const names = [];
+  for (const day of Object.values(oldProgram || {})) {
+    for (const ph of (day && day.phases) || []) {
+      for (const x of (ph && ph.exercises) || []) if (x && x.name) names.push(String(x.name).trim());
+    }
+  }
+  const keep = new Set(names);
+  const idx = buildLibIndex(lib);
+  return { errors: [], resolve: (p) => resolveProgram(p, idx, { keepNames: keep }) };
+}
+
+/**
  * @param {object} role  vai trò người gọi từ authz.roleOf — { coach, admin, uid }.
  *   Hàm nền bỏ qua firestore.rules, nên mỗi tool phải tự lọc theo coach: coach
  *   B hỏi "giáo án của Cindy" (khách của A) phải nhận đúng câu như khi id không
  *   tồn tại — không lộ ai có thật.
  */
-async function runTool(name, args, role) {
+/**
+ * @param {object} [ctx]  trạng thái của MỘT lượt runAssistant: { read:{ "tool:clientId": true } }.
+ *   Có ctx thì propose_program đòi đã đọc hồ sơ + mức tạ của khách trong lượt này.
+ *   Gọi tool lẻ (test, script) không có ctx thì bỏ qua chốt đó.
+ */
+async function runTool(name, args, role, ctx) {
   const db = getFirestore();
   const a = args || {};
   if (!role || !role.coach) return { error: "Không xác định được coach đang hỏi." };
@@ -238,6 +279,7 @@ async function runTool(name, args, role) {
           lastWorkoutAt: iso(v.lastWorkoutAt),
           hasLogin: !!(v.email || "").trim(),
           programDays: Object.keys(v.program || {}).length,
+          isGroup: v.isGroup === true,
         };
       }),
     };
@@ -265,6 +307,11 @@ async function runTool(name, args, role) {
       notes: v.notes || null,
       lastWorkoutAt: iso(v.lastWorkoutAt),
       program: progSummary(v.program),
+      group: v.isGroup === true ? {
+        isGroup: true, format: v.groupFormat || null, size: num(v.groupSize),
+        durationMin: num(v.durationMin), equipment: v.equipment || null,
+        note: "Đây là LỚP NHÓM — soạn theo mục LỚP NHÓM trong chỉ dẫn, không theo khung 1-1.",
+      } : null,
       health: {
         conditions: health,
         medications: p ? (p.medications || null) : null,
@@ -375,20 +422,45 @@ async function runTool(name, args, role) {
   // bao giờ chạm được vào Firestore; việc ghi nằm ở callable riêng, chỉ chạy
   // khi coach đã bấm đồng ý. Model sai thì cùng lắm là một đề xuất xấu.
   if (name === "propose_program") {
+    // Soạn cho khách ĐÃ CÓ hồ sơ mà không đọc hồ sơ / mức tạ là soạn mù:
+    // không biết chấn thương, không biết tạ đang ở đâu. Chặn ở server — prompt
+    // nhắc thôi thì model vẫn có lúc bỏ qua.
+    const c0 = await db.collection("clients").doc(a.clientId).get();
+    const isGroup = c0.exists && (c0.data() || {}).isGroup === true;
+    if (ctx && ctx.read) {
+      // Lớp nhóm không có "mức tạ của khách" — mỗi học viên một mức — nên chỉ đòi hồ sơ lớp.
+      const need = isGroup ? ["get_client"] : ["get_client", "get_exercise_loads"];
+      const miss = need.filter((t) => !ctx.read[t + ":" + a.clientId]);
+      if (miss.length) {
+        return { rejected: true, errors: [`Chưa đọc ${miss.join(" và ")} của khách '${a.clientId}' trong lượt này. `
+          + "Gọi các tool đó, xem chấn thương và mức tạ hiện tại, rồi soạn lại và đề xuất."] };
+      }
+    }
     const v = validateProgram(a.program);
     if (!v.ok) return { rejected: true, errors: v.errors, note: "Giáo án chưa hợp lệ, sửa rồi đề xuất lại." };
     const c = await db.collection("clients").doc(a.clientId).get();
     if (!c.exists) return { rejected: true, errors: [`Không có khách id '${a.clientId}'.`] };
     const old = (c.data() || {}).program || {};
+    const lib = await libFor(db, old);
+    if (lib.errors.length) {
+      return { rejected: true, errors: lib.errors.slice(0, 12),
+        note: "Đổi các bài trên sang tên ĐÚNG Y trong thư viện (search_exercises), rồi đề xuất lại." };
+    }
+    const r = lib.resolve(a.program);
+    if (r.errors.length) {
+      return { rejected: true, errors: r.errors.slice(0, 12),
+        note: "Đổi các bài trên sang tên ĐÚNG Y trong thư viện (search_exercises), rồi đề xuất lại." };
+    }
     return {
       needsConfirm: true,
-      action: { kind: "apply_program", clientId: a.clientId, program: a.program },
+      action: { kind: "apply_program", clientId: a.clientId, program: r.program },
       preview: {
         client: (c.data() || {}).name || c.id,
         summary: a.summary || "",
         before: progSummary(old),
-        after: progSummary(a.program),
+        after: progSummary(r.program),
         exercises: v.stats.exercises,
+        renamed: r.renamed.slice(0, 20),
       },
       note: "Đã gửi cho coach duyệt. Nói cho coach biết thay đổi gì, rồi dừng — "
         + "đừng gọi lại tool này.",
@@ -411,29 +483,55 @@ async function runTool(name, args, role) {
           + `hai người chung địa chỉ là đọc ghi được dữ liệu của nhau.`] };
       }
     }
-    const id = makeClientId(a.name);
+    let program = a.program || {};
+    let renamed = [];
+    if (a.program && Object.keys(a.program).length) {
+      const lib = await libFor(db, {});
+      if (lib.errors.length) return { rejected: true, errors: lib.errors };
+      const r = lib.resolve(a.program);
+      if (r.errors.length) {
+        return { rejected: true, errors: r.errors.slice(0, 12),
+          note: "Đổi các bài trên sang tên ĐÚNG Y trong thư viện (search_exercises), rồi đề xuất lại." };
+      }
+      program = r.program; renamed = r.renamed;
+    }
+    const isGroup = a.isGroup === true;
+    const nm = isGroup ? groupName(a.name) : String(a.name).trim();
+    const group = isGroup ? {
+      isGroup: true,
+      groupFormat: a.groupFormat,
+      groupSize: a.groupSize != null ? Number(a.groupSize) : null,
+      durationMin: a.durationMin != null ? Number(a.durationMin) : null,
+      equipment: String(a.equipment || "").trim().slice(0, 500),
+    } : {};
+    const id = makeClientId(nm);
     return {
       needsConfirm: true,
       action: {
         kind: "create_client",
+        ...group,
         clientId: id,
-        name: String(a.name).trim(),
+        name: nm,
         level: a.level || "Beginner",
         goal: a.goal || "",
         sessionsPerWeek: Number(a.sessionsPerWeek) || 3,
         notes: a.notes || "",
         healthConditions: a.healthConditions || "",
         email: em,
-        program: a.program || {},
+        program,
       },
       preview: {
         clientId: id,
-        name: String(a.name).trim(),
+        name: nm,
+        group: isGroup ? `${GROUP_FORMAT_VI[a.groupFormat] || a.groupFormat}`
+          + (group.groupSize ? ` · ${group.groupSize} người` : "")
+          + (group.durationMin ? ` · ${group.durationMin} phút` : "") : null,
         level: a.level || "Beginner",
         goal: a.goal || "",
         sessionsPerWeek: Number(a.sessionsPerWeek) || 3,
-        program: a.program ? progSummary(a.program) : [],
-        login: em || "chưa có email — khách này coach tự quản",
+        program: a.program ? progSummary(program) : [],
+        renamed: renamed.slice(0, 20),
+        login: isGroup ? "lớp nhóm — không đăng nhập" : (em || "chưa có email — khách này coach tự quản"),
       },
       note: "Đã gửi cho coach duyệt. Nói cho coach biết sẽ tạo gì, rồi dừng.",
     };
@@ -448,6 +546,14 @@ async function runTool(name, args, role) {
 // qua được đây thì không có gì chạm tới Firestore. Thuần, không I/O, test được.
 
 const LEVELS = ["Beginner", "Intermediate", "Advanced"];
+/** Lớp nhóm: trình độ trộn lẫn là chuyện thường. */
+const GROUP_LEVELS = [...LEVELS, "Mixed"];
+const GROUP_FORMAT_VI = { hyrox: "HYROX / conditioning", strength: "Strength nhóm nhỏ", circuit: "Circuit giảm mỡ" };
+/** Tên lớp luôn bắt đầu bằng "Lớp · " để nhìn danh sách khách là phân biệt được. */
+function groupName(name) {
+  const n = String(name || "").trim();
+  return /^lớp\b/i.test(n) ? n : "Lớp · " + n;
+}
 
 /**
  * Địa chỉ -> khoá cho /clientEmails. Trả "" nếu không hợp lệ.
@@ -529,8 +635,18 @@ function validateNewClient(c) {
   const name = str(o.name);
   if (!name) e.push("Thiếu tên khách.");
   if (name.length > 60) e.push("Tên khách quá dài.");
-  if (o.level && !LEVELS.includes(o.level)) {
-    e.push(`Trình độ "${o.level}" không hợp lệ — chỉ nhận ${LEVELS.join(", ")}.`);
+  const levels = o.isGroup ? GROUP_LEVELS : LEVELS;
+  if (o.level && !levels.includes(o.level)) {
+    e.push(`Trình độ "${o.level}" không hợp lệ — chỉ nhận ${levels.join(", ")}.`);
+  }
+  if (o.isGroup) {
+    // Lớp là một hồ sơ cho nhiều người — không ai "đăng nhập bằng lớp".
+    if (str(o.email)) e.push("Lớp nhóm không có email — bỏ trống.");
+    if (!GROUP_FORMATS.includes(o.groupFormat)) e.push(`Kiểu lớp phải là ${GROUP_FORMATS.join(" | ")}.`);
+    const gs = Number(o.groupSize);
+    if (o.groupSize != null && (!Number.isInteger(gs) || gs < 2 || gs > 40)) e.push("Số học viên phải 2–40.");
+    const dm = Number(o.durationMin);
+    if (o.durationMin != null && (!Number.isInteger(dm) || dm < 20 || dm > 120)) e.push("Thời lượng lớp phải 20–120 phút.");
   }
   const spw = Number(o.sessionsPerWeek);
   if (o.sessionsPerWeek != null && (!Number.isInteger(spw) || spw < 1 || spw > 7)) {
@@ -561,6 +677,74 @@ function makeClientId(name, now) {
   return slug + "_" + (now || Date.now());
 }
 
+// ── Phương pháp soạn giáo án ─────────────────────────────────────────────
+//
+// KHUNG MẶC ĐỊNH (2026-10-12), viết theo khuyến nghị phổ biến hiện nay — chưa phải
+// nguyên tắc riêng của Long. Sửa thẳng đoạn này khi có quy tắc của studio; test
+// (tests/coach-assistant.test.js) chỉ kiểm có đủ 6 mục, không kiểm con số.
+const METHOD = `PHƯƠNG PHÁP SOẠN GIÁO ÁN (khung của studio — coach nói khác thì theo coach)
+1. VOLUME — số set LÀM VIỆC mỗi nhóm cơ chính mỗi TUẦN (bài nhóm cơ phụ tính nửa set; set khởi động không tính):
+   Beginner 6–10 · Intermediate 10–16 · Advanced 14–20. Một nhóm cơ không quá ~8–10 set làm việc trong một buổi.
+   Buổi 60 phút ≈ 15–22 set làm việc; tính ~2,5–3 phút mỗi set (gồm nghỉ) để khớp thời lượng.
+2. REP THEO MỤC TIÊU
+   - Sức mạnh: bài chính 3–6 rep × 3–5 set, nghỉ 2–3 phút; bài phụ 6–10 rep.
+   - Tăng cơ: 6–12 rep (bài cô lập 10–15), nghỉ 60–120 giây (bài chính tới 2–3 phút).
+   - Giảm mỡ: GIỮ tạ nặng như tăng cơ để giữ cơ; thêm 8–15 phút circuit/conditioning cuối buổi.
+     Không biến cả buổi thành cardio.
+   - Sức bền / HYROX: giữ 1–2 bài sức mạnh chính mỗi buổi, phần còn lại là interval/trạm.
+   - Độ gắng sức: Beginner để dư 2–3 rep (RIR 2–3), không tập tới thất bại bài nhiều khớp.
+     Intermediate/Advanced: bài chính RIR 1–3, bài cô lập được tới RIR 0–1.
+3. CHIA BUỔI
+   - 1–3 buổi/tuần → toàn thân mỗi buổi. 4 buổi → Trên/Dưới ×2. 5–6 buổi → Trên/Dưới + toàn thân,
+     hoặc Đẩy/Kéo/Chân. Mỗi nhóm cơ chính được tập ≥2 lần/tuần khi số buổi cho phép.
+   - Cả tuần phải đủ các mẫu chuyển động: gập gối (squat/lunge), gập hông (hinge), đẩy ngang, đẩy dọc,
+     kéo ngang, kéo dọc, core chống xoay/chống duỗi, một bài một chân hoặc carry.
+   - Đẩy : kéo ≈ 1 : 1 (kéo nhiều hơn nếu khách ngồi nhiều, gù, đau vai).
+4. THỨ TỰ BÀI TRONG BUỔI — đúng 4 tag pha, theo thứ tự:
+   warmup (5–10 phút: mobility + kích hoạt) → strength (bài nhiều khớp nặng nhất, bài power/nhảy trước khi mỏi)
+   → accessories (bài phụ, đơn khớp, core) → circuit (conditioning/finisher, nếu có).
+5. TĂNG TẠ — double progression: mọi set chạm ĐỈNH khoảng rep với kỹ thuật tốt → tăng mức nhỏ nhất
+   (thân trên +1–2,5 kg, thân dưới +2,5–5 kg) và quay về ĐÁY khoảng rep. Có mức tạ thật (get_exercise_loads)
+   thì ghi tạ khởi điểm / tạ tiếp theo vào cue, dựa trên số đó. Chưa có thì ghi "chọn tạ để còn dư 2–3 rep".
+6. DELOAD — mỗi 4–6 tuần (Beginner 6–8 tuần), hoặc sớm hơn khi tạ đứng/giảm 2 buổi liền, ngủ kém kéo dài,
+   đau khớp: 1 tuần giảm ~40–50% số set, giữ tạ hoặc giảm ~10%. Nêu lịch deload trong phần giải thích,
+   không tạo buổi riêng trừ khi coach yêu cầu.
+Chấn thương: tránh hoặc thay bài gây đau, giữ tải trong khoảng không đau, ghi rõ bài thay và vì sao.
+Dưới 18 tuổi: ưu tiên kỹ thuật, RIR 2–3, không test 1RM, không tập tới thất bại.
+Khi in giáo án: kèm một dòng tổng số set làm việc mỗi nhóm cơ chính trong tuần, để coach đối chiếu mục 1.`;
+
+// ── Lớp nhóm ────────────────────────────────────────────────────────────
+// Một hồ sơ clients có isGroup:true = MỘT LỚP. Giáo án dùng chung cho mọi
+// học viên có mặt, trình độ trộn lẫn, dụng cụ có hạn — khác hẳn soạn 1-1.
+const GROUP_METHOD = `LỚP NHÓM (hồ sơ có isGroup, hoặc coach nói "lớp", "group class")
+- Tạo lớp mới: propose_new_client với isGroup:true, groupFormat, groupSize, durationMin, equipment,
+  level "Mixed" nếu trình độ trộn. KHÔNG email. Sửa giáo án lớp: propose_program như khách (chỉ cần
+  get_client + get_program trước — lớp không có mức tạ chung).
+- MỘT giáo án cho cả lớp, trình độ trộn: mỗi bài chính ghi trong cue 3 mức "Dễ / Chuẩn / Khó"
+  (bài thay thế, biên độ, tạ, tốc độ). Không ghi tạ cố định — ghi RPE hoặc "tạ để dư 2–3 rep".
+- DỤNG CỤ THEO SỐ NGƯỜI: dụng cụ ít hơn số người thì chia TRẠM xoay vòng, làm THEO CẶP (một người làm
+  một người nghỉ/làm bài phụ), hoặc chia LƯỢT. Ghi rõ cách chia ở tên pha, ví dụ
+  "Trạm — 4 trạm × 3 người · đổi trạm mỗi 4 phút". Không xếp hai trạm dùng cùng dụng cụ khan hiếm.
+- ĐỒNG HỒ: mỗi khối chạy được bằng MỘT đồng hồ — EMOM, AMRAP, interval làm/nghỉ (40/20, 45/15),
+  vòng có giới hạn thời gian. Ghi setsReps theo dạng app đọc được: "1 × 12 phút EMOM", "1 × 10 phút AMRAP",
+  "8 vòng · 40s làm / 20s nghỉ", "4 vòng × 12", "3 × 250m". Ghi đồng hồ của khối trong tên pha.
+- THỜI LƯỢNG: warmup chung 8–10 phút → khối chính → finisher → giãn cơ 3–5 phút. Cộng đúng thời lượng
+  lớp, tính cả chuyển trạm (~1 phút mỗi lần đổi) và giải thích ngắn.
+- AN TOÀN: lớp đông (> 8 người một coach) không dùng bài kỹ thuật cao tải nặng (cử Olympic, test 1RM,
+  box jump cao); ưu tiên bài dễ hướng dẫn, dễ quan sát cả phòng.
+- THEO KIỂU LỚP:
+  · hyrox — chạy xen trạm (SkiErg, Row, Sled push/pull, Burpee Broad Jump, Farmer Carry, Sandbag Lunge,
+    Wall Ball): luyện "chạy khi đã mỏi" + một khối sức bền cơ ngắn (lunge/squat/hinge). Một buổi trong tuần
+    thiên aerobic nền (nói được câu ngắn), một buổi thiên tốc độ/ngưỡng.
+  · strength — nhóm nhỏ 3–6 người, cùng bài nhưng mỗi người tạ riêng: 1–2 bài chính nhiều khớp 3–5 × 3–8
+    (nghỉ 2–3 phút, dùng thời gian nghỉ cho bài phụ/mobility nhẹ), rồi superset phụ trợ. Theo khung PHƯƠNG
+    PHÁP ở trên cho rep và tăng tạ. Nhắc coach: muốn theo dõi tạ từng người thì mỗi người cần hồ sơ riêng.
+  · circuit — 6–10 trạm toàn thân, xen thân trên / thân dưới / core / cardio, 30–45s làm / 15–30s nghỉ,
+    2–4 vòng, RPE 7–8; không để hai trạm cùng nhóm cơ đứng liền nhau.
+- NHIỀU BUỔI/TUẦN: mỗi buổi một trọng tâm khác (chân / đẩy-kéo / engine…), không lặp y nguyên — nhưng
+  buổi nào cũng đủ toàn thân, vì học viên chỉ đi 1 buổi/tuần vẫn phải được tập trọn.
+- Khi in giáo án lớp: thêm dòng "Setup" (dụng cụ chuẩn bị theo số người) cho mỗi buổi.`;
+
 // ── Chỉ dẫn hệ thống ─────────────────────────────────────────────────────
 const SYSTEM = `Bạn là trợ lý của huấn luyện viên thể hình đang dùng app Pulse (studio của Long Chu).
 Chỉ nói về khách mà tool trả về — đó là khách của coach đang hỏi; tool báo "không có khách" thì nói đúng như vậy.
@@ -576,9 +760,20 @@ DỮ LIỆU
 GIÁO ÁN
 - Khoá buổi tập BẮT BUỘC là SessionA, SessionB, SessionC… Không bao giờ dùng Mon/Wed/Fri — định dạng đó
   làm app treo ở màn hình tải.
-- Mỗi bài có: name, setsReps ("3 × 8-10"), tempo ("3-1-1"), cue (ghi chú kỹ thuật và nghỉ bao lâu).
-- Chỉ gợi ý bài CÓ trong thư viện; không chắc thì gọi search_exercises để tra.
+- Mỗi bài có: name, setsReps ("3 × 8-10", bài một bên "3 × 10/bên", bài thời gian "3 × 30s"),
+  tempo ("3-1-1"), cue (ghi chú kỹ thuật và nghỉ bao lâu).
+- Tag pha CHỈ được là: warmup | strength | accessories | circuit.
+- Tên bài ở pha strength/accessories phải ĐÚNG Y tên search_exercises trả về, kể cả phần dụng cụ trong
+  ngoặc ("Goblet Squat (Dumbbell)", không phải "Goblet Squat"). Server khớp với thư viện, tự gắn nhóm cơ;
+  tên lạ hoặc mơ hồ bị trả lỗi kèm gợi ý — chọn lại từ gợi ý. Pha warmup/circuit được dùng bài ngoài thư viện.
+- Soạn/sửa giáo án cho khách ĐÃ CÓ hồ sơ: lượt đầu gọi CÙNG LÚC get_client, get_exercise_loads và
+  get_program của khách đó — xem chấn thương, mức tạ thật, giáo án cũ — rồi mới soạn. Server từ chối
+  propose_program nếu chưa đọc.
 - Soạn xong giáo án thì in ra bảng cho coach xem, VÀ gọi propose_program để gửi duyệt.
+
+${METHOD}
+
+${GROUP_METHOD}
 
 ĐỀ XUẤT THAY ĐỔI
 - Bạn KHÔNG ghi thẳng vào dữ liệu. Hai tool propose_program và propose_new_client chỉ gửi đề xuất;
@@ -598,6 +793,9 @@ AN TOÀN
 - Bạn không phải bác sĩ. Đau dai dẳng, khớp sưng, tê bì, chóng mặt → khuyên đi khám chuyên khoa.
   Đưa hướng điều chỉnh tập luyện thì được, chẩn đoán thì không.
 - Thấy dữ liệu đáng lo (nhịp tim nghỉ tăng vọt, mất ngủ kéo dài) thì nêu ra, kèm mức độ chắc chắn.`;
+
+/** Câu hỏi có phải là soạn / sửa giáo án không — quyết định mức suy luận. */
+function designIntent(text) { return DESIGN_RE.test(String(text || "")); }
 
 // ── Vòng lặp ─────────────────────────────────────────────────────────────
 /**
@@ -626,6 +824,9 @@ async function runAssistant({ client, model, messages, clientId, role }) {
 
   const toolLog = [];
   const pending = [];        // đề xuất chờ coach duyệt
+  const ctx = { read: {} };   // tool đọc đã chạy trong lượt này: { "get_client:cindy": true }
+  const lastUser = [...(messages || [])].reverse().find((m) => m.role !== "assistant");
+  let design = designIntent(lastUser && lastUser.text);
   let usage = null;
   let steps = 0;
 
@@ -642,7 +843,7 @@ async function runAssistant({ client, model, messages, clientId, role }) {
     // chỗ đánh đổi giữa nhanh và sâu, và nó nằm ở đúng một dòng.
     const interaction = await client.interactions.create({
       model, input, tools: TOOLS, system_instruction: SYSTEM,
-      generation_config: { thinking_level: steps === 1 ? THINK_DISPATCH : THINK_COMPOSE },
+      generation_config: { thinking_level: steps === 1 ? THINK_DISPATCH : design ? THINK_DESIGN : THINK_COMPOSE },
     });
     usage = interaction.usage || usage;
 
@@ -654,12 +855,18 @@ async function runAssistant({ client, model, messages, clientId, role }) {
     // Giữ nguyên các bước model sinh ra rồi mới nối kết quả — bỏ qua là model
     // mất dấu nó vừa hỏi gì, và sẽ gọi lại đúng tool đó mãi.
     input.push(...calls);
+    // Model tự đi tra thư viện / đề xuất giáo án = đang soạn, kể cả khi câu hỏi
+    // không nói thẳng "giáo án".
+    if (calls.some((c) => /^(search_exercises|propose_)/.test(c.name))) design = true;
     // Chạy SONG SONG. Model hay đòi 2–3 tool một lượt; chạy tuần tự thì thời
     // gian cộng dồn, mà chúng độc lập với nhau — đọc giáo án không phải chờ
     // đọc lịch sử tập xong.
     const results = await Promise.all(calls.map(async (c) => {
       try {
-        return await runTool(c.name, c.arguments, role);
+        const r = await runTool(c.name, c.arguments, role, ctx);
+        const cid = c.arguments && c.arguments.clientId;
+        if (cid && !c.name.startsWith("propose_") && r && !r.error && !r.rejected) ctx.read[c.name + ":" + cid] = true;
+        return r;
       } catch (e) {
         // Một tool hỏng không được làm chết cả câu trả lời: báo lỗi cho model,
         // để nó nói ra chỗ nào không đọc được thay vì im lặng bịa.
@@ -770,5 +977,5 @@ function buildMorningPush({ bookings, rec }) {
   return { title, body: lines.join("\n") };
 }
 
-module.exports = { TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, runTool, runAssistant, progSummary, shapeReply,
+module.exports = { TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, METHOD, GROUP_METHOD, GROUP_FORMATS, groupName, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, THINK_DESIGN, designIntent, runTool, runAssistant, progSummary, shapeReply,
   validateProgram, validateNewClient, makeClientId, LEVELS };

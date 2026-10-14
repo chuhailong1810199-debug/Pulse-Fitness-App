@@ -174,6 +174,54 @@ ok("muc suy luan duoc dat, khong de mac dinh (Gemini 3 nghi rat dai)", async () 
   }
 });
 
+ok("soan giao an: nghi muc DESIGN (medium) tu luot hai; hoi thuong van low", async () => {
+  assert.strictEqual(A.THINK_DESIGN, "medium");
+  const c = fakeClient([{ calls: [{ name: "list_clients" }] }, { text: "xong" }]);
+  await A.runAssistant({ client: c, model: "m", messages: [{ role: "user", text: "Soạn giáo án 3 buổi cho Kem" }] });
+  assert.strictEqual(c.seen[0].generation_config.thinking_level, A.THINK_DISPATCH);
+  assert.strictEqual(c.seen[1].generation_config.thinking_level, "medium");
+  const c2 = fakeClient([{ calls: [{ name: "list_clients" }] }, { text: "xong" }]);
+  await A.runAssistant({ client: c2, model: "m", messages: [{ role: "user", text: "Cindy tuần này tập mấy buổi?" }] });
+  assert.strictEqual(c2.seen[1].generation_config.thinking_level, A.THINK_COMPOSE);
+  // model tự đi tra thư viện = đang soạn, dù câu hỏi không nói "giáo án"
+  const c3 = fakeClient([{ calls: [{ name: "search_exercises", args: { query: "row" } }] }, { text: "xong" }]);
+  await A.runAssistant({ client: c3, model: "m", messages: [{ role: "user", text: "đổi giúp bài kéo" }] });
+  assert.strictEqual(c3.seen[1].generation_config.thinking_level, "medium");
+});
+ok("khung phuong phap nam trong chi dan: du 6 muc + tag + doc ho so truoc", () => {
+  for (const k of ["1. VOLUME", "2. REP THEO MỤC TIÊU", "3. CHIA BUỔI", "4. THỨ TỰ BÀI", "5. TĂNG TẠ", "6. DELOAD"]) {
+    assert(A.METHOD.includes(k), "thieu muc: " + k);
+  }
+  assert(A.SYSTEM.includes(A.METHOD), "METHOD phai nam trong SYSTEM");
+  assert(/warmup \| strength \| accessories \| circuit/.test(A.SYSTEM));
+  assert(/get_client, get_exercise_loads và\s+get_program/.test(A.SYSTEM));
+});
+ok("propose_program khai bao: bat buoc doc ho so truoc, ten dung thu vien", () => {
+  const t = A.TOOLS.find((x) => x.name === "propose_program");
+  assert(/get_client, get_exercise_loads và get_program/.test(t.description));
+  assert(/ĐÚNG Y/.test(t.parameters.properties.program.description));
+});
+
+// ── Lớp nhóm (2026-10-13) ──
+ok("lop nhom: kieu lop, so nguoi, thoi luong duoc kiem; KHONG email; level Mixed chi cho lop", () => {
+  assert(A.validateNewClient({ name: "HYROX sáng", isGroup: true, groupFormat: "hyrox", groupSize: 10, durationMin: 60, level: "Mixed" }).ok);
+  assert(!A.validateNewClient({ name: "X", isGroup: true, groupFormat: "yoga" }).ok, "kieu lop la phai bi chan");
+  assert(!A.validateNewClient({ name: "X", isGroup: true, groupFormat: "circuit", email: "a@gmail.com" }).ok, "lop co email phai bi chan");
+  assert(!A.validateNewClient({ name: "X", isGroup: true, groupFormat: "circuit", groupSize: 100 }).ok);
+  assert(!A.validateNewClient({ name: "X", level: "Mixed" }).ok, "khach 1-1 khong dung Mixed");
+});
+ok("ten lop luon co tien to 'Lop ·'", () => {
+  assert.strictEqual(A.groupName("HYROX sáng T3"), "Lớp · HYROX sáng T3");
+  assert.strictEqual(A.groupName("Lớp boxing tối"), "Lớp boxing tối");
+});
+ok("chi dan + tool khai bao lop nhom", () => {
+  assert(A.SYSTEM.includes(A.GROUP_METHOD));
+  for (const k of ["DỤNG CỤ THEO SỐ NGƯỜI", "ĐỒNG HỒ", "Dễ / Chuẩn / Khó", "hyrox", "strength", "circuit"]) assert(A.GROUP_METHOD.includes(k), k);
+  const t = A.TOOLS.find((x) => x.name === "propose_new_client").parameters.properties;
+  for (const k of ["isGroup", "groupFormat", "groupSize", "durationMin", "equipment"]) assert(t[k], "thieu tham so " + k);
+  assert(A.designIntent("soạn giáo án lớp nhóm HYROX"));
+});
+
 ok("thu vien bai tap co cache, khong doc 360 bai moi lan", () => {
   const src = fs.readFileSync(path.join(__dirname, "..", "functions", "assistant.js"), "utf8");
   assert(/function exerciseLibrary/.test(src), "thieu ham cache thu vien");
@@ -289,7 +337,8 @@ ok("emailKey luon ve chu thuong — chi muc phan biet hoa thuong", () => {
 ok("ghi email PHAI chiem chi muc TRUOC, va lui lai duoc", () => {
   const src = fs.readFileSync(path.join(__dirname, "..", "functions", "index.js"), "utf8");
   const i = src.indexOf('act.kind === "create_client"');
-  const blk = src.slice(i, i + 3000);
+  // Cắt tới hết khối tạo khách (không theo độ dài cố định — thêm trường mới là trượt).
+  const blk = src.slice(i, src.indexOf("[coachApply] tạo khách", i));
   const claim = blk.indexOf('collection("clientEmails")');
   const write = blk.indexOf("ref.set({");
   assert(claim > -1, "khong chiem chi muc /clientEmails");
