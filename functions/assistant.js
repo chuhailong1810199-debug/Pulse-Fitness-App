@@ -118,8 +118,10 @@ const TOOLS = [
         program: {
           type: "object",
           description:
-            "{ SessionA: { label, phases: [ { name, tag, exercises: " +
-            "[ { name, setsReps, tempo, cue } ] } ] } }. tag CHỈ một trong: " + PHASE_TAGS.join(" | ") +
+            "{ SessionA: { label, focus, phases: [ { name, tag, exercises: " +
+            "[ { name, setsReps, tempo, cue, why } ] } ] } }. focus = 1–2 câu vì sao buổi này chia như vậy; " +
+            "why = 1 câu vì sao chọn bài này cho CHÍNH khách này (BẮT BUỘC ở pha strength/accessories). " +
+            "tag CHỈ một trong: " + PHASE_TAGS.join(" | ") +
             ". name phải là tên ĐÚNG Y như search_exercises trả về (pha warmup/circuit được dùng bài ngoài thư viện).",
         },
         summary: { type: "string", description: "một câu nói rõ thay đổi gì so với giáo án cũ" },
@@ -451,6 +453,11 @@ async function runTool(name, args, role, ctx) {
       return { rejected: true, errors: r.errors.slice(0, 12),
         note: "Đổi các bài trên sang tên ĐÚNG Y trong thư viện (search_exercises), rồi đề xuất lại." };
     }
+    const why = checkRationale(r.program);
+    if (why.length) {
+      return { rejected: true, errors: why.slice(0, 12),
+        note: "Thêm focus cho mỗi buổi và why cho mỗi bài chính/phụ (lý do cho CHÍNH khách này), rồi đề xuất lại." };
+    }
     return {
       needsConfirm: true,
       action: { kind: "apply_program", clientId: a.clientId, program: r.program },
@@ -492,6 +499,11 @@ async function runTool(name, args, role, ctx) {
       if (r.errors.length) {
         return { rejected: true, errors: r.errors.slice(0, 12),
           note: "Đổi các bài trên sang tên ĐÚNG Y trong thư viện (search_exercises), rồi đề xuất lại." };
+      }
+      const why = checkRationale(r.program);
+      if (why.length) {
+        return { rejected: true, errors: why.slice(0, 12),
+          note: "Thêm focus cho mỗi buổi và why cho mỗi bài chính/phụ, rồi đề xuất lại." };
       }
       program = r.program; renamed = r.renamed;
     }
@@ -622,6 +634,32 @@ function validateProgram(prog) {
 }
 
 /**
+ * Lý do chọn bài phải ĐƯỢC LƯU cùng giáo án (2026-10-15). Không lưu thì vài
+ * ngày sau khách hỏi "sao tập bài này", trợ lý chỉ dựng lại được một lý do nghe
+ * hợp lý — không phải lý do thật lúc chọn. Chỉ áp cho đề xuất của trợ lý;
+ * coachApply/giáo án cũ không bị chặn vì thiếu.
+ */
+function checkRationale(prog) {
+  const e = [];
+  for (const [dk, day] of Object.entries(prog || {})) {
+    if (!day || typeof day !== "object") continue;
+    const focus = str(day.focus);
+    if (!focus) e.push(`${dk}: thiếu "focus" — 1–2 câu vì sao buổi này chia như vậy.`);
+    else if (focus.length > 400) e.push(`${dk}: "focus" quá dài (tối đa 400 ký tự).`);
+    for (const ph of day.phases || []) {
+      const t = String((ph && ph.tag) || "");
+      if (t !== "strength" && t !== "accessories") continue;
+      for (const x of (ph && ph.exercises) || []) {
+        const why = str(x && x.why);
+        if (!why) e.push(`${dk} — "${str(x && x.name) || "?"}": thiếu "why" (1 câu vì sao chọn bài này cho khách này).`);
+        else if (why.length > 280) e.push(`${dk} — "${str(x.name)}": "why" quá dài (tối đa 280 ký tự).`);
+      }
+    }
+  }
+  return e;
+}
+
+/**
  * Kiểm hồ sơ khách mới.
  *
  * email BẮT BUỘC rỗng. Khách coach tự quản mang `email: ''`, KHÔNG bao giờ
@@ -745,6 +783,33 @@ const GROUP_METHOD = `LỚP NHÓM (hồ sơ có isGroup, hoặc coach nói "lớ
   buổi nào cũng đủ toàn thân, vì học viên chỉ đi 1 buổi/tuần vẫn phải được tập trọn.
 - Khi in giáo án lớp: thêm dòng "Setup" (dụng cụ chuẩn bị theo số người) cho mỗi buổi.`;
 
+// ── Giải thích + chỉnh buổi theo thể trạng ──────────────────────────────
+const EXPLAIN_METHOD = `GIẢI THÍCH LÝ DO CHỌN BÀI
+- Mỗi giáo án đề xuất phải có "focus" cho từng buổi và "why" cho từng bài pha strength/accessories:
+  MỘT câu, nói vì sao bài này cho CHÍNH khách này — gắn với mục tiêu, chấn thương, trình độ, dụng cụ,
+  mức tạ/lịch sử của họ. Không viết câu chung chung kiểu "bài tốt cho chân".
+- Coach (hoặc khách qua coach) hỏi "vì sao tập bài X": gọi get_program, trả lời TỪ "why"/"focus" đã lưu,
+  nói rõ đó là lý do đã ghi lúc soạn. Bài không có "why" thì nói thẳng "giáo án không lưu lý do cho bài này"
+  rồi mới đưa suy luận, ghi rõ là suy luận. KHÔNG được nói như thể đó là lý do gốc.
+- Coach muốn bài viết gửi khách: viết giọng thân thiện, ngắn, không thuật ngữ, xưng "mình/bạn".
+
+CHỈNH BUỔI THEO THỂ TRẠNG HÔM NAY (khách mệt, ngủ kém, ốm, đau…)
+- Đọc trước: get_client (tuổi, bệnh lý), get_program (buổi coach đang mở / buổi sắp tập), get_exercise_loads,
+  get_recovery (nếu có dữ liệu đồng hồ), get_training_history (tải gần đây). Coach chưa nói rõ triệu chứng thì
+  hỏi lại MỘT câu ngắn (đau ở đâu, mức mấy/10, ngủ mấy tiếng, có sốt không) thay vì đoán.
+- Nguyên tắc:
+  · Sốt, ốm toàn thân (dưới cổ: ho sâu, đau mình, tiêu hoá), đau ngực, chóng mặt, khó thở → HỦY buổi, nghỉ,
+    khuyên đi khám nếu kéo dài. Không có "tập nhẹ cho ra mồ hôi".
+  · Cảm nhẹ trên cổ (sổ mũi, nghẹt mũi) không sốt → tập nhẹ: giảm ~30–50% số set, bỏ finisher/HIIT, RPE ≤ 6.
+  · Ngủ kém / stress / mệt chung → GIỮ bài, giảm tạ ~10–20% hoặc bớt 1 set mỗi bài, RIR +1–2, bỏ bài tối đa.
+  · Đau cơ sau tập (DOMS) → giữ buổi, nhóm cơ đang đau tập nhẹ hoặc đổi sang nhóm khác.
+  · Đau khớp/điểm cụ thể → đổi bài sang biến thể KHÔNG đau (đổi góc, biên độ, dụng cụ, một bên), luật
+    "đau ≤ 3/10 và không tăng sáng hôm sau"; đau nhói, sưng, tê bì → dừng phần đó, khuyên khám chuyên khoa.
+  · Dưới 18 tuổi: thận trọng hơn một bậc.
+- Trả lời bằng bảng "Bài | Giáo án | Hôm nay | Vì sao", rồi 1–2 câu dặn theo dõi.
+- Đây là chỉnh CHO HÔM NAY: KHÔNG gọi propose_program (giáo án gốc giữ nguyên). Chỉ đề xuất đổi giáo án hẳn
+  khi coach yêu cầu rõ, hoặc vấn đề kéo dài nhiều buổi.`;
+
 // ── Chỉ dẫn hệ thống ─────────────────────────────────────────────────────
 const SYSTEM = `Bạn là trợ lý của huấn luyện viên thể hình đang dùng app Pulse (studio của Long Chu).
 Chỉ nói về khách mà tool trả về — đó là khách của coach đang hỏi; tool báo "không có khách" thì nói đúng như vậy.
@@ -761,7 +826,8 @@ GIÁO ÁN
 - Khoá buổi tập BẮT BUỘC là SessionA, SessionB, SessionC… Không bao giờ dùng Mon/Wed/Fri — định dạng đó
   làm app treo ở màn hình tải.
 - Mỗi bài có: name, setsReps ("3 × 8-10", bài một bên "3 × 10/bên", bài thời gian "3 × 30s"),
-  tempo ("3-1-1"), cue (ghi chú kỹ thuật và nghỉ bao lâu).
+  tempo ("3-1-1"), cue (ghi chú kỹ thuật và nghỉ bao lâu), why (vì sao chọn bài này cho khách này).
+  Mỗi buổi có label và focus. Xem mục GIẢI THÍCH LÝ DO CHỌN BÀI.
 - Tag pha CHỈ được là: warmup | strength | accessories | circuit.
 - Tên bài ở pha strength/accessories phải ĐÚNG Y tên search_exercises trả về, kể cả phần dụng cụ trong
   ngoặc ("Goblet Squat (Dumbbell)", không phải "Goblet Squat"). Server khớp với thư viện, tự gắn nhóm cơ;
@@ -774,6 +840,8 @@ GIÁO ÁN
 ${METHOD}
 
 ${GROUP_METHOD}
+
+${EXPLAIN_METHOD}
 
 ĐỀ XUẤT THAY ĐỔI
 - Bạn KHÔNG ghi thẳng vào dữ liệu. Hai tool propose_program và propose_new_client chỉ gửi đề xuất;
@@ -807,12 +875,13 @@ function designIntent(text) { return DESIGN_RE.test(String(text || "")); }
  * @param {object} o.role       vai trò người gọi (authz.roleOf) — mọi tool lọc theo nó
  * @returns {Promise<{text:string, toolLog:Array, steps:number, usage:object}>}
  */
-async function runAssistant({ client, model, messages, clientId, role }) {
+async function runAssistant({ client, model, messages, clientId, role, day }) {
   const input = [];
   if (clientId) {
+    const d = /^Session[A-G]$/.test(String(day || "")) ? `, buổi đang mở: ${day}` : "";
     input.push({
       type: "user_input",
-      content: [{ type: "text", text: `(Coach đang mở hồ sơ khách: ${clientId})` }],
+      content: [{ type: "text", text: `(Coach đang mở hồ sơ khách: ${clientId}${d})` }],
     });
   }
   for (const m of messages || []) {
@@ -977,5 +1046,5 @@ function buildMorningPush({ bookings, rec }) {
   return { title, body: lines.join("\n") };
 }
 
-module.exports = { TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, METHOD, GROUP_METHOD, GROUP_FORMATS, groupName, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, THINK_DESIGN, designIntent, runTool, runAssistant, progSummary, shapeReply,
+module.exports = { TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, METHOD, GROUP_METHOD, EXPLAIN_METHOD, checkRationale, GROUP_FORMATS, groupName, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, THINK_DESIGN, designIntent, runTool, runAssistant, progSummary, shapeReply,
   validateProgram, validateNewClient, makeClientId, LEVELS };

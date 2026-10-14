@@ -64,9 +64,24 @@ const ok = (n, f) => cases.push([n, f]);
   await db.doc("exercises/1").set({ name: "Goblet Squat (Dumbbell)", tool: "Dumbbell", muscles: { QUADS: "P", GLUTES: "S" } });
   await db.doc("exercises/2").set({ name: "Goblet Squat (Kettlebell)", tool: "Kettlebell", muscles: { QUADS: "P", GLUTES: "S" } });
   await db.doc("exercises/3").set({ name: "Lat Pulldown", tool: "Cable", muscles: { LATS: "P", BICEPS: "S" } });
-  const newProg = (name) => ({ SessionA: { label: "A", phases: [
+  const newProg = (name, why = "lý do cho khách này") => ({ SessionA: { label: "A", focus: "trọng tâm buổi", phases: [
     { name: "Warm-up", tag: "Warm-up", exercises: [{ name: "Cat-cow", setsReps: "1 × 10" }] },
-    { name: "Main", tag: "main", exercises: [{ name, setsReps: "3 × 8" }] }] } });
+    { name: "Main", tag: "main", exercises: [{ name, setsReps: "3 × 8", ...(why ? { why } : {}) }] }] } });
+  ok("thieu why / focus -> tu choi, noi ro thieu gi (2026-10-15)", async () => {
+    const r = await A.runTool("propose_program", { clientId: "cindy", program: newProg("Lat Pulldown", "") }, RA,
+      { read: { "get_client:cindy": true, "get_exercise_loads:cindy": true } });
+    assert(r.rejected && r.errors.some((e) => /thiếu "why"/.test(e)), JSON.stringify(r));
+    const p2 = newProg("Lat Pulldown"); delete p2.SessionA.focus;
+    const r2 = await A.runTool("propose_new_client", { name: "Khach Y", program: p2 }, RA);
+    assert(r2.rejected && r2.errors.some((e) => /thiếu "focus"/.test(e)), JSON.stringify(r2));
+  });
+  ok("why/focus duoc giu nguyen trong action de luu cung giao an", async () => {
+    const r = await A.runTool("propose_program", { clientId: "cindy", program: newProg("Lat Pulldown", "kéo dọc cho lưng Cindy") }, RA,
+      { read: { "get_client:cindy": true, "get_exercise_loads:cindy": true } });
+    assert(r.needsConfirm, JSON.stringify(r));
+    assert.strictEqual(r.action.program.SessionA.focus, "trọng tâm buổi");
+    assert.strictEqual(r.action.program.SessionA.phases[1].exercises[0].why, "kéo dọc cho lưng Cindy");
+  });
   ok("propose_program trong luot tro ly: CHUA doc get_client/get_exercise_loads -> tu choi", async () => {
     const r = await A.runTool("propose_program", { clientId: "cindy", program: newProg("Lat pull down") }, RA, { read: {} });
     assert(r.rejected && /get_client và get_exercise_loads/.test(r.errors[0]), JSON.stringify(r));

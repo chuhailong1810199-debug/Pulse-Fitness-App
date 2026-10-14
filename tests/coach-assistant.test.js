@@ -222,6 +222,40 @@ ok("chi dan + tool khai bao lop nhom", () => {
   assert(A.designIntent("soạn giáo án lớp nhóm HYROX"));
 });
 
+// ── Lý do chọn bài + chỉnh buổi theo thể trạng (2026-10-15) ──
+ok("checkRationale: focus moi buoi, why moi bai strength/accessories; warmup/circuit khong bat", () => {
+  const p = { SessionA: { focus: "f", phases: [
+    { tag: "warmup", exercises: [{ name: "w" }] },
+    { tag: "strength", exercises: [{ name: "s", why: "vì" }] },
+    { tag: "circuit", exercises: [{ name: "c" }] }] } };
+  assert.deepStrictEqual(A.checkRationale(p), []);
+  p.SessionA.phases[1].exercises[0].why = "";
+  assert(A.checkRationale(p).some((e) => /thiếu "why"/.test(e)));
+  delete p.SessionA.focus;
+  assert(A.checkRationale(p).some((e) => /thiếu "focus"/.test(e)));
+  assert(A.checkRationale({ SessionA: { focus: "x".repeat(401), phases: [] } }).some((e) => /quá dài/.test(e)));
+});
+ok("chi dan: giai thich tu why da luu, khong bia; chinh buoi khong doi giao an goc", () => {
+  assert(A.SYSTEM.includes(A.EXPLAIN_METHOD));
+  for (const k of ["TỪ \"why\"/\"focus\" đã lưu", "KHÔNG được nói như thể đó là lý do gốc", "HỦY buổi",
+    "KHÔNG gọi propose_program", "Bài | Giáo án | Hôm nay | Vì sao"]) assert(A.EXPLAIN_METHOD.includes(k), k);
+  assert(/why/.test(A.TOOLS.find((t) => t.name === "propose_program").parameters.properties.program.description));
+});
+ok("buoi dang mo duoc bao cho model cung voi khach", async () => {
+  const c = fakeClient([{ text: "ok" }]);
+  await A.runAssistant({ client: c, model: "m", messages: [{ role: "user", text: "x" }], clientId: "cindy", day: "SessionB" });
+  assert(/cindy, buổi đang mở: SessionB/.test(JSON.stringify(c.seen[0].input[0])));
+  const c2 = fakeClient([{ text: "ok" }]);
+  await A.runAssistant({ client: c2, model: "m", messages: [{ role: "user", text: "x" }], clientId: "cindy", day: "<script>" });
+  assert(!/buổi đang mở/.test(JSON.stringify(c2.seen[0].input[0])), "day la khong duoc lot vao prompt");
+});
+ok("coachAssistant luu chat theo khach chi khi thread:true va da qua assertCanView", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "functions", "index.js"), "utf8");
+  const f = src.slice(src.indexOf("exports.coachAssistant"), src.indexOf("exports.", src.indexOf("exports.coachAssistant") + 10));
+  assert(/if \(clientId && request\.data && request\.data\.thread === true\)/.test(f));
+  assert(f.indexOf("assertCanView") < f.indexOf('collection("aiChat")'), "phai kiem quyen truoc khi ghi");
+});
+
 ok("thu vien bai tap co cache, khong doc 360 bai moi lan", () => {
   const src = fs.readFileSync(path.join(__dirname, "..", "functions", "assistant.js"), "utf8");
   assert(/function exerciseLibrary/.test(src), "thieu ham cache thu vien");

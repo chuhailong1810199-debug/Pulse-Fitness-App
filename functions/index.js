@@ -3336,20 +3336,37 @@ exports.coachAssistant = onCall(
     }
 
     const { runAssistant, shapeReply } = require("./assistant.js");
+    // Khách đang mở trên màn hình — chỉ báo cho model nếu coach này xem được
+    // khách đó; không thì bỏ, tool cũng sẽ từ chối.
+    const clientId = await (async () => {
+      const id = request.data && request.data.clientId;
+      if (!id) return null;
+      try { await authz.assertCanView(request, String(id)); return String(id); } catch (_e) { return null; }
+    })();
     try {
       const r = await runAssistant({
         client,
         model: GEMINI_MODEL,
         messages,
-        // Khách đang mở trên màn hình — chỉ báo cho model nếu coach này quản lý
-        // khách đó; không thì bỏ, tool cũng sẽ từ chối.
-        clientId: await (async () => {
-          const id = request.data && request.data.clientId;
-          if (!id) return null;
-          try { await authz.assertCanView(request, String(id)); return String(id); } catch (_e) { return null; }
-        })(),
+        clientId,
+        day: request.data && request.data.day,
         role,
       });
+      // Chat THEO KHÁCH (thread:true): lưu câu hỏi + trả lời vào
+      // clients/{id}/aiChat để lần sau mở lại vẫn còn — kể cả lý do đã giải thích.
+      // Chỉ hàm nền ghi (luật cấm máy khách ghi); coach của khách + admin đọc.
+      // Khách KHÔNG đọc được: đây là trao đổi nội bộ của coach về khách.
+      if (clientId && request.data && request.data.thread === true) {
+        const last = messages[messages.length - 1] || {};
+        const col = getFirestore().collection("clients").doc(clientId).collection("aiChat");
+        const now = Date.now();
+        const clip = (t) => String(t || "").slice(0, 8000);
+        await Promise.all([
+          col.add({ role: "user", text: clip(last.text), show: clip(request.data.show || "") || null,
+            at: new Date(now), by: role.uid || null }),
+          col.add({ role: "assistant", text: clip(r.text), at: new Date(now + 1), by: role.uid || null }),
+        ]).catch((e) => console.warn("[coachAssistant] không lưu được chat:", e.message));
+      }
       const u = r.usage || {};
       console.log(`[coachAssistant] ${r.steps} vòng, ${r.toolLog.length} tool `
         + `(${r.toolLog.map((t) => t.name).join(", ") || "không"}), `

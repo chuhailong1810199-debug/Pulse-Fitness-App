@@ -987,6 +987,7 @@ function afterClientChange() {
   if (tab) tab.style.display = billingOn() ? '' : 'none';
   if (!billingOn() && document.getElementById('billing-page')?.classList.contains('active')) showPage('workout');
   renderAccessAlert();
+  if (typeof aiOnClientChange === 'function') aiOnClientChange();
 }
 
 async function observeCoach(uid) {
@@ -2759,6 +2760,7 @@ function cdHeadHTML(c, isCoach, keys) {
     + '<h1 class="cd-h1">' + cdEsc(c.name) + '</h1>' + (sub ? '<p class="cd-sub">' + sub + '</p>' : '')
     + '<div class="cd-badges">' + b.map(function (x) { return '<span class="cd-badge' + (x[0] ? ' ' + x[0] : '') + '">' + x[1] + '</span>'; }).join('') + '</div></div></div>'
     + (keys.length ? '<button class="cd-goto" type="button" onclick="showPage(\'workout\')">' + (isCoach ? 'Mở giáo án để sửa' : 'Mở giáo án') + '</button>' : '')
+    + (isCoach && typeof aiOpen === 'function' ? '<button class="cd-goto cd-ask-ai" type="button" onclick="aiOpen(\'client\')">Hỏi AI về khách này</button>' : '')
     + '</header>';
 }
 
@@ -4890,6 +4892,14 @@ function renderExercises() {
     </div>`;
   }
 
+  // Trọng tâm buổi (trường focus) — vì sao buổi này chia như vậy.
+  const _focus = (getProgram()[activeDay] || {}).focus;
+  if (_focus) {
+    // Ngay dưới tiêu đề buổi (div đầu tiên của html), trên danh sách pha.
+    const cut = html.indexOf('</div>') + 6;
+    html = html.slice(0, cut) + '<div class="day-focus"><span class="day-focus-k">Trọng tâm buổi</span>' + escHtml(_focus) + '</div>' + html.slice(cut);
+  }
+
   // Prepend "done strip" if there are done exercises being hidden
   const doneKeys  = Object.entries(exerciseState[activeClient.id] || {}).filter(([,v])=>v).map(([k])=>k);
   const dayDoneKeys = doneKeys.filter(k => k.startsWith(activeClient.id+'_'+activeDay+'_'));
@@ -5371,6 +5381,12 @@ function openModal(pi, ei) {
   document.getElementById('modal-setsreps').textContent  = ex.setsReps;
   document.getElementById('modal-tempo').textContent     = ex.tempo || '—';
   document.getElementById('modal-cue').textContent       = ex.cue   || '—';
+  // Lý do chọn bài — lưu cùng giáo án (trường why), khách và coach đều xem được.
+  const whyWrap = document.getElementById('modal-why-wrap');
+  if (whyWrap) {
+    whyWrap.style.display = ex.why ? '' : 'none';
+    document.getElementById('modal-why').textContent = ex.why || '';
+  }
 
   // Store pi/ei for edit/delete actions
   const modalEl = document.getElementById('modal');
@@ -9244,7 +9260,54 @@ function schedFindRender(q) {
 // Trợ lý KHÔNG tự ghi. Nó dựng đề xuất, app hiện thẻ có trước/sau, coach bấm
 // Đồng ý thì callable coachApply mới lưu. Câu chào phải nói đúng điều đó —
 // để coach tưởng đã lưu mà thật ra chưa, là kiểu hiểu nhầm tốn nhiều thời gian nhất.
-let _aiMsgs = [];          // [{role:'user'|'assistant', text}]
+let _aiMsgs = [];          // [{role:'user'|'assistant', text}] — trỏ vào luồng đang mở
+// Hai chế độ (2026-10-15): "Chung" hỏi gì cũng được, không lưu; "theo khách"
+// gắn với khách đang mở — lưu ở clients/{id}/aiChat (hàm nền ghi), mở lại vẫn
+// còn, kể cả lý do chọn bài đã giải thích. Mỗi khách một luồng riêng.
+let _aiMode = 'general';
+const _aiThreads = { general: _aiMsgs };
+const _aiThreadLoaded = {};
+function _aiKey() { return _aiMode === 'client' && activeClient ? 'c:' + activeClient.id : 'general'; }
+function _aiPoint() {
+  const k = _aiKey();
+  _aiMsgs = _aiThreads[k] || (_aiThreads[k] = []);
+}
+async function _aiLoadThread() {
+  if (_aiMode !== 'client' || !activeClient) return;
+  const id = activeClient.id, k = 'c:' + id;
+  if (_aiThreadLoaded[k]) return;
+  _aiThreadLoaded[k] = true;
+  try {
+    const snap = await getDocs(query(collection(db, 'clients', id, 'aiChat'), orderBy('at', 'desc'), limit(30)));
+    const old = snap.docs.map((d) => d.data()).reverse()
+      .map((m) => (m.show ? { role: m.role, text: m.text, show: m.show } : { role: m.role, text: m.text }));
+    const t = _aiThreads[k] || (_aiThreads[k] = []);
+    t.unshift(...old);
+  } catch (e) { console.warn('[trợ lý] không nạp được lịch sử chat:', e.code || e.message); }
+  if (_aiKey() === k) { _aiPoint(); aiPaint(); }
+}
+function aiSetMode(m) {
+  _aiMode = m === 'client' && activeClient ? 'client' : 'general';
+  _aiForm = false;
+  _aiPoint(); _aiTabs(); aiPaint(); _aiLoadThread();
+}
+function _aiTabs() {
+  const t = document.getElementById('ai-tabs');
+  if (!t) return;
+  const name = activeClient ? (activeClient.name || activeClient.id) : '';
+  t.innerHTML = '<button type="button" aria-pressed="' + (_aiMode === 'general') + '" onclick="aiSetMode(\'general\')">Chung</button>'
+    + (activeClient ? '<button type="button" aria-pressed="' + (_aiMode === 'client') + '" onclick="aiSetMode(\'client\')">'
+      + escHtml(name) + '</button>' : '');
+  const who = document.getElementById('ai-who');
+  if (who) who.textContent = _aiMode === 'client' ? 'lưu lại · chỉ coach xem' : (activeClient ? 'đang xem: ' + name : '');
+}
+/** Đổi khách khi khung đang mở: chế độ "theo khách" chuyển sang luồng của khách mới. */
+function aiOnClientChange() {
+  if (!document.getElementById('ai-sheet')) return;
+  if (!activeClient && _aiMode === 'client') _aiMode = 'general';
+  _aiPoint(); _aiTabs();
+  if (document.getElementById('ai-sheet').classList.contains('open')) { aiPaint(); _aiLoadThread(); }
+}
 let _aiBusy = false;
 
 function aiMount() {
@@ -9261,7 +9324,7 @@ function aiMount() {
     + '<circle cx="8.5" cy="12" r="1.1" fill="currentColor"/>'
     + '<circle cx="12" cy="12" r="1.1" fill="currentColor"/>'
     + '<circle cx="15.5" cy="12" r="1.1" fill="currentColor"/></svg>';
-  fab.onclick = aiOpen;
+  fab.onclick = () => aiOpen();
   document.body.appendChild(fab);
 
   const sheet = document.createElement('div');
@@ -9277,6 +9340,7 @@ function aiMount() {
       + '<span class="ai-who" id="ai-who"></span>'
       + '<button class="ai-x" type="button" aria-label="Đóng" onclick="aiClose()">✕</button>'
     + '</div>'
+    + '<div class="ai-tabs" id="ai-tabs" role="group" aria-label="Chế độ chat"></div>'
     + '<div class="ai-log" id="ai-log"></div>'
     + '<form class="ai-bar" id="ai-bar" onsubmit="aiSend(event)">'
       + '<input class="ai-in" id="ai-in" autocomplete="off" '
@@ -9286,14 +9350,16 @@ function aiMount() {
   document.body.appendChild(sheet);
 }
 
-function aiOpen() {
+function aiOpen(mode) {
   const s = document.getElementById('ai-sheet');
   if (!s) return;
   s.classList.add('open');
   document.getElementById('ai-fab').classList.add('hidden');
-  const who = document.getElementById('ai-who');
-  if (who) who.textContent = activeClient ? ('đang xem: ' + (activeClient.name || activeClient.id)) : '';
-  if (!_aiMsgs.length) aiPaint();
+  if (mode === 'client' || mode === 'general') _aiMode = mode;
+  if (_aiMode === 'client' && !activeClient) _aiMode = 'general';
+  _aiPoint(); _aiTabs();
+  aiPaint();
+  _aiLoadThread();
   setTimeout(() => { const i = document.getElementById('ai-in'); if (i) i.focus(); }, 220);
 }
 function aiClose() {
@@ -9347,8 +9413,24 @@ function _aiFmt(t) {
 function aiPaint() {
   const log = document.getElementById('ai-log');
   if (!log) return;
+  if (_aiForm === 'ready') { log.innerHTML = _aiReadyForm(); log.scrollTop = 0; return; }
   if (_aiForm && !_aiMsgs.length) {
     log.innerHTML = _aiForm === 'group' ? _aiGroupForm() : _aiNewClientForm(); log.scrollTop = 0; return;
+  }
+  if (_aiMode === 'client' && activeClient && !_aiMsgs.length) {
+    const nm = escHtml(activeClient.name || activeClient.id);
+    log.innerHTML = '<div class="ai-hi">'
+      + '<p>Hỏi về <b>' + nm + '</b>. Tao đọc hồ sơ, giáo án, mức tạ và lịch sử tập của khách này trước khi trả lời.</p>'
+      + '<p class="ai-hi-note">Luồng chat này được <b>lưu lại</b> — mở lại vẫn còn. Chỉ coach của khách (và admin) xem được, khách không thấy.</p>'
+      + '<button type="button" class="ai-eg ai-eg-main" onclick="aiFormOpen(\'ready\')">'
+        + '<span class="ai-eg-t">Hôm nay khách không khoẻ — chỉnh buổi</span>'
+        + '<span class="ai-eg-s">Ngủ kém, mệt, ốm, đau ở đâu… → bảng chỉnh buổi hôm nay</span></button>'
+      + ['Vì sao chọn từng bài trong buổi ' + (activeDay || 'đang mở') + '?',
+         'Viết đoạn ngắn giải thích giáo án hiện tại để gửi khách',
+         'Khách tiến bộ thế nào 4 tuần qua? Có nên tăng tạ không?']
+        .map((q) => '<button type="button" class="ai-eg" onclick="aiAsk(this.textContent)">' + escHtml(q) + '</button>').join('')
+      + '</div>';
+    return;
   }
   if (!_aiMsgs.length) {
     log.innerHTML = '<div class="ai-hi">'
@@ -9591,8 +9673,55 @@ function aiBuildGroupPrompt(d) {
   return { prompt, show, email: '' };
 }
 
+// ── Form "Hôm nay khách không khoẻ" (chế độ theo khách) ─────────────
+const _AI_RF_STATES = ['Ngủ kém', 'Mệt / stress', 'Cảm nhẹ (mũi, họng)', 'Sốt / ốm toàn thân', 'Đau mỏi cơ sau tập', 'Đau khớp / chấn thương'];
+function _aiReadyForm() {
+  const nm = escHtml((activeClient && (activeClient.name || activeClient.id)) || '');
+  const days = Object.keys(getProgram() || {}).sort();
+  return '<form class="ai-nf" id="ai-nf" onsubmit="aiFormSend(event)" novalidate>'
+    + '<input type="hidden" name="kind" value="ready">'
+    + '<div class="ai-nf-h">Hôm nay ' + nm + ' thế nào?</div>'
+    + '<p class="ai-nf-sub">Trợ lý chỉnh buổi CHO HÔM NAY — giáo án gốc giữ nguyên.</p>'
+    + '<div class="ai-nf-g">'
+      + '<div class="ai-nf-f wide"><span>Tình trạng</span><div class="ai-rf-chips">'
+        + _AI_RF_STATES.map((t, i) => '<label class="ai-rf-chip"><input type="checkbox" name="st' + i + '" value="' + escHtml(t) + '"><span>' + escHtml(t) + '</span></label>').join('')
+      + '</div></div>'
+      + '<label class="ai-nf-f"><span>Buổi định tập</span><select name="day">' + days.map((d) => '<option' + (d === activeDay ? ' selected' : '') + '>' + escHtml(d) + '</option>').join('') + '</select></label>'
+      + '<label class="ai-nf-f"><span>Mức đau (0–10)</span><input name="pain" type="number" inputmode="numeric" min="0" max="10" placeholder="—"></label>'
+      + '<label class="ai-nf-f wide"><span>Đau ở đâu / mô tả</span><input name="where" autocomplete="off" placeholder="VD: vai phải khi đẩy qua đầu; ngủ 4 tiếng"></label>'
+      + '<label class="ai-nf-f wide"><span>Ghi chú thêm</span><textarea name="notes" rows="2" placeholder="VD: hôm qua đá bóng 90 phút"></textarea></label>'
+    + '</div>'
+    + '<div class="ai-nf-err" id="ai-nf-err" role="alert"></div>'
+    + '<div class="ai-nf-btns">'
+      + '<button type="button" class="ai-cf-cancel" onclick="aiFormClose()">Huỷ</button>'
+      + '<button type="submit" class="ai-cf-yes">Chỉnh buổi hôm nay</button>'
+    + '</div></form>';
+}
+/** Dữ liệu form thể trạng -> { prompt, show } hoặc { error }. Không đụng DOM. */
+function aiBuildReadyPrompt(d, clientName) {
+  const v = (k) => String(d[k] == null ? '' : d[k]).trim();
+  const st = Object.keys(d).filter((k) => /^st\d+$/.test(k)).map((k) => v(k)).filter(Boolean);
+  const pain = v('pain') === '' ? null : Math.max(0, Math.min(10, parseInt(v('pain'), 10) || 0));
+  if (!st.length && !v('where') && !v('notes')) return { error: 'Chọn ít nhất một tình trạng hoặc ghi mô tả.' };
+  const day = v('day');
+  const info = [
+    ['Tình trạng', st.join(', ')],
+    ['Mức đau', pain == null ? '' : pain + '/10'],
+    ['Vị trí / mô tả', v('where')],
+    ['Ghi chú', v('notes')],
+    ['Buổi định tập', day],
+  ].filter(([, x]) => x).map(([k, x]) => '- ' + k + ': ' + x).join('\n');
+  const prompt = 'Hôm nay ' + clientName + ' không ở trạng thái tốt:\n' + info + '\n\n'
+    + 'Chỉnh buổi ' + (day || 'hôm nay') + ' theo mục CHỈNH BUỔI THEO THỂ TRẠNG HÔM NAY: đọc hồ sơ, giáo án, mức tạ '
+    + '(và dữ liệu hồi phục nếu có) trước. In bảng Bài | Giáo án | Hôm nay | Vì sao. KHÔNG đổi giáo án gốc.';
+  const show = 'Hôm nay ' + clientName + ': ' + (st.join(', ') || v('where') || v('notes'))
+    + (pain != null ? ' · đau ' + pain + '/10' : '') + (day ? ' · ' + day : '');
+  return { prompt, show, email: '' };
+}
+
 function aiFormOpen(kind) {
-  _aiForm = kind === 'group' ? 'group' : 'client'; aiPaint();
+  if (kind === 'ready' && _aiMode !== 'client') { _aiMode = 'client'; _aiPoint(); _aiTabs(); }
+  _aiForm = kind === 'group' ? 'group' : kind === 'ready' ? 'ready' : 'client'; aiPaint();
   setTimeout(() => { const i = document.querySelector('#ai-nf [name="name"]'); if (i) i.focus(); }, 60);
 }
 function aiFormClose() { _aiForm = false; aiPaint(); }
@@ -9653,7 +9782,9 @@ function aiFormSend(ev) {
   const form = document.getElementById('ai-nf');
   if (!form) return;
   const data = Object.fromEntries(new FormData(form).entries());
-  const r = data.kind === 'group' ? aiBuildGroupPrompt(data) : aiBuildProgramPrompt(data);
+  const r = data.kind === 'group' ? aiBuildGroupPrompt(data)
+    : data.kind === 'ready' ? aiBuildReadyPrompt(data, (activeClient && (activeClient.name || activeClient.id)) || 'khách')
+    : aiBuildProgramPrompt(data);
   if (r.error) {
     const e = document.getElementById('ai-nf-err');
     if (e) e.textContent = r.error;
@@ -9679,6 +9810,7 @@ async function aiSend(ev, text, show) {
   if (text == null) input.value = '';
   _aiForm = false;
   _aiMsgs.push(show ? { role: 'user', text: q, show } : { role: 'user', text: q });
+  const thread = _aiMsgs;      // trả lời về đúng luồng đã hỏi, kể cả khi coach đổi tab giữa chừng
   _aiBusy = true;
   aiPaint();
 
@@ -9691,6 +9823,10 @@ async function aiSend(ev, text, show) {
       messages: _aiMsgs.filter((m) => m.role === 'user' || m.role === 'assistant')
         .map((m) => ({ role: m.role, text: m.text })),
       clientId: activeClient ? activeClient.id : null,
+      day: activeDay || null,
+      // Chế độ theo khách: hàm nền lưu câu hỏi + trả lời vào clients/{id}/aiChat.
+      thread: _aiMode === 'client' && !!activeClient,
+      show: show || null,
     });
     const d = res.data || {};
     // Tên tool KHÔNG hiện lên màn hình nữa — coach không cần biết nó gọi hàm
@@ -9699,7 +9835,7 @@ async function aiSend(ev, text, show) {
     if (d.toolLog && d.toolLog.length) {
       console.info('[trợ lý] đã tra:', d.toolLog.map((t) => t.name).join(', '));
     }
-    _aiMsgs.push({ role: 'assistant', text: d.text || '(không có trả lời)' });
+    thread.push({ role: 'assistant', text: d.text || '(không có trả lời)' });
     // Đề xuất thay đổi dữ liệu: dựng thẻ duyệt riêng. Trợ lý KHÔNG tự ghi —
     // chưa bấm Đồng ý thì chưa có gì xuống Firestore.
     for (const p of (d.pending || [])) {
@@ -9707,11 +9843,11 @@ async function aiSend(ev, text, show) {
       if (p.action && p.action.kind === 'create_client' && !p.action.email && _aiFormEmail) {
         p.action.email = _aiFormEmail;
       }
-      _aiMsgs.push({ role: 'confirm', action: p.action, preview: p.preview, state: 'chờ' });
+      thread.push({ role: 'confirm', action: p.action, preview: p.preview, state: 'chờ' });
     }
   } catch (e) {
     console.warn('[aiSend]', e);
-    _aiMsgs.push({ role: 'assistant', text: '⚠ ' + (e.message || e) });
+    thread.push({ role: 'assistant', text: '⚠ ' + (e.message || e) });
   } finally {
     _aiBusy = false;
     aiPaint();
@@ -14430,6 +14566,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
       <div><div class="modal-label">Tempo</div><div class="modal-value" id="modal-tempo"></div></div>
     </div>
     <div><div class="modal-label">Coaching Cue</div><div class="modal-value" id="modal-cue"></div></div>
+    <div id="modal-why-wrap" style="display:none"><div class="modal-label">Vì sao bài này</div><div class="modal-value modal-why" id="modal-why"></div></div>
     <div id="modal-strength-history" style="display:none;margin-top:1rem;"></div>
     <div class="modal-actions">
       <button class="modal-close" onclick="closeModal('modal')">Close</button>
@@ -16520,6 +16657,11 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 #cdash-page .cd-badge{display:inline-flex;align-items:center;min-height:26px;padding:0 10px;border-radius:999px;border:1px solid var(--cd-line);font-size:12px;font-weight:700;color:rgba(255,255,255,.8)}
 #cdash-page .cd-badge.cd-ok{color:var(--good,#7ED9A0);border-color:rgba(126,217,160,.35)}
 #cdash-page .cd-badge.cd-warn{color:var(--cd-amber);border-color:rgba(230,179,74,.4)}
+#cdash-page .cd-ask-ai{ background: transparent !important; color: #fff !important; border: 1px solid rgba(143,219,255,.5) !important; }
+.day-focus{ margin: 0 0 12px; padding: 12px 14px; border-radius: 14px; border: 1px solid rgba(143,219,255,.22);
+  background: rgba(143,219,255,.06); color: rgba(255,255,255,.86); font-size: 13.5px; line-height: 1.45; }
+.day-focus-k{ display: block; margin-bottom: 4px; color: #8FDBFF; font-size: 10.5px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.modal-why{ color: rgba(255,255,255,.88); line-height: 1.45; }
 #cdash-page .cd-goto{flex:none;min-height:46px;padding:0 20px;border-radius:999px;border:0;background:var(--accent-strong,#1C90FF);color:var(--on-accent,#161111);font:800 14px 'Figtree',sans-serif;cursor:pointer}
 #cdash-page .cd-goto:focus-visible{outline:2px solid #fff;outline-offset:2px}
 @media (max-width:519.98px){#cdash-page .cd-goto{flex:1 1 100%}}
@@ -16988,6 +17130,16 @@ body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-even
 #ai-sheet:has(.ai-wait) .ai-glow{ opacity: 1; }
 
 /* ── Thanh đầu ───────────────────────────────────────────────── */
+#ai-sheet .ai-tabs{ position: relative; z-index: 1; flex: none; display: flex; gap: 6px; padding: 0 16px 8px; overflow-x: auto; }
+#ai-sheet .ai-tabs:empty{ display: none; }
+#ai-sheet .ai-tabs button{ flex: none; min-height: 34px; padding: 0 14px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14);
+  background: transparent; color: var(--ai-mut); font: 700 13px 'Figtree',sans-serif; cursor: pointer; max-width: 60vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#ai-sheet .ai-tabs button[aria-pressed="true"]{ background: rgba(143,219,255,.14); border-color: var(--ai-acc); color: #fff; }
+#ai-sheet .ai-rf-chips{ display: flex; flex-wrap: wrap; gap: 6px; }
+#ai-sheet .ai-rf-chip{ position: relative; display: inline-flex; align-items: center; min-height: 36px; padding: 0 12px; border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.16); cursor: pointer; font-size: 13px; font-weight: 600; }
+#ai-sheet .ai-rf-chip input{ position: absolute; opacity: 0; pointer-events: none; }
+#ai-sheet .ai-rf-chip:has(input:checked){ background: rgba(143,219,255,.16); border-color: var(--ai-acc); color: #fff; }
 #ai-sheet .ai-head{
   position: relative; z-index: 1; flex: none;
   display: flex; align-items: center; gap: 10px;
