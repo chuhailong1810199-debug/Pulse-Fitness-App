@@ -2638,24 +2638,71 @@ var CD_REGION_VI = {
   'teres': 'cơ tròn lớn', 'rotator': 'chóp xoay', 'erectors': 'cơ dựng sống'
 };
 
-// ── Body figure: front + back, simple shapes, one SVG ───────────────────
-// [region|null, 'e', cx,cy,rx,ry,rot, center] · [region, 'r', x,y,w,h,r, center] · [region, 'p', d, center]
-// Drawn for the figure's left side and mirrored around x=50 unless center is 1. null = not a muscle.
+// ── Body figure: anatomical, A-pose, front + back faces ─────────────────
+// [region|null, 'e', cx,cy,rx,ry,rot, center] · [region, 'p', d, center]
+// Drawn for the figure's left half and mirrored around x=50 unless center is 1. null = not a muscle
+// (head, hands, shins…): it becomes .cd-rg-n and also feeds the soft outline (.cd-halo). List order = paint order.
+var CD_BASE = [
+  [null,'p','M44,28.6 Q37,30.4 31.4,33.2 L33.6,46 Q36.2,62 38.2,79 Q37,87 35,94 L49.9,101 L49.9,28.6 Z'],
+  [null,'p','M33.6,40 Q29,40 27.6,44 Q24,55 21,67.4 Q16.6,82 11,98.4 L15.8,100 Q22,86 26.6,72 Q31.6,60 34.4,48 Z'],
+  [null,'p','M11,98.4 Q14.6,98.6 15.8,101 Q15.4,107 14.2,111.4 Q11.8,115.6 8.6,113.4 Q7.2,109 7.6,103.4 Q8.6,99.4 11,98.4 Z'],
+  [null,'p','M35,93.6 Q42,94 49.9,101 L49.4,122 Q48,134 47.4,142 Q47.8,160 46.4,181 L41.2,181 Q39.6,162 38.6,142 Q34.6,126 34.2,108 Q34.2,99 35,93.6 Z'],
+  [null,'p','M41.2,180.4 L46.6,180.4 Q47.8,185.6 47.4,190 L39.4,190 Q38.8,185 41.2,180.4 Z'],
+  [null,'p','M45.4,19.6 L54.6,19.6 L56.4,31 L43.6,31 Z',1],
+  [null,'e',50,13,7,8.8,0,1]
+];
 var CD_FIG = {
-  f: [[null,'e',50,13,8.5,10.5,0,1],[null,'r',46,22,8,8,3,1],['delt-s','e',23.2,43.5,3.6,7.2,-10],['delt-f','e',31,40.5,4.4,6.6,-18],
-      ['chest','e',42.4,44,7.4,7,0],['biceps','e',20.6,60,4.2,8.8,8],['forearm','e',16.8,81,3.6,10,10],[null,'e',14.6,97.5,3,4.5,8],
-      ['abs','r',43.5,53,13,34,5,1],['obliques','e',37.4,70,3.6,13,0],[null,'p','M36,89 L64,89 Q66,95 62,101 L38,101 Q34,95 36,89 Z',1],
-      ['quads','e',40,122,7,18.5,-3],['adductors','e',47.8,107,2,9,0],[null,'e',40.5,145.5,4.6,3.6,0],[null,'e',40.5,166,4.2,14,0],[null,'e',40,185,5,2.8,0]],
-  b: [[null,'e',50,13,8.5,10.5,0,1],[null,'r',46,22,8,8,3,1],['traps','p','M50,23 L63,33.5 L56,37.2 L50,40 L44,37.2 L37,33.5 Z',1],
-      ['traps-lo','p','M50,40.6 L53.4,46 L50,66 L46.6,46 Z',1],['delt-s','e',23.2,43.5,3.6,7.2,-10],['delt-r','e',31,40.5,4.4,6.6,-18],
-      ['rotator','e',37.3,47.6,3.8,4.8,0],['rhomboids','p','M46.2,42.6 L46.2,55 L42.2,51.6 L41.8,44.2 Z'],['teres','e',32.4,54.2,3.4,2.4,-25],
-      ['lats','p','M32.6,57.4 Q38.5,58.8 44.4,59.6 L44.4,79 Q38.6,77 35.4,71 Q32.6,64 32.6,57.4 Z'],['erectors','r',45.4,67,3.8,24,1.9],
-      ['triceps','e',20.6,60,4.2,8.8,8],['forearm','e',16.8,81,3.6,10,10],[null,'e',14.6,97.5,3,4.5,8],['glutes','e',42.2,99,7.8,8,0],
-      ['hams','e',40.4,126.5,6.8,16,-3],[null,'e',40.5,146.5,4.6,3.6,0],['calves','e',40.4,166,5,12.5,0],[null,'e',40.5,181.5,2.6,4.5,0],[null,'e',40,186.5,5,2.8,0]]
+  f: CD_BASE.concat([
+    [null,'p','M38.4,89 L61.6,89 Q60,99 52.6,104 L47.4,104 Q40,99 38.4,89 Z',1],
+    [null,'e',43,141.6,3.2,3.4,0],
+    ['obliques','p','M38.2,52 Q41.4,52.6 43.8,53.4 L43.6,72 Q44,84 45.6,92 Q40.6,89 37.8,84 Q36.4,76 37.2,64 Q37.4,57 38.2,52 Z'],
+    ['abs','p','M44.6,52.4 Q47,51.6 50,52 Q53,51.6 55.4,52.4 L56,72 Q55.8,84 54,92 Q50,96 46,92 Q44.2,84 44,72 Z',1],
+    ['chest','p','M49.6,34 Q42,32.5 35.8,33.5 Q36.6,37 35.8,40 Q34.6,43 33.6,45.5 Q37,47 40,50 Q45,52.6 49.6,51.4 Z'],
+    ['biceps','p','M30.2,47.6 Q33,52 31,60 Q28.6,67 25.6,70 Q23,69 22.6,66 Q23.6,57 26,50 Q27.6,47 30.2,47.6 Z'],
+    ['delt-s','p','M30,31.5 Q25,33 24.5,40 Q25,46 28.5,49 L29.5,47.5 Q27.2,42 27.6,37 Q28.6,33 31.5,31.6 Z'],
+    ['delt-f','p','M31.6,31.4 Q28.4,33 28,38 Q28.2,43.6 30.4,48.4 Q34,44 36.2,39 Q37,34.5 34.6,31.6 Q33,31 31.6,31.4 Z'],
+    ['forearm','p','M21,67.8 Q26.6,69.6 26.2,74 Q23,87 15.6,99.6 Q12.8,100 11,98.6 Q14,84 18.6,72 Q19.4,68.4 21,67.8 Z'],
+    ['quads','p','M35.2,96 Q41,95.6 47.4,101 Q48,114 47.2,128 Q46.6,137 44.4,140.4 Q40.6,140.6 38.6,138.6 Q35.4,126 34.8,112 Q34.6,102 35.2,96 Z'],
+    ['adductors','p','M47.6,101.4 Q50,102.4 49.9,106 Q49.4,116 47.2,124 Q45.6,113 46,104.4 Q46.4,101.6 47.6,101.4 Z']
+  ]),
+  b: CD_BASE.concat([
+    ['traps','p','M50,19.6 Q47.4,25 44,28 Q38,30.6 32.6,31.6 Q37,35.6 43.6,37.6 L50,38.6 Z'],
+    ['rhomboids','p','M49.6,38.6 L44.2,37.8 Q42.8,42.6 43.8,48.6 Q47,47 49.6,45.6 Z'],
+    ['traps-lo','p','M50,45.6 Q46.4,47.4 43.8,49 Q46.8,58.6 50,67.4 Z'],
+    ['delt-s','p','M30,31.5 Q25,33 24.5,40 Q25,46 28.5,49 L29.5,47.5 Q27.2,42 27.6,37 Q28.6,33 31.5,31.6 Z'],
+    ['delt-r','p','M34.6,31.6 Q30,31.4 28,36 Q27.6,42 30,48 Q33.4,45 36.6,40.6 Q37.6,35 34.6,31.6 Z'],
+    ['rotator','p','M42.8,39 Q38.2,38.8 36.4,41.6 Q35.8,46 37,50.4 Q40.4,52.6 43.6,50 Q43.4,44 42.8,39 Z'],
+    ['teres','p','M37,50.8 Q35,51.6 34.2,53.8 Q35.8,56.6 39,56.4 Q41.6,55.4 42.6,52.6 Q40,52.6 37,50.8 Z'],
+    ['lats','p','M34,54.8 Q36,57.8 39.6,57.6 Q42.4,56.6 43.6,51.4 Q46,58 49.4,66 L49.4,74 Q45.6,80 41,86 Q38.6,80 37.6,74 Q36,64 34,54.8 Z'],
+    ['erectors','p','M45.4,66 Q47.6,64.8 49.6,66 L49.6,93 Q47.2,94.4 45.4,92.6 Q44.6,79 45.4,66 Z'],
+    ['triceps','p','M33.2,46.8 Q31.6,58 26.6,70.6 Q23.4,71.4 21.4,68.4 Q23.4,57 28.6,46.4 Q31,45.4 33.2,46.8 Z'],
+    ['forearm','p','M21,67.8 Q26.6,69.6 26.2,74 Q23,87 15.6,99.6 Q12.8,100 11,98.6 Q14,84 18.6,72 Q19.4,68.4 21,67.8 Z'],
+    ['glutes','p','M49.6,88 Q43,86.6 38.2,89.6 Q35,95 35.6,101 Q38.4,106.8 44,107.4 Q48,107 49.6,104.6 Z'],
+    ['hams','p','M36,106 Q41.6,108.6 48,107.2 Q48.6,120 47.4,132 Q46.4,139 44.4,141 L40.6,141 Q37,128 36,106 Z'],
+    ['calves','p','M39.4,145 Q43.2,143.4 46.8,145.2 Q48.2,152 47,160 Q46,168 44,171 L42.4,171 Q39.6,166 38.8,158 Q38.4,150 39.4,145 Z']
+  ])
+};
+// Muscle-fibre lines, one <path> per face, painted over everything. Left half, mirrored; '|' = on the midline, drawn once.
+var CD_FIB = {
+  f: ['M49.6,33.6 Q41,31.4 33.4,31.8', 'M46.4,21 L48.6,30.4',
+      'M49.2,36 L36,40.4 M49.2,39 L35.8,41.6 M49.2,42 L35.4,42.8 M49.2,45 L35,44 M48.6,48 L35.2,45 M46,50.4 L36,45.6',
+      'M33.6,32.6 Q33.6,40 30.8,46.8 M31.4,32.4 Q30,40 30.2,47', 'M29.6,49 Q28.6,59 24.6,68.6 M27.4,49.4 Q25.6,58 23.6,67',
+      'M22.4,70 Q19,84 13.6,98.6 M24.6,71.6 Q20.6,85 15,99.4',
+      '|M50,52.6 L50,93.6', '|M44.6,59.4 Q50,60.6 55.4,59.4 M44.4,66.6 Q50,67.8 55.6,66.6 M44.3,74.4 Q50,75.6 55.7,74.4',
+      'M38,57 L43.6,61 M37.6,63 L43.6,67.6 M37.6,69 L43.8,74.4 M38.2,75.4 L44.2,81',
+      'M41.4,98.6 Q42.8,118 43.2,139.6 M36.4,106 Q37.8,124 40.2,139.4 M47,124 Q45.6,133 43.8,139.6', 'M48.2,104 Q47.6,112 47.2,121',
+      'M43.6,146 Q44.2,162 43.4,179'],
+  b: ['M50,24 Q44,30.6 34.4,32.6 M50,30 Q44,34 37,34.6 M50,35 Q46,36.6 41.6,36.8', 'M48.6,50 L50,64 M46.4,50 L49.2,60',
+      'M49.4,40 L44.4,41.6 M49.4,43 L44.2,45', 'M34.6,33.2 Q33.4,40 30.4,46.8 M32,32.6 Q30.4,40 30,47',
+      'M42.6,41.6 L37.2,45.4 M42.8,45 L37.4,48.6', 'M41.6,53.4 L35.6,54',
+      'M47.8,64 L36,58 M48.6,69.6 L37.4,64.6 M48.4,75 L38.6,71 M45.6,80 L40,77', 'M47.5,67 L47.5,92',
+      'M30.6,48.4 Q28.8,59 24.6,69.4 M27.6,48.6 Q25.6,57 23,67.4', 'M22.4,70 Q19,84 13.6,98.6 M24.6,71.6 Q20.6,85 15,99.4',
+      'M48.6,90 Q41,92 37,99 M48.8,95 Q42,97.6 38.6,104 M48.6,100.6 Q44,103 41.4,106.4',
+      'M42.2,108.6 Q43,124 42.6,140.6 M38.4,110 Q39.4,126 41,140.4', 'M43,145 Q43.4,158 43.2,170', '|M50,40 L50,95']
 };
 
 // Survives re-renders (cdSetLoad saving, tab revisits); resets per client where it should.
-var _cdd = { id: null, cur: null, open: null, scope: 'last', sel: null, allMus: false, introFor: {}, ctx: null };
+var _cdd = { id: null, cur: null, open: null, scope: 'last', sel: null, allMus: false, side: null, shown: 'f', introFor: {}, ctx: null };
 
 function cdEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
 function cdFold(s) {
@@ -2839,19 +2886,82 @@ function cdShapes(v) {
   CD_FIG[v].forEach(function (s) { out.push(cdGeom(s, false)); if (!(s[1] === 'p' ? s[3] : s[7])) out.push(cdGeom(s, true)); });
   return (_cdShapes[v] = out);
 }
-function cdFigSVG(reg, max, sel) {
+// ── One body, two faces ─────────────────────────────────────────────────
+var _cdSides = null;
+function cdSides() {                                          // which regions each face can show, read once from CD_FIG
+  if (_cdSides) return _cdSides;
+  _cdSides = { f: {}, b: {} };
+  ['f', 'b'].forEach(function (v) { CD_FIG[v].forEach(function (s) { if (s[0]) _cdSides[v][s[0]] = 1; }); });
+  return _cdSides;
+}
+function cdSideInfo(reg) {                                    // lit regions + volume per face. delt-s and forearm sit on both and count on both
+  var S = cdSides(), o = { f: { n: 0, v: 0 }, b: { n: 0, v: 0 } };
+  Object.keys(reg).forEach(function (k) { if (reg[k] > 0) ['f', 'b'].forEach(function (v) { if (S[v][k]) { o[v].n++; o[v].v += reg[k]; } }); });
+  return o;
+}
+var CD_SIDE_VI = { f: 'mặt trước', b: 'mặt sau' };
+function cdSideCap(side, nf, nb) {
+  if (!nf && !nb) return 'Chưa có vùng nào sáng.';
+  var o = side === 'f' ? 'b' : 'f', n = side === 'f' ? nb : nf;
+  return 'Đang xem ' + CD_SIDE_VI[side] + '. ' + cdCap(CD_SIDE_VI[o]) + (n ? ' còn <b>' + n + ' vùng</b> đã tập.' : ' không có vùng nào đã tập.');
+}
+function cdSideLabel(side, nf, nb) {
+  return 'Hình cơ thể, đang xem ' + CD_SIDE_VI[side] + '. Mặt trước ' + nf + ' vùng đã tập, mặt sau ' + nb + ' vùng. Số liệu ở danh sách nhóm cơ.';
+}
+function cdSideCtl(side, nf, nb) {
+  var b = function (v, label, n) {
+    return '<button type="button" data-side="' + v + '" aria-pressed="' + (v === side) + '" aria-label="' + cdCap(CD_SIDE_VI[v]) + ', ' + n + ' vùng đã tập">'
+      + label + '<span' + (n ? ' class="cd-has"' : '') + ' aria-hidden="true">' + n + '</span></button>';
+  };
+  return '<div class="cd-side" role="group" aria-label="Mặt cơ thể">' + b('f', 'Trước', nf) + b('b', 'Sau', nb) + '</div>';
+}
+var _cdFib = {};
+function cdFibers(v) {
+  if (_cdFib[v]) return _cdFib[v];
+  var f = function (x) { return Math.round((100 - x) * 10) / 10; };
+  return (_cdFib[v] = CD_FIB[v].map(function (d) {
+    return d.charAt(0) === '|' ? d.slice(1) : d + ' ' + d.replace(/(-?d+(?:.d+)?),(-?d+(?:.d+)?)/g, function (_, x, y) { return f(+x) + ',' + y; });
+  }).join(' '));
+}
+function cdFigSVG(reg, max, sel, side, nf, nb) {
   var order = Object.keys(reg).sort(function (a, b) { return reg[b] - reg[a]; });
   var g = function (v) {
-    return cdShapes(v).map(function (s) {
-      if (!s.r) return '<' + s.tag + ' class="cd-rg-n" ' + s.a + '/>';
+    var halo = '', body = '';
+    cdShapes(v).forEach(function (s) {
+      if (!s.r) { halo += '<' + s.tag + ' ' + s.a + '/>'; body += '<' + s.tag + ' class="cd-rg-n" ' + s.a + '/>'; return; }
       var val = reg[s.r] || 0, cls = 'cd-rg', st = '';
       if (val > 0) { var k = order.indexOf(s.r); cls += ' on'; st = ' style="fill-opacity:' + (0.3 + 0.7 * val / max).toFixed(2) + ';--d:' + Math.min(k, 7) * 50 + 'ms"'; }
       if (sel.indexOf(s.r) >= 0) cls += ' sel';
-      return '<' + s.tag + ' class="' + cls + '" data-r="' + s.r + '" ' + s.a + st + '/>';
-    }).join('');
+      body += '<' + s.tag + ' class="' + cls + '" data-r="' + s.r + '" ' + s.a + st + '/>';
+    });
+    return '<g class="cd-halo">' + halo + '</g>' + body + '<path class="cd-fib" d="' + cdFibers(v) + '"/>';   // halo: the non-muscle shapes again, thick pale stroke, no filter
   };
-  return '<svg viewBox="8 0 196 192" role="img" aria-label="Hình cơ thể nhìn trước và sau, tô theo nhóm cơ đã tập. Số liệu ở danh sách bên cạnh.">'
-    + '<g>' + g('f') + '</g><g transform="translate(112 0)">' + g('b') + '</g></svg>';
+  // Both faces are drawn; CSS shows one by .cd-fig[data-side]. 4…96 × 2…192 = the A-pose body's extent in CD_FIG units
+  return '<svg viewBox="4 2 92 190" role="img" aria-label="' + cdSideLabel(side, nf, nb) + '">'
+    + '<g class="cd-body"><g class="cd-face cd-face-f">' + g('f') + '</g><g class="cd-face cd-face-b">' + g('b') + '</g></g></svg>';
+}
+var cdReduce = function () { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; };
+var _cdFlipT = 0;
+// The turn: squash to a sliver (190ms), swap face, open back up (190ms). Then nothing runs.
+// The only transform is scaleX on the SVG <g class="cd-body">. An SVG child cannot hold HTML,
+// so no position:fixed element can ever be inside it, and no HTML box gets a transform.
+function cdFlip(side) {
+  var fig = document.querySelector('#cdash-page .cd-fig');
+  if (!fig) return;
+  side = side || (_cdd.shown === 'f' ? 'b' : 'f');
+  if (side === _cdd.shown) return;
+  _cdd.side = _cdd.shown = side;
+  clearTimeout(_cdFlipT);
+  cdSideMark(fig, side);                                       // buttons and caption answer the tap now
+  if (cdReduce()) { fig.classList.remove('cd-squash'); fig.setAttribute('data-side', side); return; }
+  fig.classList.add('cd-squash');
+  _cdFlipT = setTimeout(function () { fig.setAttribute('data-side', side); fig.classList.remove('cd-squash'); }, 190);   // = transition duration in the CSS
+}
+function cdSideMark(fig, side) {
+  var nf = +fig.getAttribute('data-nf'), nb = +fig.getAttribute('data-nb'), w = fig.parentNode;
+  w.querySelectorAll('.cd-side button').forEach(function (b) { b.setAttribute('aria-pressed', String(b.getAttribute('data-side') === side)); });
+  w.querySelector('.cd-side-cap').innerHTML = cdSideCap(side, nf, nb);
+  fig.querySelector('svg').setAttribute('aria-label', cdSideLabel(side, nf, nb));
 }
 
 function cdBodyHTML(c, isCoach) {
@@ -2863,8 +2973,13 @@ function cdBodyHTML(c, isCoach) {
   var selI = info.filter(function (i) { return i.name === _cdd.sel; })[0];
   if (!selI) _cdd.sel = null;
   var sel = selI ? selI.m.regions : [];
-  var fig = '<div class="cd-fig' + (sel.length ? ' has-sel' : '') + '">' + cdFigSVG(reg, max || 1, sel)
-    + '<div class="cd-fig-l" aria-hidden="true"><span>Trước</span><span>Sau</span></div></div>';
+  // Mo o mat mang nhieu khoi luong hon: 12 trong 21 vung CHI co o mat sau,
+  // nen mac dinh mat truoc se giau mat phan lon du lieu.
+  var si = cdSideInfo(reg), face = _cdd.side || (si.b.v > si.f.v ? 'b' : 'f');
+  _cdd.shown = face;
+  var fig = '<div class="cd-figw"><div class="cd-fig' + (sel.length ? ' has-sel' : '') + '" data-side="' + face + '" data-nf="' + si.f.n + '" data-nb="' + si.b.n + '">'
+    + cdFigSVG(reg, max || 1, sel, face, si.f.n, si.b.n) + '</div>'
+    + cdSideCtl(face, si.f.n, si.b.n) + '<p class="cd-side-cap">' + cdSideCap(face, si.f.n, si.b.n) + '</p></div>';
   var scope = has ? '<div class="cd-scope" role="group" aria-label="Khoảng thời gian">' + CD_SCOPES.map(function (s) {
     return '<button type="button" data-scope="' + s[0] + '" aria-pressed="' + (String(_cdd.scope) === String(s[0])) + '">' + s[1] + '</button>';
   }).join('') + '</div>' : '';
@@ -2953,7 +3068,7 @@ function cdRender(page) {
   page = page || document.getElementById('cdash-page');
   if (!page || !activeClient) return;
   var c = activeClient, isCoach = userRole === 'coach', ss = cdSessions(), keys = cdKeys(c), A = cdActivity();
-  if (_cdd.id !== c.id) { _cdd.id = c.id; _cdd.cur = null; _cdd.sel = null; _cdd.allMus = false; }
+  if (_cdd.id !== c.id) { _cdd.id = c.id; _cdd.cur = null; _cdd.sel = null; _cdd.allMus = false; _cdd.side = null; }
   if (_cdd.open === null) _cdd.open = isCoach;                 // coach: loads open by default. Client: summary first
   if (_cdd.cur === null) _cdd.cur = cdNextIdx(keys, ss);        // land on the session they do next
   _cdd.cur = Math.max(0, Math.min(_cdd.cur, keys.length - 1));
@@ -3022,13 +3137,18 @@ function cdBind(page) {
       _cdd.open = !(_cdd.open && i === _cdd.cur); _cdd.cur = i; return cdRefresh();
     }
     if (e.target.closest('.cd-detail-x')) { _cdd.open = false; return cdRefresh(); }
-    if ((el = e.target.closest('[data-scope]'))) { var v = el.getAttribute('data-scope'); _cdd.scope = v === 'last' ? v : +v; _cdd.sel = null; _cdd.allMus = false; return cdRefresh('mus'); }
-    if ((el = e.target.closest('.cd-muscle-row'))) { var n = el.getAttribute('data-mus'); _cdd.sel = _cdd.sel === n ? null : n; return cdRefresh('mus'); }
-    if (e.target.closest('[data-mus-more]')) { _cdd.allMus = !_cdd.allMus; return cdRefresh('mus'); }
-    if ((el = e.target.closest('.cd-rg.on'))) {                 // shortcut only: the list is the 44px control
-      var r = el.getAttribute('data-r'), hit = cdMusclesIn(_cdd.scope).list.filter(function (m) { return cdMapMuscle(m[0]).regions.indexOf(r) >= 0; })[0];
-      if (hit) { _cdd.sel = _cdd.sel === hit[0] ? null : hit[0]; cdRefresh('mus'); }
+    if ((el = e.target.closest('[data-scope]'))) { var v = el.getAttribute('data-scope'); _cdd.scope = v === 'last' ? v : +v; _cdd.sel = null; _cdd.allMus = false; _cdd.side = null; return cdRefresh('mus'); }
+    if ((el = e.target.closest('.cd-muscle-row'))) {
+      var n = el.getAttribute('data-mus'); _cdd.sel = _cdd.sel === n ? null : n;
+      if (_cdd.sel) {                                          // chon nhom co mat dang xem khong ve duoc -> xoay nguoi lai
+        var S = cdSides(), rs = cdMapMuscle(n).regions, cur = _cdd.shown;
+        if (rs.length && !rs.some(function (r) { return S[cur][r]; })) _cdd.side = cur === 'f' ? 'b' : 'f';
+      }
+      return cdRefresh('mus');
     }
+    if ((el = e.target.closest('.cd-side button'))) return cdFlip(el.getAttribute('data-side'));
+    if (e.target.closest('[data-mus-more]')) { _cdd.allMus = !_cdd.allMus; return cdRefresh('mus'); }
+    if (e.target.closest('.cd-fig')) return cdFlip();           // duong tat: cham nguoi de xoay. Nut Truoc/Sau moi la dieu khien that
   });
   page.addEventListener('keydown', function (e) {
     var t = e.target.closest && e.target.closest('.cd-dtab'); if (!t || !_cdd.ctx) return;
@@ -16774,16 +16894,29 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 /* ── Body map ── */
 #cdash-page .cd-mus-row{display:grid;gap:14px}
 @media (min-width:640px){#cdash-page .cd-mus-row{grid-template-columns:minmax(220px,300px) minmax(0,1fr);align-items:start}}
-#cdash-page .cd-fig{width:100%;max-width:330px;margin:0 auto}
-#cdash-page .cd-fig svg{display:block;width:100%;height:auto}
-#cdash-page .cd-fig-l{position:relative;height:18px;margin-top:4px}
-#cdash-page .cd-fig-l span{position:absolute;top:0;width:64px;text-align:center;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.62)}
-#cdash-page .cd-fig-l span:first-child{left:calc(21.4% - 32px)}    /* 21.4% / 78.6% = figure centres inside viewBox 8 0 196 192 */
-#cdash-page .cd-fig-l span:last-child{left:calc(78.6% - 32px)}
-#cdash-page .cd-rg,#cdash-page .cd-rg-n{stroke:#1B1616;stroke-width:1.2;stroke-linejoin:round}   /* stroke = card colour: overlapping shapes read as separate */
-#cdash-page .cd-rg-n{fill:rgba(255,255,255,.05)}
-#cdash-page .cd-rg{fill:rgba(255,255,255,.11);transition:opacity .2s}
-#cdash-page .cd-rg.on{fill:var(--accent,#8FDBFF);cursor:pointer}
+/* One body; the visible face is .cd-fig[data-side]. Height drives size, width follows the viewBox */
+#cdash-page .cd-figw{display:flex;flex-direction:column;align-items:center;gap:10px;min-width:0}
+#cdash-page .cd-fig{cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+#cdash-page .cd-fig svg{display:block;height:400px;width:auto;max-width:100%;aspect-ratio:92/190}   /* 92/190 = viewBox in cdFigSVG */
+@media (min-width:640px){#cdash-page .cd-fig svg{height:440px}}
+#cdash-page .cd-fig[data-side="f"] .cd-face-b,#cdash-page .cd-fig[data-side="b"] .cd-face-f{display:none}
+/* The turn. Transform on an SVG <g> only, never on an HTML box: position:fixed stays anchored to the viewport */
+#cdash-page .cd-body{transform-box:view-box;transform-origin:50% 50%;transition:transform .19s cubic-bezier(.5,0,.5,1)}   /* .19s = setTimeout in cdFlip() */
+#cdash-page .cd-fig.cd-squash .cd-body{transform:scaleX(.04)}
+#cdash-page .cd-side{display:grid;grid-template-columns:1fr 1fr;width:100%;max-width:300px;padding:3px;border-radius:999px;border:1px solid var(--cd-line)}
+#cdash-page .cd-side button{min-height:44px;display:flex;align-items:center;justify-content:center;gap:8px;border:0;border-radius:999px;background:none;color:rgba(255,255,255,.72);font:700 14px 'Figtree',sans-serif;cursor:pointer}
+#cdash-page .cd-side button[aria-pressed="true"]{background:rgba(143,219,255,.16);color:#fff}
+#cdash-page .cd-side button:focus-visible{outline:2px solid var(--accent,#8FDBFF);outline-offset:-2px}
+#cdash-page .cd-side span{min-width:24px;padding:2px 7px;border-radius:999px;background:rgba(255,255,255,.08);font-size:12px;color:rgba(255,255,255,.75);font-variant-numeric:tabular-nums}
+#cdash-page .cd-side button[aria-pressed="false"] span.cd-has{background:rgba(143,219,255,.2);color:var(--accent,#8FDBFF)}   /* the face you are NOT looking at still has lit regions */
+#cdash-page .cd-side-cap{margin:0;max-width:300px;text-align:center;font-size:13px;line-height:1.45;color:rgba(255,255,255,.75)}
+#cdash-page .cd-side-cap b{color:var(--accent,#8FDBFF);font-weight:800}
+#cdash-page .cd-rg,#cdash-page .cd-rg-n{stroke:#1B1616;stroke-width:.7;stroke-linejoin:round}   /* card colour: neighbouring muscles read as separate */   /* stroke = card colour: overlapping shapes read as separate */
+#cdash-page .cd-rg-n{fill:rgba(255,255,255,.07)}
+#cdash-page .cd-halo{fill:none;stroke:rgba(143,219,255,.16);stroke-width:2.6;stroke-linejoin:round}   /* soft outline; inner seams are covered by the shapes painted on top */
+#cdash-page .cd-fib{fill:none;stroke:rgba(22,17,17,.5);stroke-width:.4;stroke-linecap:round;pointer-events:none}   /* dark on grey and on #8FDBFF alike */
+#cdash-page .cd-rg{fill:rgba(255,255,255,.14);transition:opacity .2s}
+#cdash-page .cd-rg.on{fill:var(--accent,#8FDBFF)}
 #cdash-page .cd-rg.sel{stroke:#fff;stroke-width:1.8}
 #cdash-page .cd-fig.has-sel .cd-rg.on:not(.sel){opacity:.3}
 #cdash-page .cd-scope{display:flex;border:1px solid var(--cd-line);border-radius:999px;max-width:100%;overflow-x:auto;scrollbar-width:none}
@@ -16938,10 +17071,11 @@ button.cd-av:focus-visible{outline:2px solid #8FDBFF;outline-offset:2px;}
 /* .cd-mus cu (danh sach nhom co chia hai cot) da go: ban moi dung chinh ten
    class do cho THE chua hinh, nen luat grid cu xe doi the va lam chu tran ra
    ngoai. Danh sach gio dung .cd-muscle-*. */
-.cd-mus-row{display:grid;grid-template-columns:78px 1fr 56px;align-items:center;gap:8px;font-size:10.5px;color:#8FDBFF;}
-.cd-mus-row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.cd-mus-row i{height:5px;border-radius:99px;background:#8FDBFF;display:block;}
-.cd-mus-row b{text-align:right;font-size:10.5px;font-weight:700;color:#8FDBFF;}
+/* .cd-mus-row cu (danh sach nhom co doi cu, 3 cot 78px/1fr/56px) da go: chi con
+   ban do co the moi phat ra ten class nay, va luat khong-scope o day ep cot hinh
+   xuong dung 78px roi cat cut ten nhom co. Chinh 78px do la con so "moi nguoi
+   ~38px" trong ban mo ta loi — nguyen nhan la luat chet nay, khong phai thiet ke.
+   Luat that nam o #cdash-page .cd-mus-row. */
 /* các session cạnh nhau */
 .cd-days{display:grid;grid-template-columns:1fr;gap:14px;}
 @media(min-width:900px){.cd-days{grid-template-columns:repeat(2,minmax(0,1fr));}}

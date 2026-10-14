@@ -234,6 +234,80 @@ ok("the moi khong mang class bi luat layout cu cua tab khac chiem", async () => 
     + bad.join("\n       ") + "\n       — day la kieu loi da be the Nhom co va the Hoat dong");
 });
 
+ok("khong co luat ngoai #cdash-page nao moi chiem class cua man nay", async () => {
+  // LAN THU TU cung mot nguyen nhan, nen khoa ca ho chu khong khoa tung ca:
+  //   .cd-mus      -> xe doi the chua hinh co the
+  //   .ac-hero     -> ba chip KPI tut tu 114px xuong 48px
+  //   .cd-mus-row  -> ep cot hinh xuong dung 78px va cat cut ten nhom co
+  // Ca ba deu la LUAT CHET cua mot man cu, con sot lai va de len man moi dung
+  // trung ten class. Deu im lang: khong loi, khong canh bao, chi nhin moi thay.
+  //
+  // Dau hieu that: class co CA luat scope #cdash-page (y do cua man nay) LAN
+  // luat khong scope dat them thuoc tinh layout ma luat scope khong de lai.
+  //
+  // CHIN truong hop duoi day la hien trang luc viet bai kiem nay: phan dung
+  // chung co y voi tab Active cu, do thuc te khong gay hai. Chung o day de
+  // DANH SACH KHONG DAI THEM — cai thu muoi se lam bai kiem nay hong. Go duoc
+  // cai nao khoi danh sach thi go, dung them vao.
+  const DA_BIET = new Set(["ac-ring", "ac-side", "ac-tot", "cd-day-c", "cd-ex-n",
+    "cd-ex-r", "cd-muscle-list", "cd-muscle-rank", "cd-spark",
+    // cd-kpi: luat khong-scope `.cd-kpi{white-space:nowrap}` nam trong CHINH khoi
+    // CSS dashboard doi cu da sinh ra .cd-mus-row. Chi #cdash-page phat ra class
+    // nay (chip KPI cua the Hoat dong), nen luat do rat co the cung la code chet
+    // — nhung nowrap dang thuc su ap len chip 114px, va kiem chung viec go no
+    // can do lai the Hoat dong. CHUA LAM. Dung coi day la da duyet.
+    "cd-kpi"]);
+  const LAYOUT = new Set(["display", "grid-template-columns", "grid-auto-flow",
+    "flex-direction", "white-space", "text-overflow", "position", "float", "width", "max-width"]);
+  const i0 = s.indexOf("var CD_STEP_GOAL"), i1 = s.indexOf("async function renderClientDash()", i0);
+  assert(i0 > 0 && i1 > i0, "khong cat duoc khoi cd* — regex da lac khoi code that");
+  // KHONG doi dau " dong: class hay duoc noi chuoi, vd
+  //   '<div class="cd-fig' + (sel.length ? ' has-sel' : '') + '" ...'
+  // nen literal ket thuc ngay sau cd-fig. Doi dau dong la bo sot dung cai
+  // container chinh cua hinh — bai kiem tung xanh oan vi loi nay.
+  const toks = new Set();
+  for (const m of s.slice(i0, i1).matchAll(/class="([^"'<>]*)/g))
+    for (const t of m[1].split(/\s+/)) if (/^[a-z][-a-z0-9]*$/.test(t)) toks.add(t);
+  assert(toks.has("cd-fig") && toks.has("cd-card"),
+    "khong thu duoc class ghep dong (cd-fig) — regex lai doi dau nhay dong");
+  assert(toks.size > 40, "chi thay " + toks.size + " class — doan cat sai");
+  const sheet = [...s.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join("\n")
+    .replace(/\/\*[\s\S]*?\*\//g, "");
+  // Quyen so huu tinh theo CO luat #cdash-page hay khong — khong doi luat do
+  // cung phai dat layout. #cdash-page .cd-fig chi dat cursor/touch-action, nhung
+  // .cd-fig van la class cua man nay; mot luat ngoai dat display len no van la
+  // chiem. (Bai kiem ban dau bo sot dung truong hop nay.)
+  const laCua = new Set(), scoped = {}, un = {};
+  for (const m of sheet.matchAll(/([^{}]*)\{([^}]*)\}/g)) {
+    const props = m[2].split(";").filter((p) => p.includes(":"))
+      .map((p) => p.split(":")[0].trim()).filter((p) => LAYOUT.has(p));
+    for (let one of m[1].split(",")) {
+      one = one.trim();
+      if (!one || one.startsWith("@")) continue;
+      const subj = one.split(/[\s>+~]+/).pop();
+      for (const t of toks) {
+        if (!new RegExp("\\." + t.replace(/-/g, "\\-") + "(?![-\\w])").test(subj)) continue;
+        if (one.includes("#cdash-page")) {
+          laCua.add(t);
+          (scoped[t] = scoped[t] || new Set()); props.forEach((p) => scoped[t].add(p));
+        } else if (props.length) {
+          (un[t] = un[t] || new Set()); props.forEach((p) => un[t].add(p));
+        }
+        break;
+      }
+    }
+  }
+  const moi = [];
+  for (const t of Object.keys(un)) {
+    if (!laCua.has(t) || DA_BIET.has(t)) continue;
+    const chong = [...un[t]].filter((p) => !(scoped[t] || new Set()).has(p));
+    if (chong.length) moi.push(t + " (" + chong.join(", ") + ")");
+  }
+  assert.strictEqual(moi.length, 0,
+    "luat ngoai #cdash-page dang chiem class cua man dashboard khach: " + moi.join(" | ")
+    + " — dung kieu loi da be .cd-mus, .ac-hero va .cd-mus-row");
+});
+
 ok("cau bao rong khong chen thang _cdd.scope vao 'N ngay qua'", async () => {
   // _cdd.scope la 'last' | 7 | 28. Chen thang vao cau dem ngay thi khi dang o
   // "Buoi gan nhat" se ra "Khong co buoi nao trong last ngay qua".
