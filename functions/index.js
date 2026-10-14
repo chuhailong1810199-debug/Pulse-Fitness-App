@@ -3364,7 +3364,9 @@ exports.coachAssistant = onCall(
         await Promise.all([
           col.add({ role: "user", text: clip(last.text), show: clip(request.data.show || "") || null,
             at: new Date(now), by: role.uid || null }),
-          col.add({ role: "assistant", text: clip(r.text), at: new Date(now + 1), by: role.uid || null }),
+          col.add({ role: "assistant", text: clip(r.text), at: new Date(now + 1), by: role.uid || null,
+            // Bảng giáo án app tự vẽ — lưu kèm để mở lại vẫn còn (giới hạn kích thước doc).
+            displays: JSON.stringify(r.displays || []).length < 200000 ? (r.displays || []) : [] }),
         ]).catch((e) => console.warn("[coachAssistant] không lưu được chat:", e.message));
       }
       const u = r.usage || {};

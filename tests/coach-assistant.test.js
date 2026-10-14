@@ -256,6 +256,27 @@ ok("coachAssistant luu chat theo khach chi khi thread:true va da qua assertCanVi
   assert(f.indexOf("assertCanView") < f.indexOf('collection("aiChat")'), "phai kiem quyen truoc khi ghi");
 });
 
+// ── Trình bày: bảng giáo án do app vẽ (2026-10-15) ──
+ok("show_program khai bao + compactProgram chi giu truong bang can, tag chuan, loc theo buoi", () => {
+  assert(A.TOOLS.find((t) => t.name === "show_program"));
+  const c = A.compactProgram({ SessionB: { label: "B", focus: "f", phases: [{ name: "Block 1", tag: "main",
+    exercises: [{ name: "Squat", setsReps: "4 × 5", cue: "dài", tempo: "3-1-1", why: "vì" }] }] }, SessionA: { phases: [] } }, ["SessionB"]);
+  assert.deepStrictEqual(Object.keys(c), ["SessionB"]);
+  assert.deepStrictEqual(c.SessionB.phases[0], { name: "Block 1", tag: "strength", exercises: [{ name: "Squat", setsReps: "4 × 5", why: "vì" }] });
+});
+ok("bang (displays) di qua runAssistant -> shapeReply toi may khach", async () => {
+  const r = A.shapeReply({ text: "x", displays: [{ kind: "program", program: {} }] });
+  assert.strictEqual(r.displays.length, 1);
+  assert.deepStrictEqual(A.shapeReply({}).displays, []);
+  const src = fs.readFileSync(path.join(__dirname, "..", "functions", "assistant.js"), "utf8");
+  assert(/if \(result && result\.display\) displays\.push\(result\.display\);/.test(src));
+});
+ok("luat trinh bay: cam LaTeX / tieu de markdown, xem giao an thi goi show_program", () => {
+  assert(A.SYSTEM.includes(A.FORMAT_RULES));
+  for (const k of ["KHÔNG dùng công thức toán / LaTeX", "KHÔNG dùng tiêu đề markdown", "gọi show_program"]) assert(A.FORMAT_RULES.includes(k), k);
+  assert(!/in ra bảng cho coach xem/.test(A.SYSTEM), "con luat cu bat model chep giao an thanh chu");
+});
+
 ok("thu vien bai tap co cache, khong doc 360 bai moi lan", () => {
   const src = fs.readFileSync(path.join(__dirname, "..", "functions", "assistant.js"), "utf8");
   assert(/function exerciseLibrary/.test(src), "thieu ham cache thu vien");
@@ -434,7 +455,7 @@ const grabFn = (n) => { const i = idx.indexOf("function " + n + "(");
   return idx.slice(i, k); };
 const escHtml = (x) => String(x == null ? "" : x)
   .replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const aiFmt = new Function("escHtml", grabFn("_aiFmt") + "; return _aiFmt;")(escHtml);
+const aiFmt = new Function("escHtml", grabFn("_aiClean") + "\n" + grabFn("_aiFmt") + "; return _aiFmt;")(escHtml);
 
 ok("bang markdown dung thanh <table> that", () => {
   const out = aiFmt("| Buổi | Bài |\n|---|---|\n| SessionA | Squat |\n| SessionB | Hinge |");

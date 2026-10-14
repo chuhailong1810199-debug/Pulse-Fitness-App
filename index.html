@@ -9277,8 +9277,11 @@ async function _aiLoadThread() {
   _aiThreadLoaded[k] = true;
   try {
     const snap = await getDocs(query(collection(db, 'clients', id, 'aiChat'), orderBy('at', 'desc'), limit(30)));
-    const old = snap.docs.map((d) => d.data()).reverse()
-      .map((m) => (m.show ? { role: m.role, text: m.text, show: m.show } : { role: m.role, text: m.text }));
+    const old = [];
+    snap.docs.map((d) => d.data()).reverse().forEach((m) => {
+      old.push(m.show ? { role: m.role, text: m.text, show: m.show } : { role: m.role, text: m.text });
+      (m.displays || []).forEach((dsp) => old.push({ role: 'program', display: dsp }));
+    });
     const t = _aiThreads[k] || (_aiThreads[k] = []);
     t.unshift(...old);
   } catch (e) { console.warn('[trợ lý] không nạp được lịch sử chat:', e.code || e.message); }
@@ -9372,7 +9375,23 @@ function aiClose() {
  * vào một khối riêng: ra một đống dòng rời có cả hàng |---|---| lộ ra, lại bị
  * cắt ngang ở màn hẹp. Mà in bảng giáo án chính là việc hay dùng nhất ở đây.
  */
+/**
+ * Lưới an toàn: model đôi khi viết LaTeX ("$3 \\times 5$", "\\text{--}") và tiêu
+ * đề "####" dù chỉ dẫn đã cấm — khung chat không dựng công thức nên in nguyên
+ * ký hiệu ra, rất khó đọc (coach báo 2026-10-15). Đổi về chữ thường.
+ */
+function _aiClean(t) {
+  return String(t || '')
+    .replace(/\\times/g, '×').replace(/\\cdot/g, '·').replace(/\\to\b|\\rightarrow/g, '→')
+    .replace(/\\leq?\b/g, '≤').replace(/\\geq?\b/g, '≥').replace(/\\approx/g, '≈')
+    .replace(/\\text\x7b([^\x7d]*)\x7d/g, '$1')   // \x7b \x7d = ngoặc nhọn — viết mã để bộ đếm ngoặc của test không lệch.replace(/\\%/g, '%')
+    .replace(/\$([^$\n]{1,80})\$/g, '$1')
+    .replace(/(\d)\s*--\s*(\d)/g, '$1–$2')
+    .replace(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/gm, '**$1**')
+    .replace(/`([^`\n]+)`/g, '$1');
+}
 function _aiFmt(t) {
+  t = _aiClean(t);
   const inline = (x) => escHtml(x).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
   const cells = (row) => row.replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
   const isSep = (row) => /^\|[\s|:-]+\|$/.test(row.trim());
@@ -9406,6 +9425,37 @@ function _aiFmt(t) {
     const tbl = x.startsWith('<table') || acc.endsWith('</table>');
     return acc + (tbl ? '' : '<br>') + x;
   }, '');
+}
+
+// ── Bảng giáo án màu theo pha (show_program, thẻ duyệt) ──────────────
+const _AI_PH = { warmup: ['Khởi động', 'ph-w'], strength: ['Chính', 'ph-s'], accessories: ['Phụ', 'ph-a'], circuit: ['Circuit', 'ph-c'] };
+function _aiProgramHTML(prog) {
+  return Object.keys(prog || {}).sort().map((k) => {
+    const d = prog[k] || {};
+    const rows = (d.phases || []).map((ph) => {
+      const [lab, cls] = _AI_PH[ph.tag] || _AI_PH.accessories;
+      const ex = ph.exercises || [];
+      return ex.map((x, j) => {
+        const q = 'Vì sao chọn ' + x.name + ' ở ' + k + '? Có bài thay nào không?';
+        return '<tr class="' + cls + '" data-q="' + escHtml(q) + '" onclick="aiQuick(this.dataset.q)" title="Bấm để hỏi về bài này">'
+          + (j === 0 ? '<td class="ai-pt-ph" rowspan="' + ex.length + '"><span title="' + escHtml(ph.name || '') + '">' + lab + '</span></td>' : '')
+          + '<td class="ai-pt-n">' + escHtml(x.name) + '</td>'
+          + '<td class="ai-pt-sr">' + escHtml(x.setsReps || '—') + '</td></tr>';
+      }).join('');
+    }).join('');
+    return '<div class="ai-pg">'
+      + '<div class="ai-pg-h"><b>' + escHtml(k.replace(/^Session/, 'Buổi ')) + '</b>' + (d.label ? '<span> · ' + escHtml(d.label) + '</span>' : '') + '</div>'
+      + (d.focus ? '<div class="ai-pg-f">' + escHtml(d.focus) + '</div>' : '')
+      + '<table class="ai-pt"><thead><tr><th>Pha</th><th>Bài</th><th>Set × Rep</th></tr></thead><tbody>' + rows + '</tbody></table>'
+      + '</div>';
+  }).join('') + '<div class="ai-pg-tip">Bấm vào một bài để hỏi về bài đó.</div>';
+}
+/** Điền sẵn câu hỏi vào ô nhập — coach sửa thêm rồi mới gửi. */
+function aiQuick(q) {
+  const i = document.getElementById('ai-in');
+  if (!i) return;
+  i.value = q; i.focus();
+  try { i.setSelectionRange(q.length, q.length); } catch (_e) {}
 }
 
 function aiPaint() {
@@ -9453,6 +9503,7 @@ function aiPaint() {
   }
   log.innerHTML = _aiMsgs.map((m, i) => {
     if (m.role === 'confirm') return _aiCard(m, i);
+    if (m.role === 'program') return '<div class="ai-msg ai-a ai-pgwrap">' + _aiProgramHTML(m.display && m.display.program) + '</div>';
     // m.show: bản rút gọn cho lượt gửi từ form — prompt đầy đủ vẫn nằm ở m.text
     // và đi sang model, nhưng in cả khối chỉ dẫn dài lên bong bóng thì loãng.
     return '<div class="ai-msg ai-' + (m.role === 'user' ? 'u' : 'a') + '">'
@@ -9518,8 +9569,10 @@ function _aiCard(m, i) {
       + '<button type="button" class="ai-cf-yes" onclick="aiApprove(' + i + ')">Đồng ý</button>'
       + '<button type="button" class="ai-cf-cancel" onclick="aiReject(' + i + ')">Bỏ qua</button></div>';
   }
+  const table = p.table && Object.keys(p.table).length
+    ? '<details class="ai-cf-tb" open><summary>Xem giáo án</summary>' + _aiProgramHTML(p.table) + '</details>' : '';
   return '<div class="ai-cf" data-state="' + st + '"><div class="ai-cf-h">'
-    + escHtml(title) + '</div>' + body + foot + '</div>';
+    + escHtml(title) + '</div>' + body + table + foot + '</div>';
 }
 
 /** Coach gõ Gmail trên thẻ tạo khách — ghi thẳng vào action, không vẽ lại (giữ con trỏ). */
@@ -9661,7 +9714,7 @@ function aiBuildGroupPrompt(d) {
     'Soạn giáo án LỚP NHÓM ' + spw + ' buổi/tuần theo mục LỚP NHÓM trong chỉ dẫn. Khoá buổi: ' + keys + '.',
     'Chia trạm / theo cặp / theo lượt dựa đúng SỐ dụng cụ ở trên và số người; mỗi khối chạy bằng một đồng hồ.',
     'Mỗi bài chính có 3 mức Dễ / Chuẩn / Khó trong cue. Tổng thời gian khớp ' + dur + ' phút, tính cả chuyển trạm.',
-    'In bảng từng buổi kèm dòng Setup (dụng cụ chuẩn bị), rồi gọi propose_new_client MỘT lần với isGroup: true, '
+    'Ghi một dòng Setup (dụng cụ chuẩn bị) cho mỗi buổi — không chép từng bài, thẻ duyệt tự vẽ bảng — rồi gọi propose_new_client MỘT lần với isGroup: true, '
       + 'groupFormat "' + fmt + '"' + (size > 0 ? ', groupSize ' + size : '') + ', durationMin ' + dur
       + ', equipment như trên, level "' + (v('level') || 'Mixed') + '", KHÔNG email, kèm giáo án.',
   ];
@@ -9761,7 +9814,7 @@ function aiBuildProgramPrompt(d) {
     'Mỗi buổi chia pha theo tag warmup → strength → accessories → circuit (nếu cần), vừa thời lượng ' + (v('dur') || '60 phút') + '.',
     'Mỗi bài có setsReps, tempo, cue (kỹ thuật + nghỉ bao lâu). Tên bài pha strength/accessories ĐÚNG Y tên search_exercises trả về.',
     'Chọn bài theo đúng dụng cụ ở nơi tập, và tránh/thay bài động vào chỗ chấn thương nếu có.',
-    'In bảng giáo án từng buổi cho tao xem, kèm 2–3 câu giải thích vì sao chia như vậy.',
+    'Không chép từng bài ra chữ — thẻ duyệt tự vẽ bảng. Chỉ 2–4 câu giải thích vì sao chia như vậy.',
     'Rồi gọi propose_new_client MỘT lần, kèm luôn giáo án vừa soạn' + (email ? ' và Gmail ' + email : '') + ', để tao duyệt.',
   ];
   if (age > 0 && age < 18) {
@@ -9833,7 +9886,9 @@ async function aiSend(ev, text, show) {
     if (d.toolLog && d.toolLog.length) {
       console.info('[trợ lý] đã tra:', d.toolLog.map((t) => t.name).join(', '));
     }
-    thread.push({ role: 'assistant', text: d.text || '(không có trả lời)' });
+    if (d.text || !(d.displays || []).length) thread.push({ role: 'assistant', text: d.text || '(không có trả lời)' });
+    // Bảng giáo án app tự vẽ (show_program) — không phụ thuộc model viết đẹp hay không.
+    for (const dsp of (d.displays || [])) thread.push({ role: 'program', display: dsp });
     // Đề xuất thay đổi dữ liệu: dựng thẻ duyệt riêng. Trợ lý KHÔNG tự ghi —
     // chưa bấm Đồng ý thì chưa có gì xuống Firestore.
     for (const p of (d.pending || [])) {
@@ -17127,6 +17182,24 @@ body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-even
 #ai-sheet:has(.ai-wait) .ai-glow{ opacity: 1; }
 
 /* ── Thanh đầu ───────────────────────────────────────────────── */
+#ai-sheet .ai-pgwrap{ max-width: 100%; width: 100%; padding: 0; background: none; }
+#ai-sheet .ai-pg{ margin: 0 0 12px; border-radius: 14px; border: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.03); overflow: hidden; }
+#ai-sheet .ai-pg-h{ padding: 10px 12px 4px; font-size: 14px; }
+#ai-sheet .ai-pg-h span{ color: var(--ai-mut); font-weight: 600; }
+#ai-sheet .ai-pg-f{ padding: 0 12px 8px; font-size: 12px; line-height: 1.4; color: var(--ai-mut); }
+#ai-sheet .ai-pt{ width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+#ai-sheet .ai-pt th{ text-align: left; padding: 6px 8px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ai-mut); font-weight: 800; border-top: 1px solid rgba(255,255,255,.08); }
+#ai-sheet .ai-pt th:first-child{ width: 76px; } #ai-sheet .ai-pt th:last-child{ width: 96px; }
+#ai-sheet .ai-pt td{ padding: 7px 8px; border-top: 1px solid rgba(255,255,255,.06); vertical-align: middle; }
+#ai-sheet .ai-pt tr[data-q]{ cursor: pointer; }
+#ai-sheet .ai-pt tr[data-q]:active td.ai-pt-n, #ai-sheet .ai-pt tr[data-q]:hover td.ai-pt-n{ color: #fff; text-decoration: underline; text-decoration-color: rgba(143,219,255,.5); }
+#ai-sheet .ai-pt-n{ word-break: break-word; }
+#ai-sheet .ai-pt-sr{ font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 700; }
+#ai-sheet .ai-pt-ph span{ display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 11px; font-weight: 800; color: #161111; background: var(--c); }
+#ai-sheet .ph-w{ --c: #8FDBFF; } #ai-sheet .ph-s{ --c: #FF9F6B; } #ai-sheet .ph-a{ --c: #7FE0A8; } #ai-sheet .ph-c{ --c: #C7A2FF; }
+#ai-sheet .ai-pt tr.ph-w td.ai-pt-n, #ai-sheet .ai-pt tr.ph-s td.ai-pt-n, #ai-sheet .ai-pt tr.ph-a td.ai-pt-n, #ai-sheet .ai-pt tr.ph-c td.ai-pt-n{ border-left: 3px solid var(--c); }
+#ai-sheet .ai-pg-tip{ font-size: 11.5px; color: var(--ai-mut); margin: -4px 2px 4px; }
+#ai-sheet .ai-cf-tb{ margin: 8px 0 4px; } #ai-sheet .ai-cf-tb summary{ cursor: pointer; font-weight: 700; font-size: 13px; margin-bottom: 8px; }
 #ai-sheet .ai-tabs{ position: relative; z-index: 1; flex: none; display: flex; gap: 6px; padding: 0 16px 8px; overflow-x: auto; }
 #ai-sheet .ai-tabs:empty{ display: none; }
 #ai-sheet .ai-tabs button{ flex: none; min-height: 34px; padding: 0 14px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14);

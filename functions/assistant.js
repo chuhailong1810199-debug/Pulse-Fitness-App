@@ -12,7 +12,7 @@
  *   mình đáp  { type:"function_result", call_id, name, result }
  */
 const { canManageDoc, canViewDoc } = require("./authz.js");
-const { buildLibIndex, resolveProgram, PHASE_TAGS } = require("./program-lib.js");
+const { buildLibIndex, resolveProgram, PHASE_TAGS, normalizePhaseTag } = require("./program-lib.js");
 const { getFirestore } = require("firebase-admin/firestore");
 
 /** Trần số vòng gọi tool cho một câu hỏi. */
@@ -58,6 +58,22 @@ const TOOLS = [
     parameters: {
       type: "object",
       properties: { clientId: { type: "string" } },
+      required: ["clientId"],
+    },
+  },
+  {
+    type: "function",
+    name: "show_program",
+    description:
+      "HIỆN giáo án đang lưu của một khách cho coach xem: app tự vẽ bảng màu theo pha " +
+      "(Phase · Bài · Set × Rep). Dùng MỖI KHI coach muốn xem giáo án / một buổi — " +
+      "KHÔNG chép lại bài tập thành chữ. days: chỉ hiện các buổi này (bỏ trống = tất cả).",
+    parameters: {
+      type: "object",
+      properties: {
+        clientId: { type: "string" },
+        days: { type: "array", items: { type: "string" }, description: "VD [\"SessionA\"]" },
+      },
       required: ["clientId"],
     },
   },
@@ -209,6 +225,31 @@ async function exerciseLibrary(db) {
 }
 
 /**
+ * Giáo án rút gọn để app VẼ bảng (show_program, thẻ duyệt): chỉ những trường
+ * bảng cần. Model chép giáo án thành chữ thì vừa dài vừa lỗi định dạng
+ * (LaTeX "$3 \\times 5$", "####") — 2026-10-15 coach phàn nàn khó đọc.
+ */
+function compactProgram(prog, days) {
+  const want = Array.isArray(days) && days.length ? new Set(days.map(String)) : null;
+  const out = {};
+  for (const k of Object.keys(prog || {}).sort()) {
+    if (want && !want.has(k)) continue;
+    const d = prog[k] || {};
+    out[k] = {
+      label: str(d.label) || null,
+      focus: str(d.focus) || null,
+      phases: (d.phases || []).map((ph) => ({
+        name: str(ph && ph.name), tag: normalizePhaseTag(ph || {}),
+        exercises: ((ph && ph.exercises) || []).map((x) => ({
+          name: str(x && x.name), setsReps: str(x && x.setsReps), why: str(x && x.why) || null,
+        })),
+      })),
+    };
+  }
+  return out;
+}
+
+/**
  * Bộ khớp thư viện cho một lần đề xuất. Tên bài đang có trong giáo án cũ được
  * GIỮ NGUYÊN (chỉ gắn muscles): lịch sử tạ nối theo tên bài, đổi tên là đứt.
  * Thư viện đọc hỏng / rỗng → không chặn được gì, nên trả lỗi thay vì cho qua.
@@ -325,6 +366,18 @@ async function runTool(name, args, role, ctx) {
       },
       baseline: base.exists ? base.data() : null,
       latestCheckpoint: cps.empty ? null : cps.docs[0].data(),
+    };
+  }
+
+  if (name === "show_program") {
+    const c = await db.collection("clients").doc(a.clientId).get();
+    if (!c.exists) return { error: `Không có khách id '${a.clientId}'.` };
+    const v = c.data() || {};
+    const prog = compactProgram(v.program, a.days);
+    if (!Object.keys(prog).length) return { empty: true, note: "Khách này chưa có giáo án (hoặc không có buổi đã chọn)." };
+    return {
+      display: { kind: "program", clientId: c.id, name: v.name || c.id, program: prog },
+      note: "App ĐÃ vẽ bảng giáo án cho coach. Đừng chép lại danh sách bài; chỉ thêm 1–3 câu nhận xét nếu cần.",
     };
   }
 
@@ -468,6 +521,7 @@ async function runTool(name, args, role, ctx) {
         after: progSummary(r.program),
         exercises: v.stats.exercises,
         renamed: r.renamed.slice(0, 20),
+        table: compactProgram(r.program),
       },
       note: "Đã gửi cho coach duyệt. Nói cho coach biết thay đổi gì, rồi dừng — "
         + "đừng gọi lại tool này.",
@@ -543,6 +597,7 @@ async function runTool(name, args, role, ctx) {
         sessionsPerWeek: Number(a.sessionsPerWeek) || 3,
         program: a.program ? progSummary(program) : [],
         renamed: renamed.slice(0, 20),
+        table: a.program ? compactProgram(program) : null,
         login: isGroup ? "lớp nhóm — không đăng nhập" : (em || "chưa có email — khách này coach tự quản"),
       },
       note: "Đã gửi cho coach duyệt. Nói cho coach biết sẽ tạo gì, rồi dừng.",
@@ -810,6 +865,14 @@ CHỈNH BUỔI THEO THỂ TRẠNG HÔM NAY (khách mệt, ngủ kém, ốm, đau
 - Đây là chỉnh CHO HÔM NAY: KHÔNG gọi propose_program (giáo án gốc giữ nguyên). Chỉ đề xuất đổi giáo án hẳn
   khi coach yêu cầu rõ, hoặc vấn đề kéo dài nhiều buổi.`;
 
+// ── Trình bày ────────────────────────────────────────────────────────────
+const FORMAT_RULES = `TRÌNH BÀY (khung chat trên điện thoại — đọc lướt được)
+- Coach muốn XEM giáo án hay một buổi: gọi show_program (app vẽ bảng màu theo pha). KHÔNG tự liệt kê bài.
+- KHÔNG dùng công thức toán / LaTeX: không "$", không "\\times", không "\\text{}", không "\\to". Viết thẳng "3 × 8-10", "→".
+- KHÔNG dùng tiêu đề markdown (#, ##, ###, ####) và không bọc tên bài trong dấu \`. Nhấn mạnh thì dùng **in đậm**.
+- Bảng tự viết (chỉnh buổi hôm nay, so sánh): tối đa 4 cột, mỗi ô ngắn; giải thích dài để xuống dưới bảng.
+- Trả lời ngắn: câu chốt trước, chi tiết sau; không mở bài, không nhắc lại câu hỏi.`;
+
 // ── Chỉ dẫn hệ thống ─────────────────────────────────────────────────────
 const SYSTEM = `Bạn là trợ lý của huấn luyện viên thể hình đang dùng app Pulse (studio của Long Chu).
 Chỉ nói về khách mà tool trả về — đó là khách của coach đang hỏi; tool báo "không có khách" thì nói đúng như vậy.
@@ -835,13 +898,16 @@ GIÁO ÁN
 - Soạn/sửa giáo án cho khách ĐÃ CÓ hồ sơ: lượt đầu gọi CÙNG LÚC get_client, get_exercise_loads và
   get_program của khách đó — xem chấn thương, mức tạ thật, giáo án cũ — rồi mới soạn. Server từ chối
   propose_program nếu chưa đọc.
-- Soạn xong giáo án thì in ra bảng cho coach xem, VÀ gọi propose_program để gửi duyệt.
+- Soạn xong giáo án thì gọi propose_program / propose_new_client — thẻ duyệt TỰ VẼ bảng giáo án cho coach.
+  Trong câu trả lời KHÔNG chép lại từng bài; chỉ 2–4 câu: chia buổi thế nào, tổng set mỗi nhóm cơ, điểm cần lưu ý.
 
 ${METHOD}
 
 ${GROUP_METHOD}
 
 ${EXPLAIN_METHOD}
+
+${FORMAT_RULES}
 
 ĐỀ XUẤT THAY ĐỔI
 - Bạn KHÔNG ghi thẳng vào dữ liệu. Hai tool propose_program và propose_new_client chỉ gửi đề xuất;
@@ -893,6 +959,7 @@ async function runAssistant({ client, model, messages, clientId, role, day }) {
 
   const toolLog = [];
   const pending = [];        // đề xuất chờ coach duyệt
+  const displays = [];       // bảng app tự vẽ (show_program)
   const ctx = { read: {} };   // tool đọc đã chạy trong lượt này: { "get_client:cindy": true }
   const lastUser = [...(messages || [])].reverse().find((m) => m.role !== "assistant");
   let design = designIntent(lastUser && lastUser.text);
@@ -918,7 +985,7 @@ async function runAssistant({ client, model, messages, clientId, role, day }) {
 
     const calls = (interaction.steps || []).filter((s) => s.type === "function_call");
     if (!calls.length) {
-      return { text: interaction.output_text || "", toolLog, pending, steps, usage };
+      return { text: interaction.output_text || "", toolLog, pending, displays, steps, usage };
     }
 
     // Giữ nguyên các bước model sinh ra rồi mới nối kết quả — bỏ qua là model
@@ -947,6 +1014,7 @@ async function runAssistant({ client, model, messages, clientId, role, day }) {
       const result = results[k];
       toolLog.push({ name: c.name, args: c.arguments || {}, empty: !!(result && (result.empty || result.error)) });
       if (result && result.needsConfirm) pending.push({ action: result.action, preview: result.preview });
+      if (result && result.display) displays.push(result.display);
       input.push({
         type: "function_result",
         call_id: c.id,
@@ -960,7 +1028,7 @@ async function runAssistant({ client, model, messages, clientId, role, day }) {
   return {
     text: "Câu này cần tra nhiều hơn mức cho phép trong một lượt. Hỏi hẹp lại giúp tao "
       + "(ví dụ nêu rõ tên khách, hoặc hỏi từng khách một).",
-    toolLog, pending, steps, usage, hitLimit: true,
+    toolLog, pending, displays, steps, usage, hitLimit: true,
   };
 }
 
@@ -977,6 +1045,7 @@ function shapeReply(r) {
     text: (r && r.text) || "",
     toolLog: (r && r.toolLog) || [],
     pending: (r && r.pending) || [],
+    displays: (r && r.displays) || [],
     steps: (r && r.steps) || 0,
     hitLimit: !!(r && r.hitLimit),
   };
@@ -1046,5 +1115,5 @@ function buildMorningPush({ bookings, rec }) {
   return { title, body: lines.join("\n") };
 }
 
-module.exports = { TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, METHOD, GROUP_METHOD, EXPLAIN_METHOD, checkRationale, GROUP_FORMATS, groupName, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, THINK_DESIGN, designIntent, runTool, runAssistant, progSummary, shapeReply,
+module.exports = { TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, METHOD, GROUP_METHOD, EXPLAIN_METHOD, FORMAT_RULES, compactProgram, checkRationale, GROUP_FORMATS, groupName, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, THINK_DESIGN, designIntent, runTool, runAssistant, progSummary, shapeReply,
   validateProgram, validateNewClient, makeClientId, LEVELS };
