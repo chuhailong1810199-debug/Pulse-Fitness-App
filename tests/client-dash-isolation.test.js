@@ -186,6 +186,35 @@ for (const bad of [
   });
 }
 
+// ── the Nhom co: hai loi da gap tren desktop ─────────────────────────
+ok("khong co luat grid nao xe doi the .cd-mus", async () => {
+  // .cd-mus truoc kia la DANH SACH nhom co chia hai cot. Ban moi dung lai dung
+  // ten class do cho ca THE chua hinh. Luat cu con lai thi the bi xe doi: hang
+  // hinh nam trong cot 274px, grid con can 220px + noi dung nen cot hai sap ve
+  // 0 va chu tran ra ngoai the. Chi thay khi khach CO du lieu Polar (the bi hep
+  // lai), nen rat de lot.
+  const css = [...s.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join("\n")
+    .replace(/\/\*[\s\S]*?\*\//g, "");
+  const bad = [...css.matchAll(/([^{}]*\.cd-mus)\s*\{([^}]*)\}/g)]
+    .filter((m) => !/\.cd-mus[-\w]/.test(m[1]) && /grid-template-columns/.test(m[2]));
+  assert.strictEqual(bad.length, 0,
+    "luat dat grid-template-columns thang len .cd-mus: " + bad.map((b) => b[1].trim()).join(" | ")
+    + " — se xe doi the chua hinh co the");
+});
+
+ok("cau bao rong khong chen thang _cdd.scope vao 'N ngay qua'", async () => {
+  // _cdd.scope la 'last' | 7 | 28. Chen thang vao cau dem ngay thi khi dang o
+  // "Buoi gan nhat" se ra "Khong co buoi nao trong last ngay qua".
+  const hits = [...s.matchAll(/'[^']*trong ' \+ _cdd\.scope \+ ' ngày/g)];
+  for (const h of hits) {
+    const at = s.indexOf(h[0]);
+    const ctx = s.slice(Math.max(0, at - 260), at);
+    assert(/_cdd\.scope === 'last'/.test(ctx),
+      "cau \"trong N ngay qua\" chen thang _cdd.scope ma khong tach nhanh 'last'");
+  }
+  assert(hits.length > 0, "khong tim thay cau dem ngay, bo do hong");
+});
+
 ok("moi duong dan Firestore deu la cua chinh khach", async () => {
   const paths = [];
   const ctx = { console, Object, Number, String, Promise, Array,
