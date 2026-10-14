@@ -16669,6 +16669,9 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 
 #cdash-page{display:none;}
 #cdash-page.active{display:block;padding:0 20px 100px;max-width:1700px;margin:0 auto;}
+/* Khối giao diện #cdash-page{…display:flex…} viết SAU dòng trên đè mất display:none,
+   nên hồ sơ khách hiện kèm dưới MỌI tab (báo 2026-10-15). Chốt lại: chỉ hiện khi .active. */
+#cdash-page:not(.active){display:none !important;}
 .cd-loading{padding:40px;text-align:center;font-size:13px;color:#8FDBFF;}
 
 /* ══ DASHBOARD KHACH — gop Hoat dong, hinh co the, bo bai session ══════
