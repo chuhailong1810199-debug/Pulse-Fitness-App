@@ -3430,11 +3430,26 @@ exports.coachApply = onCall(
           program: old, replacedAt: new Date().toISOString(), by: email,
         }).catch((e) => console.warn("[coachApply] không lưu được bản cũ:", e.message));
       }
+      // Ô tạ điền sẵn lưu theo VỊ TRÍ bài — đổi giáo án mà giữ nguyên thì tạ bài
+      // cũ hiện sang bài mới cùng chỗ. Chuyển theo TÊN bài (session-loads.js) và
+      // ghi CÙNG MỘT batch với giáo án: máy đang mở app nhận giáo án mới là tạ đã
+      // đúng chỗ, không có khoảnh khắc lệch. Dấu tích dở dang của buổi bị xoá.
+      const { remapSessionLoads } = require("./session-loads.js");
+      const slSnap = await ref.collection("sessionLoads").get().catch(() => null);
+      const oldDocs = {};
+      if (slSnap) slSnap.forEach((d) => { oldDocs[d.id] = d.data() || {}; });
+      const { docs, carried } = remapSessionLoads(String(act.clientId), old, act.program, oldDocs);
+      const batch = db.batch();
       // update, KHÔNG set-merge: merge trộn map lồng nhau — các buổi cũ không có
       // trong giáo án mới (SessionE…) vẫn nằm lại và hiện ra trong app.
-      await ref.update({ program: act.program });
-      console.log(`[coachApply] giáo án -> ${act.clientId}: ${v.stats.days} buổi, ${v.stats.exercises} bài`);
-      return { ok: true, clientId: act.clientId, ...v.stats };
+      batch.update(ref, { program: act.program });
+      for (const [day, d] of Object.entries(docs)) {
+        batch.set(ref.collection("sessionLoads").doc(day), { ...d, done: {}, updatedAt: new Date() });
+      }
+      await batch.commit();
+      console.log(`[coachApply] giáo án -> ${act.clientId}: ${v.stats.days} buổi, ${v.stats.exercises} bài, `
+        + `mang tạ cũ theo ${carried.length} bài`);
+      return { ok: true, clientId: act.clientId, ...v.stats, carriedLoads: carried.length };
     }
 
     if (act.kind === "create_client") {

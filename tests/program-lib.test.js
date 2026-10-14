@@ -112,6 +112,6 @@ test('bai cu (keepNames) KHONG tu bat bw — so kg cu se doi nghia (Sang: 35 tha
 test('coachApply thay HAN giao an (update), khong set-merge tron buoi cu', () => {
   const s = fs.readFileSync(path.join(__dirname, '..', 'functions', 'index.js'), 'utf8');
   const f = s.slice(s.indexOf('exports.coachApply'), s.indexOf('exports.', s.indexOf('exports.coachApply') + 10));
-  assert.ok(/await ref\.update\(\{ program: act\.program \}\)/.test(f));
+  assert.ok(/(?:await ref|batch)\.update\((?:ref, )?\{ program: act\.program \}\)/.test(f));
   assert.ok(!/set\(\{ program: act\.program \}, \{ merge: true \}\)/.test(f));
 });

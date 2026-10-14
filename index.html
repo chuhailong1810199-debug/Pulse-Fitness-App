@@ -1215,8 +1215,15 @@ async function loadAllClients() {
 }
 
 // Realtime listener for program changes
+/** Chữ ký bố cục giáo án (buổi → tên bài theo thứ tự). Đổi = ô tạ theo vị trí phải nạp lại. */
+let _progSig = null;
+function _programSig(prog) {
+  return JSON.stringify(Object.keys(prog || {}).sort().map((k) =>
+    [k, ((prog[k] || {}).phases || []).map((ph) => ((ph && ph.exercises) || []).map((x) => (x && x.name) || ''))]));
+}
 function subscribeProgram() {
   if (_programUnsub) _programUnsub();
+  _progSig = null;
   if (!activeClient) return;
   const listenId = activeClient.id;
   _programUnsub = onSnapshot(doc(db, 'clients', listenId), snap => {
@@ -1235,8 +1242,16 @@ function subscribeProgram() {
       if (dayChanged) activeDay = days[0];
       renderDayTabs();
       renderExercises();
-      // Re-hydrate if activeDay changed (e.g. old cache had Mon/Wed/Fri, Firestore now has SessionA/B/C)
-      if (dayChanged) hydrateExerciseLoadsForActiveDay().then(() => renderExercises());
+      // Nạp lại ô tạ khi đổi buổi, HOẶC khi bố cục bài đổi (coach/trợ lý vừa đẩy giáo
+      // án mới): số đang ở bộ nhớ là theo vị trí cũ, để nguyên thì lần gõ tiếp theo
+      // ghi đè bản server vừa chuyển theo tên bài.
+      const sig = _programSig(activeClient.program);
+      const layoutChanged = _progSig !== null && sig !== _progSig;
+      _progSig = sig;
+      if (dayChanged || layoutChanged) {
+        clearTimeout(_saveLoadsFBTimer);
+        hydrateExerciseLoadsForActiveDay().then(() => renderExercises());
+      }
     }
   });
 }
@@ -9728,7 +9743,13 @@ async function aiApprove(i) {
         && activeClient.id === m.action.clientId) {
       activeClient.program = m.action.program;
       saveProgramCache(activeClient.id, m.action.program);
-      renderDayTabs(); renderExercises();
+      _progSig = _programSig(m.action.program);
+      if (!activeClient.program[activeDay]) activeDay = Object.keys(activeClient.program).sort()[0] || activeDay;
+      // Server đã chuyển ô tạ theo tên bài — nạp lại, bỏ số cũ theo vị trí đang ở bộ nhớ.
+      clearTimeout(_saveLoadsFBTimer);
+      renderDayTabs();
+      await hydrateExerciseLoadsForActiveDay();
+      renderExercises();
     }
     if (m.action.kind === 'create_client') await loadAllClients();
   } catch (e) {
@@ -16789,6 +16810,9 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 
 #cdash-page{display:none;}
 #cdash-page.active{display:block;padding:0 20px 100px;max-width:1700px;margin:0 auto;}
+/* Khối giao diện #cdash-page{…display:flex…} viết SAU dòng trên đè mất display:none,
+   nên hồ sơ khách hiện kèm dưới MỌI tab (báo 2026-10-15). Chốt lại: chỉ hiện khi .active. */
+#cdash-page:not(.active){display:none !important;}
 .cd-loading{padding:40px;text-align:center;font-size:13px;color:#8FDBFF;}
 
 /* ══ DASHBOARD KHACH — gop Hoat dong, hinh co the, bo bai session ══════
