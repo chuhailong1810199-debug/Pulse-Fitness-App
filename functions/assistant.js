@@ -12,11 +12,19 @@
  *   mình đáp  { type:"function_result", call_id, name, result }
  */
 const { canManageDoc, canViewDoc } = require("./authz.js");
-const { buildLibIndex, resolveProgram, PHASE_TAGS, normalizePhaseTag } = require("./program-lib.js");
+const { buildLibIndex, resolveProgram, PHASE_TAGS, normalizePhaseTag, squash, suggest } = require("./program-lib.js");
 const { getFirestore } = require("firebase-admin/firestore");
 
 /** Trần số vòng gọi tool cho một câu hỏi. */
-const MAX_STEPS = 8;   // soạn giáo án: đọc hồ sơ → tra thư viện → đề xuất → (sửa lỗi) → trả lời
+const MAX_STEPS = 8;   // hỏi đáp: đọc → (đọc thêm) → trả lời
+/**
+ * Soạn giáo án cần nhiều vòng hơn: tìm khách → đọc hồ sơ/mức tạ → tra thư viện →
+ * đề xuất → sửa lỗi tên bài → đề xuất lại. 8 vòng không đủ cho giáo án 5 buổi ×
+ * 6 bài (2026-10-16: Anh Đạo, "3 block mỗi buổi" → chạm trần, mất cả bản nháp).
+ */
+const MAX_STEPS_DESIGN = 14;
+/** Hàm nền chết ở 180 giây — không mở vòng mới sau mốc này, trả lời với những gì đã có. */
+const TIME_BUDGET_MS = 140 * 1000;
 /** Mức suy luận: "minimal" | "low" | "medium" | "high". Xem chú thích ở vòng lặp. */
 const THINK_DISPATCH = "minimal";
 const THINK_COMPOSE = "low";
@@ -114,6 +122,8 @@ const TOOLS = [
       type: "object",
       properties: {
         query: { type: "string", description: "từ khoá tên bài" },
+        queries: { type: "array", items: { type: "string" },
+          description: "NHIỀU tên bài một lần (soạn cả giáo án: gửi hết các bài định dùng trong MỘT lần gọi)" },
         muscle: { type: "string", description: "nhóm cơ" },
         tool: { type: "string", description: "dụng cụ: barbell, dumbbell, cable, bodyweight…" },
       },
@@ -308,6 +318,24 @@ async function runTool(name, args, role, ctx) {
 }
 
 /**
+ * Khớp từ khoá với tên bài THEO TỪ, không theo cả chuỗi: "kettlebell swing" phải ra
+ * "Swing (Kettlebell)", "farmer carry" ra "Farmer's Carry (Dumbbell)", "kb swing" mở
+ * viết tắt. Khớp cả chuỗi (cách cũ) trả rỗng → model tra lại mãi → hết vòng (2026-10-16).
+ */
+function exerciseHit(v, q) {
+  const split = (x) => String(x || "").toLowerCase().split(/[^a-z0-9à-ỹđ]+/).map((w) => squash(w)).filter(Boolean);
+  const ws = split(q);
+  if (!ws.length) return true;
+  // Khớp ĐẦU TỪ, không khớp giữa chuỗi đã dồn: dồn cả tên thì "row erg" khớp nhầm
+  // "naRROW ... zERcher Good morning". Cho phép hai từ liền nhau ghép lại ("pushup" ↔ "Push Up").
+  const hw = split(String(v.name || "") + " " + String(v.tool || ""));
+  const parts = hw.concat(hw.slice(1).map((w, i) => hw[i] + w));
+  const has = (w) => parts.some((p) => p.startsWith(w));
+  // "lunges" ↔ "lunge", "push ups" ↔ "push up"
+  return ws.every((w) => has(w) || (w.length > 4 && w.endsWith("s") && has(w.slice(0, -1))));
+}
+
+/**
  * Thân các tool — KHÔNG tự kiểm quyền. Chỉ gọi qua runTool (coach, đã gác theo
  * coach) hoặc runClientTool (khách, đã ép clientId = chính họ).
  */
@@ -439,22 +467,34 @@ async function execTool(db, name, a, role, ctx) {
 
   if (name === "search_exercises") {
     const lib = await exerciseLibrary(db);
-    const q = (a.query || "").toLowerCase().trim();
     const mu = (a.muscle || "").toLowerCase().trim();
     const tl = (a.tool || "").toLowerCase().trim();
-    const hit = lib.filter((v) => {
-      const name2 = String(v.name || "").toLowerCase();
-      const mus = JSON.stringify(v.muscles || "").toLowerCase();
-      const tool = String(v.tool || "").toLowerCase();
-      return (!q || name2.includes(q)) && (!mu || mus.includes(mu)) && (!tl || tool.includes(tl));
-    }).slice(0, CAP);
-    if (!hit.length) return { empty: true, note: "Không có bài nào khớp trong thư viện." };
-    return {
-      count: hit.length,
-      exercises: hit.map((v) => ({
-        id: v.id, name: v.name, muscles: v.muscles, tool: v.tool, difficulty: v.difficulty,
-      })),
+    const row = (v) => ({ id: v.id, name: v.name, muscles: v.muscles, tool: v.tool, difficulty: v.difficulty });
+    const one = (q, cap) => {
+      const hit = lib.filter((v) => exerciseHit(v, q)
+        && (!mu || JSON.stringify(v.muscles || "").toLowerCase().includes(mu))
+        && (!tl || String(v.tool || "").toLowerCase().includes(tl))).slice(0, cap);
+      return hit;
     };
+    const qs = Array.isArray(a.queries) ? a.queries.map(String).filter(Boolean).slice(0, 40) : [];
+    if (qs.length) {
+      // Cả giáo án trong MỘT vòng: mỗi tên một nhóm kết quả. Không khớp thì kèm gợi ý gần nhất.
+      const idx = buildLibIndex(lib);
+      return {
+        results: qs.map((q) => {
+          const hit = one(q, 6);
+          return hit.length ? { query: q, exercises: hit.map((v) => v.name) }
+            : { query: q, empty: true, closest: suggest(q, idx, 4) };
+        }),
+        note: "Dùng tên ĐÚNG Y như trên. Bài có nhiều dụng cụ thì chọn MỘT bản.",
+      };
+    }
+    const hit = one(a.query || "", CAP);
+    if (!hit.length) {
+      const near = a.query ? suggest(a.query, buildLibIndex(lib), 6) : [];
+      return { empty: true, note: "Không có bài nào khớp trong thư viện.", closest: near };
+    }
+    return { count: hit.length, exercises: hit.map(row) };
   }
 
   if (name === "get_recovery") {
@@ -509,15 +549,15 @@ async function execTool(db, name, a, role, ctx) {
       return { rejected: true, errors: lib.errors.slice(0, 12),
         note: "Đổi các bài trên sang tên ĐÚNG Y trong thư viện (search_exercises), rồi đề xuất lại." };
     }
+    // Báo MỌI lỗi trong một lần — tên bài lẫn thiếu why/focus. Báo từng đợt (12 lỗi
+    // tên, sửa xong mới tới lỗi why) thì giáo án 30 bài cần 4–5 vòng và chạm trần.
     const r = lib.resolve(a.program);
-    if (r.errors.length) {
-      return { rejected: true, errors: r.errors.slice(0, 12),
-        note: "Đổi các bài trên sang tên ĐÚNG Y trong thư viện (search_exercises), rồi đề xuất lại." };
-    }
     const why = checkRationale(r.program);
-    if (why.length) {
-      return { rejected: true, errors: why.slice(0, 12),
-        note: "Thêm focus cho mỗi buổi và why cho mỗi bài chính/phụ (lý do cho CHÍNH khách này), rồi đề xuất lại." };
+    if (r.errors.length || why.length) {
+      const all = [...r.errors, ...why];
+      return { rejected: true, errors: all.slice(0, 60), more: Math.max(0, all.length - 60),
+        note: "Sửa HẾT các lỗi trên trong một lần rồi đề xuất lại: tên bài lấy ĐÚNG Y từ thư viện "
+          + "(search_exercises với queries = mọi bài lỗi), thêm focus mỗi buổi và why mỗi bài chính/phụ." };
     }
     return {
       needsConfirm: true,
@@ -559,8 +599,8 @@ async function execTool(db, name, a, role, ctx) {
       if (lib.errors.length) return { rejected: true, errors: lib.errors };
       const r = lib.resolve(a.program);
       if (r.errors.length) {
-        return { rejected: true, errors: r.errors.slice(0, 12),
-          note: "Đổi các bài trên sang tên ĐÚNG Y trong thư viện (search_exercises), rồi đề xuất lại." };
+        return { rejected: true, errors: r.errors.slice(0, 60),
+          note: "Đổi HẾT các bài trên sang tên ĐÚNG Y trong thư viện (search_exercises với queries), rồi đề xuất lại." };
       }
       const why = checkRationale(r.program);
       if (why.length) {
@@ -903,6 +943,10 @@ GIÁO ÁN
 - Tên bài ở pha strength/accessories phải ĐÚNG Y tên search_exercises trả về, kể cả phần dụng cụ trong
   ngoặc ("Goblet Squat (Dumbbell)", không phải "Goblet Squat"). Server khớp với thư viện, tự gắn nhóm cơ;
   tên lạ hoặc mơ hồ bị trả lỗi kèm gợi ý — chọn lại từ gợi ý. Pha warmup/circuit được dùng bài ngoài thư viện.
+- Tra thư viện GỌN: soạn cả giáo án thì gọi search_exercises MỘT lần với queries = mọi bài định dùng
+  (VD ["goblet squat","kettlebell swing","push up"]), không gọi lẻ từng bài. Bị từ chối thì sửa HẾT lỗi
+  trong một lần. Số lượt có hạn — tra lắt nhắt là hết lượt trước khi kịp đề xuất.
+- Không có khách đang mở mà câu hỏi nêu tên khách: list_clients tìm id, rồi đọc hồ sơ ngay lượt sau.
 - Soạn/sửa giáo án cho khách ĐÃ CÓ hồ sơ: lượt đầu gọi CÙNG LÚC get_client, get_exercise_loads và
   get_program của khách đó — xem chấn thương, mức tạ thật, giáo án cũ — rồi mới soạn. Server từ chối
   propose_program nếu chưa đọc.
@@ -1008,7 +1052,7 @@ function designIntent(text) { return DESIGN_RE.test(String(text || "")); }
  * @param {object} o.role       vai trò người gọi (authz.roleOf) — mọi tool lọc theo nó
  * @returns {Promise<{text:string, toolLog:Array, steps:number, usage:object}>}
  */
-async function runAssistant({ client, model, messages, clientId, role, day, audience, lang }) {
+async function runAssistant({ client, model, messages, clientId, role, day, audience, lang, timeBudgetMs }) {
   const forClient = audience === "client";
   const input = [];
   // Giao diện tiếng Anh → trả lời tiếng Anh (thuật ngữ, tên bài giữ nguyên). Mặc định tiếng Việt.
@@ -1041,8 +1085,11 @@ async function runAssistant({ client, model, messages, clientId, role, day, audi
   let design = designIntent(lastUser && lastUser.text);
   let usage = null;
   let steps = 0;
+  const t0 = Date.now();
+  let lastReject = null;     // lỗi của lần propose_* bị từ chối gần nhất
+  const budget = () => (design ? MAX_STEPS_DESIGN : MAX_STEPS);
 
-  while (steps < MAX_STEPS) {
+  while (steps < budget() && (steps === 0 || Date.now() - t0 < (timeBudgetMs || TIME_BUDGET_MS))) {
     steps++;
     // Gemini 3 mặc định suy luận dài. Chính chú thích trong callGemini ghi đó
     // là thứ từng đẩy lời gọi ảnh món ăn vượt trần 60 giây.
@@ -1093,6 +1140,7 @@ async function runAssistant({ client, model, messages, clientId, role, day, audi
       toolLog.push({ name: c.name, args: c.arguments || {}, empty: !!(result && (result.empty || result.error)) });
       if (result && result.needsConfirm) pending.push({ action: result.action, preview: result.preview });
       if (result && result.display) displays.push(result.display);
+      if (c.name.startsWith("propose_")) lastReject = result && result.rejected ? result : null;
       input.push({
         type: "function_result",
         call_id: c.id,
@@ -1103,11 +1151,23 @@ async function runAssistant({ client, model, messages, clientId, role, day, audi
   }
 
   // Hết vòng mà model vẫn đòi gọi tool: trả lời thật thà thay vì lặng thinh.
-  return {
-    text: "Câu này cần tra nhiều hơn mức cho phép trong một lượt. Hỏi hẹp lại giúp tao "
-      + "(ví dụ nêu rõ tên khách, hoặc hỏi từng khách một).",
-    toolLog, pending, displays, steps, usage, hitLimit: true,
-  };
+  // Đang soạn dở mà bị từ chối thì nói rõ vướng gì — coach biết đường gõ tiếp.
+  const en = lang === "en";
+  let text;
+  if (lastReject && (lastReject.errors || []).length) {
+    const errs = lastReject.errors.slice(0, 8).map((e) => "• " + e).join("\n");
+    text = (en
+      ? "I drafted the program but ran out of steps before it passed the checks. Still blocking:\n"
+      : "Tao soạn xong bản nháp nhưng hết lượt trước khi qua được bước kiểm. Còn vướng:\n")
+      + errs + (en ? "\n\nSend \"continue\" and I'll fix these and propose again."
+        : "\n\nNhắn \"tiếp tục\" để tao sửa nốt và đề xuất lại.");
+  } else {
+    text = en
+      ? "This needed more lookups than one turn allows. Narrow it down (e.g. name the client, or one client at a time)."
+      : "Câu này cần tra nhiều hơn mức cho phép trong một lượt. Hỏi hẹp lại giúp tao "
+        + "(ví dụ nêu rõ tên khách, hoặc hỏi từng khách một).";
+  }
+  return { text, toolLog, pending, displays, steps, usage, hitLimit: true };
 }
 
 /**
@@ -1194,4 +1254,4 @@ function buildMorningPush({ bookings, rec }) {
 }
 
 module.exports = { CLIENT_TOOLS, CLIENT_TOOL_NAMES, CLIENT_SYSTEM, runClientTool, TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, METHOD, GROUP_METHOD, EXPLAIN_METHOD, FORMAT_RULES, compactProgram, checkRationale, GROUP_FORMATS, groupName, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, THINK_DESIGN, designIntent, runTool, runAssistant, progSummary, shapeReply,
-  validateProgram, validateNewClient, makeClientId, LEVELS };
+  validateProgram, validateNewClient, makeClientId, LEVELS, MAX_STEPS_DESIGN, TIME_BUDGET_MS, exerciseHit };

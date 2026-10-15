@@ -1,0 +1,86 @@
+/**
+ * Trợ lý hết lượt khi soạn giáo án dài (2026-10-16): coach nhờ soạn lại giáo án Anh Đạo
+ * (5 buổi × 3 block × 2 bài) → "Câu này cần tra nhiều hơn mức cho phép", mất cả bản nháp.
+ * Ba nguyên nhân: tra thư viện khớp cả chuỗi (ra rỗng, model tra lại mãi), propose_program
+ * báo lỗi từng đợt (12 lỗi tên, rồi mới tới why/focus), và trần 8 vòng.
+ */
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs'), path = require('path'), Mod = require('module');
+
+// Nạp assistant.js kèm execTool (thân tool, không gác quyền) để chạy với db giả.
+const fn = path.join(__dirname, '..', 'functions', 'assistant.js');
+const m = new Mod(fn); m.filename = fn; m.paths = Mod._nodeModulePaths(path.dirname(fn));
+m._compile(fs.readFileSync(fn, 'utf8') + '\nmodule.exports.execTool = execTool;', fn);
+const A = m.exports;
+
+const LIB = [
+  { id: 'e1', name: 'Swing (Kettlebell)', tool: 'Kettlebell', muscles: { Glutes: 'P', Hamstrings: 'S' } },
+  { id: 'e2', name: "Farmer's Carry (Dumbbell)", tool: 'Dumbbell', muscles: { Forearms: 'P' } },
+  { id: 'e3', name: 'Goblet Squat (Dumbbell)', tool: 'Dumbbell', muscles: { Quads: 'P', Glutes: 'S' } },
+  { id: 'e4', name: 'Narrow Stance Zercher Good Morning (Barbell)', tool: 'Barbell', muscles: { Hamstrings: 'P' } },
+  { id: 'e5', name: 'Narrow Push Up (BW)', tool: 'Bodyweight', muscles: { Chest: 'P', Triceps: 'S' } },
+  { id: 'e6', name: 'Walking Lunge (Bodyweight)', tool: 'Bodyweight', muscles: { Quads: 'P', Glutes: 'S' } },
+  { id: 'e7', name: 'Walking Lunge (Dumbbell)', tool: 'Dumbbell', muscles: { Quads: 'P', Glutes: 'P' } },
+];
+const db = { collection: (n) => ({
+  doc: (id) => ({ get: async () => ({ exists: n === 'clients' && id === 'dao', id,
+    data: () => ({ name: 'Anh Đạo', program: {} }) }) }),
+  get: async () => ({ empty: false, docs: (n === 'exercises' ? LIB : []).map((x) => ({ id: x.id, data: () => x })) }),
+}) };
+const ROLE = { coach: true, admin: true, uid: 'u' };
+
+test('tra thu vien khop theo tu: thu tu dao, viet tat, so nhieu; khong khop nham giua chuoi', () => {
+  const f = (q) => LIB.filter((v) => A.exerciseHit(v, q)).map((v) => v.name);
+  assert.deepStrictEqual(f('kettlebell swing'), ['Swing (Kettlebell)']);
+  assert.deepStrictEqual(f('kb swing'), ['Swing (Kettlebell)']);
+  assert.deepStrictEqual(f('farmer carry'), ["Farmer's Carry (Dumbbell)"]);
+  assert.deepStrictEqual(f('pushup'), ['Narrow Push Up (BW)']);
+  assert.strictEqual(f('walking lunges').length, 2);
+  assert.deepStrictEqual(f('row erg'), [], 'khong duoc khop "naRROW ... zERcher Good morning"');
+});
+
+test('search_exercises nhan nhieu ten mot lan, ten khong co thi kem goi y', async () => {
+  const r = await A.execTool(db, 'search_exercises', { queries: ['kettlebell swing', 'goblet squat', 'sled push'] }, ROLE, {});
+  assert.strictEqual(r.results.length, 3);
+  assert.deepStrictEqual(r.results[0].exercises, ['Swing (Kettlebell)']);
+  assert.deepStrictEqual(r.results[1].exercises, ['Goblet Squat (Dumbbell)']);
+  assert.strictEqual(r.results[2].empty, true);
+  assert.ok(Array.isArray(r.results[2].closest));
+});
+
+test('propose_program bao MOI loi mot lan: ten bai lan why/focus, khong cat o 12', async () => {
+  const day = (k) => ({ label: k, phases: [{ name: 'Block 1', tag: 'strength', exercises:
+    [1, 2, 3, 4, 5, 6, 7].map((i) => ({ name: 'Bai La ' + k + i, setsReps: '3 × 10' })) }] });
+  const prog = { SessionA: day('A'), SessionB: day('B') };   // 14 bài lạ + thiếu focus
+  const ctx = { read: { 'get_client:dao': true, 'get_exercise_loads:dao': true } };
+  const r = await A.execTool(db, 'propose_program', { clientId: 'dao', program: prog }, ROLE, ctx);
+  assert.strictEqual(r.rejected, true);
+  assert.strictEqual(r.errors.filter((e) => /không có trong thư viện/.test(e)).length, 14, 'thieu loi ten bai');
+  assert.ok(r.errors.some((e) => /thiếu "focus"/.test(e)), 'loi focus phai bao cung luot');
+});
+
+const fake = (turns) => { let i = 0; return { interactions: { create: async () => {
+  const s = turns[Math.min(i++, turns.length - 1)];
+  return { steps: (s.calls || []).map((c, k) => ({ type: 'function_call', id: 'c' + i + k, name: c.name, arguments: c.args || {} })),
+    output_text: s.text || '' };
+} } }; };
+
+test('soan giao an duoc nhieu vong hon hoi dap', async () => {
+  const msg = (t) => [{ role: 'user', text: t }];
+  const loop = [{ calls: [{ name: 'list_clients' }] }];
+  const q = await A.runAssistant({ client: fake(loop), model: 'm', messages: msg('khách nào lâu chưa tập'), role: ROLE });
+  assert.strictEqual(q.steps, A.MAX_STEPS);
+  const d = await A.runAssistant({ client: fake(loop), model: 'm', messages: msg('design lại giáo án của anh Đạo'), role: ROLE });
+  assert.strictEqual(d.steps, A.MAX_STEPS_DESIGN);
+  assert.ok(A.MAX_STEPS_DESIGN > A.MAX_STEPS);
+});
+
+test('het thoi gian thi dung, khong de ham nen chet o 180 giay', async () => {
+  const slow = { interactions: { create: async () => { await new Promise((r) => setTimeout(r, 30));
+    return { steps: [{ type: 'function_call', id: 'x', name: 'list_clients', arguments: {} }], output_text: '' }; } } };
+  const r = await A.runAssistant({ client: slow, model: 'm', messages: [{ role: 'user', text: 'soạn giáo án' }], role: ROLE, timeBudgetMs: 50 });
+  assert.ok(r.hitLimit);
+  assert.ok(r.steps < A.MAX_STEPS_DESIGN, 'chay ' + r.steps + ' vong du da het gio');
+  assert.ok(A.TIME_BUDGET_MS < 180000);
+});
