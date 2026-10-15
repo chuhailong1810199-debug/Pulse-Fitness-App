@@ -886,6 +886,7 @@ async function loadApp() {
     clientsData  = [{ id: snap.id, ...snap.data() }];
     activeClient = clientsData[0];
     afterClientChange();
+    aiMount();                       // khách cũng có trợ lý (chỉ đọc giáo án của chính mình)
     console.log('[clientId-debug] activeClient.id =', activeClient.id, '| userClientId =', userClientId);
     renderClientBar(false);
 
@@ -9515,18 +9516,22 @@ let _aiMsgs = [];          // [{role:'user'|'assistant', text}] — trỏ vào l
 let _aiMode = 'general';
 const _aiThreads = { general: _aiMsgs };
 const _aiThreadLoaded = {};
-function _aiKey() { return _aiMode === 'client' && activeClient ? 'c:' + activeClient.id : 'general'; }
+function _aiKey() {
+  if (_aiMode === 'self') return 'self';
+  return _aiMode === 'client' && activeClient ? 'c:' + activeClient.id : 'general';
+}
 function _aiPoint() {
   const k = _aiKey();
   _aiMsgs = _aiThreads[k] || (_aiThreads[k] = []);
 }
 async function _aiLoadThread() {
-  if (_aiMode !== 'client' || !activeClient) return;
-  const id = activeClient.id, k = 'c:' + id;
+  if ((_aiMode !== 'client' && _aiMode !== 'self') || !activeClient) return;
+  const id = activeClient.id, k = _aiMode === 'self' ? 'self' : 'c:' + id;
+  const coll = _aiMode === 'self' ? 'clientChat' : 'aiChat';
   if (_aiThreadLoaded[k]) return;
   _aiThreadLoaded[k] = true;
   try {
-    const snap = await getDocs(query(collection(db, 'clients', id, 'aiChat'), orderBy('at', 'desc'), limit(30)));
+    const snap = await getDocs(query(collection(db, 'clients', id, coll), orderBy('at', 'desc'), limit(30)));
     const old = [];
     snap.docs.map((d) => d.data()).reverse().forEach((m) => {
       old.push(m.show ? { role: m.role, text: m.text, show: m.show } : { role: m.role, text: m.text });
@@ -9545,6 +9550,12 @@ function aiSetMode(m) {
 function _aiTabs() {
   const t = document.getElementById('ai-tabs');
   if (!t) return;
+  if (_aiMode === 'self') {          // khách: một luồng duy nhất, không có tab
+    t.innerHTML = '';
+    const who = document.getElementById('ai-who');
+    if (who) who.textContent = 'lưu lại · coach của bạn xem được';
+    return;
+  }
   const name = activeClient ? (activeClient.name || activeClient.id) : '';
   t.innerHTML = '<button type="button" aria-pressed="' + (_aiMode === 'general') + '" onclick="aiSetMode(\'general\')">Chung</button>'
     + (activeClient ? '<button type="button" aria-pressed="' + (_aiMode === 'client') + '" onclick="aiSetMode(\'client\')">'
@@ -9554,7 +9565,7 @@ function _aiTabs() {
 }
 /** Đổi khách khi khung đang mở: chế độ "theo khách" chuyển sang luồng của khách mới. */
 function aiOnClientChange() {
-  if (!document.getElementById('ai-sheet')) return;
+  if (!document.getElementById('ai-sheet') || _aiMode === 'self') return;
   if (!activeClient && _aiMode === 'client') _aiMode = 'general';
   _aiPoint(); _aiTabs();
   if (document.getElementById('ai-sheet').classList.contains('open')) { aiPaint(); _aiLoadThread(); }
@@ -9562,7 +9573,8 @@ function aiOnClientChange() {
 let _aiBusy = false;
 
 function aiMount() {
-  if (userRole !== 'coach' || document.getElementById('ai-fab')) return;
+  if ((userRole !== 'coach' && userRole !== 'client') || document.getElementById('ai-fab')) return;
+  if (userRole === 'client') _aiMode = 'self';
 
   const fab = document.createElement('button');
   fab.id = 'ai-fab';
@@ -9606,7 +9618,10 @@ function aiOpen(mode) {
   if (!s) return;
   s.classList.add('open');
   document.getElementById('ai-fab').classList.add('hidden');
-  if (mode === 'client' || mode === 'general') _aiMode = mode;
+  if (userRole === 'client') _aiMode = 'self';
+  else if (mode === 'client' || mode === 'general') _aiMode = mode;
+  const inp = document.getElementById('ai-in');
+  if (inp) inp.placeholder = _aiMode === 'self' ? 'Hỏi về giáo án, bài tập của bạn…' : 'Hỏi về khách, giáo án, bài tập…';
   if (_aiMode === 'client' && !activeClient) _aiMode = 'general';
   _aiPoint(); _aiTabs();
   aiPaint();
@@ -9714,6 +9729,20 @@ function aiPaint() {
   if (_aiForm === 'ready') { log.innerHTML = _aiReadyForm(); log.scrollTop = 0; return; }
   if (_aiForm && !_aiMsgs.length) {
     log.innerHTML = _aiForm === 'group' ? _aiGroupForm() : _aiNewClientForm(); log.scrollTop = 0; return;
+  }
+  if (_aiMode === 'self' && !_aiMsgs.length) {
+    log.innerHTML = '<div class="ai-hi">'
+      + '<p>Hỏi mình về <b>giáo án của bạn</b>: vì sao tập bài này, làm sao cho đúng kỹ thuật, nên tăng tạ chưa…</p>'
+      + '<p class="ai-hi-note">Mình chỉ xem được dữ liệu của bạn và <b>không sửa giáo án</b> — muốn đổi bài thì nhắn coach. Cuộc trò chuyện được lưu, coach của bạn cũng xem được.</p>'
+      + '<button type="button" class="ai-eg ai-eg-main" onclick="aiFormOpen(\'ready\')">'
+        + '<span class="ai-eg-t">Hôm nay mình không khoẻ — nên tập sao?</span>'
+        + '<span class="ai-eg-s">Ngủ kém, mệt, ốm, đau ở đâu…</span></button>'
+      + ['Cho mình xem buổi ' + String(activeDay || 'hôm nay').replace(/^Session/, '') + ' và vì sao chia như vậy',
+         'Vì sao mình tập từng bài trong buổi ' + String(activeDay || 'này').replace(/^Session/, '') + '?',
+         'Mình tiến bộ thế nào mấy tuần qua? Đã nên tăng tạ chưa?']
+        .map((q) => '<button type="button" class="ai-eg" onclick="aiAsk(this.textContent)">' + escHtml(q) + '</button>').join('')
+      + '</div>';
+    return;
   }
   if (_aiMode === 'client' && activeClient && !_aiMsgs.length) {
     const nm = escHtml(activeClient.name || activeClient.id);
@@ -9983,12 +10012,14 @@ function aiBuildGroupPrompt(d) {
 // ── Form "Hôm nay khách không khoẻ" (chế độ theo khách) ─────────────
 const _AI_RF_STATES = ['Ngủ kém', 'Mệt / stress', 'Cảm nhẹ (mũi, họng)', 'Sốt / ốm toàn thân', 'Đau mỏi cơ sau tập', 'Đau khớp / chấn thương'];
 function _aiReadyForm() {
-  const nm = escHtml((activeClient && (activeClient.name || activeClient.id)) || '');
+  const self = _aiMode === 'self';
+  const nm = self ? 'bạn' : escHtml((activeClient && (activeClient.name || activeClient.id)) || '');
   const days = Object.keys(getProgram() || {}).sort();
   return '<form class="ai-nf" id="ai-nf" onsubmit="aiFormSend(event)" novalidate>'
     + '<input type="hidden" name="kind" value="ready">'
     + '<div class="ai-nf-h">Hôm nay ' + nm + ' thế nào?</div>'
-    + '<p class="ai-nf-sub">Trợ lý chỉnh buổi CHO HÔM NAY — giáo án gốc giữ nguyên.</p>'
+    + '<p class="ai-nf-sub">' + (self ? 'Trợ lý gợi ý tập sao cho hôm nay — giáo án coach soạn giữ nguyên. Nhớ báo coach nhé.'
+      : 'Trợ lý chỉnh buổi CHO HÔM NAY — giáo án gốc giữ nguyên.') + '</p>'
     + '<div class="ai-nf-g">'
       + '<div class="ai-nf-f wide"><span>Tình trạng</span><div class="ai-rf-chips">'
         + _AI_RF_STATES.map((t, i) => '<label class="ai-rf-chip"><input type="checkbox" name="st' + i + '" value="' + escHtml(t) + '"><span>' + escHtml(t) + '</span></label>').join('')
@@ -10027,7 +10058,7 @@ function aiBuildReadyPrompt(d, clientName) {
 }
 
 function aiFormOpen(kind) {
-  if (kind === 'ready' && _aiMode !== 'client') { _aiMode = 'client'; _aiPoint(); _aiTabs(); }
+  if (kind === 'ready' && _aiMode !== 'client' && _aiMode !== 'self') { _aiMode = 'client'; _aiPoint(); _aiTabs(); }
   _aiForm = kind === 'group' ? 'group' : kind === 'ready' ? 'ready' : 'client'; aiPaint();
   setTimeout(() => { const i = document.querySelector('#ai-nf [name="name"]'); if (i) i.focus(); }, 60);
 }
@@ -10090,7 +10121,7 @@ function aiFormSend(ev) {
   if (!form) return;
   const data = Object.fromEntries(new FormData(form).entries());
   const r = data.kind === 'group' ? aiBuildGroupPrompt(data)
-    : data.kind === 'ready' ? aiBuildReadyPrompt(data, (activeClient && (activeClient.name || activeClient.id)) || 'khách')
+    : data.kind === 'ready' ? aiBuildReadyPrompt(data, _aiMode === 'self' ? 'mình' : ((activeClient && (activeClient.name || activeClient.id)) || 'khách'))
     : aiBuildProgramPrompt(data);
   if (r.error) {
     const e = document.getElementById('ai-nf-err');
@@ -10122,8 +10153,9 @@ async function aiSend(ev, text, show) {
   aiPaint();
 
   try {
+    // Khách gọi clientAssistant (chỉ đọc, server tự xác định khách theo email).
     const fn = firebase.app().functions('asia-southeast1')
-      .httpsCallable('coachAssistant', { timeout: 180000 });
+      .httpsCallable(_aiMode === 'self' ? 'clientAssistant' : 'coachAssistant', { timeout: 180000 });
     // Chỉ gửi lượt người và máy, bỏ dòng nhật ký tool — nó là thứ hiện cho
     // coach xem, không phải ngữ cảnh model cần đọc lại.
     const res = await fn({

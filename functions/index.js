@@ -3479,6 +3479,92 @@ exports.coachAssistant = onCall(
   },
 );
 
+/** Số câu một khách được hỏi trợ lý mỗi ngày (giờ VN) — chặn đốt quota Gemini. */
+const CLIENT_ASK_PER_DAY = 40;
+
+/**
+ * Trợ lý cho KHÁCH: hỏi về giáo án, lý do chọn bài, kỹ thuật, hôm nay mệt nên tập
+ * sao. Chỉ ĐỌC dữ liệu của chính khách (assistant.js runClientTool), không đề
+ * xuất / sửa gì. clientId do server xác định từ email đăng nhập — khách không tự
+ * chọn được. Coach gọi kèm clientId để xem thử như khách (assertCanView).
+ */
+exports.clientAssistant = onCall(
+  { region: "asia-southeast1", secrets: [GEMINI_API_KEY], timeoutSeconds: 180, memory: "512MiB" },
+  async (request) => {
+    const db = getFirestore();
+    const role = await authz.roleOf(request, db);
+    let clientId = null;
+    const asked = request.data && request.data.clientId ? String(request.data.clientId) : null;
+    if (role.coach && asked) {
+      await authz.assertCanView(request, asked, db);
+      clientId = asked;
+    } else {
+      const idx = await db.collection("clientEmails").doc(role.email).get();
+      clientId = idx.exists ? (idx.data() || {}).clientId || null : null;
+      if (!clientId) {
+        const legacy = await db.collection("clients").where("email", "==", role.email).limit(2).get();
+        if (legacy.size === 1) clientId = legacy.docs[0].id;
+      }
+      if (!clientId) throw new HttpsError("permission-denied", "Tài khoản chưa được gán hồ sơ khách.");
+      await authz.assertCanAccess(request, clientId, db);   // email khớp chủ hồ sơ
+    }
+
+    const messages = Array.isArray(request.data && request.data.messages) ? request.data.messages.slice(-12) : [];
+    if (!messages.length) throw new HttpsError("invalid-argument", "Chưa có câu hỏi nào.");
+
+    // Hạn mức theo ngày VN — khách không tự ghi được (luật cấm), chỉ hàm này đếm.
+    if (!role.coach) {
+      const day = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+      const uref = db.collection("clients").doc(clientId).collection("clientChatUsage").doc(day);
+      const used = await db.runTransaction(async (tx) => {
+        const cur = await tx.get(uref);
+        const n = (cur.exists ? (cur.data() || {}).count : 0) || 0;
+        if (n >= CLIENT_ASK_PER_DAY) return n;
+        tx.set(uref, { count: n + 1, updatedAt: new Date() }, { merge: true });
+        return n;
+      });
+      if (used >= CLIENT_ASK_PER_DAY) {
+        throw new HttpsError("resource-exhausted", `Hôm nay bạn đã hỏi ${CLIENT_ASK_PER_DAY} câu — mai hỏi tiếp nhé, hoặc nhắn coach.`);
+      }
+    }
+
+    const apiKey = GEMINI_API_KEY.value();
+    if (!apiKey || apiKey.length < 10) throw new HttpsError("failed-precondition", "Trợ lý chưa được cấu hình.");
+    const { GoogleGenAI } = require("@google/genai");
+    const client = new GoogleGenAI({ apiKey });
+    const { runAssistant, shapeReply } = require("./assistant.js");
+    try {
+      const r = await runAssistant({
+        client, model: GEMINI_MODEL, messages, clientId, audience: "client",
+        day: request.data && request.data.day, role,
+      });
+      // Lưu để khách mở lại vẫn còn; coach của khách cũng đọc được (luật clientChat).
+      if (!role.coach) {
+        const last = messages[messages.length - 1] || {};
+        const col = db.collection("clients").doc(clientId).collection("clientChat");
+        const now = Date.now(), clip = (t) => String(t || "").slice(0, 8000);
+        await Promise.all([
+          col.add({ role: "user", text: clip(last.text), show: clip(request.data.show || "") || null, at: new Date(now) }),
+          col.add({ role: "assistant", text: clip(r.text), at: new Date(now + 1),
+            displays: JSON.stringify(r.displays || []).length < 200000 ? (r.displays || []) : [] }),
+        ]).catch((e) => console.warn("[clientAssistant] không lưu được chat:", e.message));
+      }
+      console.log(`[clientAssistant] ${clientId}: ${r.steps} vòng, tool ${r.toolLog.map((t) => t.name).join(", ") || "không"}`);
+      const out = shapeReply(r);
+      out.pending = [];          // khách không bao giờ có thẻ duyệt
+      return out;
+    } catch (err) {
+      console.error(`[clientAssistant] hỏng — ${err.status || err.code || ""} ${err.message}`);
+      if (err instanceof HttpsError) throw err;
+      const msg = String(err.message || "");
+      if (/quota|rate|429|resource.?exhausted/i.test(msg)) {
+        throw new HttpsError("resource-exhausted", "Trợ lý đang quá tải, thử lại sau ít phút nhé.");
+      }
+      throw new HttpsError("internal", "Trợ lý đang gặp lỗi, thử lại sau nhé.");
+    }
+  },
+);
+
 /**
  * Thực thi một đề xuất của trợ lý, SAU KHI coach đã bấm đồng ý.
  *

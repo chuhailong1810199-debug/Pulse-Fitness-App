@@ -51,6 +51,7 @@ const STRANGER = { uid: "u_x", email: "la@gmail.com", ...V };
     await db.doc("exercises/a_bai").set({ name: "Bài của A", ownerUid: "coachA" });
     await db.doc("clients/cindy/checkpoints/c1").set({ weight: 58 });
     await db.doc("clients/cindy/aiChat/m1").set({ role: "assistant", text: "lý do chọn bài", at: new Date() });
+    await db.doc("clients/cindy/clientChat/m1").set({ role: "assistant", text: "vì sao tập hip thrust", at: new Date() });
     await db.doc("clients/sang/checkpoints/c1").set({ weight: 50 });
     await db.doc("clients/cindy/invoices/i1").set({ status: "unpaid", kind: "access", planId: "pro", amount: 1 });
     await db.doc("clientEmails/cindy@gmail.com").set({ clientId: "cindy" });
@@ -76,6 +77,16 @@ const STRANGER = { uid: "u_x", email: "la@gmail.com", ...V };
   ok("aiChat: CHINH KHACH khong doc (trao doi noi bo cua coach)", () => assertFails(chat(CINDY).get()));
   ok("aiChat: coach KHONG tu ghi — chi ham nen ghi", () => assertFails(chat(COACH_A).add({ role: "user", text: "x" })));
   ok("aiChat: khach KHONG ghi", () => assertFails(chat(CINDY).add({ role: "user", text: "x" })));
+
+  // ── Chat của khách với trợ lý (clientChat) ─────────────────────
+  const cchat = (who) => db(who).collection("clients/cindy/clientChat");
+  ok("clientChat: chinh khach doc duoc", () => assertSucceeds(cchat(CINDY).get()));
+  ok("clientChat: coach cua khach doc duoc", () => assertSucceeds(cchat(COACH_A).get()));
+  ok("clientChat: khach KHAC khong doc", () => assertFails(cchat(SANG).get()));
+  ok("clientChat: coach khac khong doc", () => assertFails(cchat(COACH_B).get()));
+  ok("clientChat: khach KHONG tu ghi (chi ham nen)", () => assertFails(cchat(CINDY).add({ role: "assistant", text: "gia" })));
+  ok("clientChatUsage: khach KHONG tu reset luot hoi", () =>
+    assertFails(db(CINDY).doc("clients/cindy/clientChatUsage/2026-10-15").set({ count: 0 })));
 
   // ── Danh sách khách ────────────────────────────────────────────
   ok("admin goc truy van tran clients", () => assertSucceeds(db(ADMIN).collection("clients").get()));

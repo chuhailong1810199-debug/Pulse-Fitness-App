@@ -23,7 +23,9 @@ test('hai che do chat: luong theo khach luu lai, tra loi ve dung luong da hoi', 
   assert.match(s, /day: activeDay \|\| null/);
   assert.match(s, /const thread = _aiMsgs;/);
   assert.match(s, /thread\.push\(\{ role: 'assistant', text: d\.text/);
-  assert.match(s, /collection\(db, 'clients', id, 'aiChat'\), orderBy\('at', 'desc'\), limit\(30\)/);
+  assert.match(s, /collection\(db, 'clients', id, coll\), orderBy\('at', 'desc'\), limit\(30\)/);
+  assert.match(s, /const coll = _aiMode === 'self' \? 'clientChat' : 'aiChat';/);
+  assert.match(s, /httpsCallable\(_aiMode === 'self' \? 'clientAssistant' : 'coachAssistant'/);
   assert.match(s, /if \(typeof aiOnClientChange === 'function'\) aiOnClientChange\(\);/);
 });
 

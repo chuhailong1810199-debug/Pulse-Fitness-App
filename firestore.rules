@@ -329,6 +329,10 @@ service cloud.firestore {
       // Chat coach ↔ trợ lý về khách này: trao đổi NỘI BỘ của coach — khách không
       // đọc. Chỉ hàm nền coachAssistant ghi (Admin SDK bỏ qua luật).
       match /aiChat/{d=**}         { allow read: if canView(clientId); allow write: if false; }
+      // Chat của CHÍNH KHÁCH với trợ lý: khách + coach của khách + admin đọc; chỉ hàm
+      // nền clientAssistant ghi. Đếm lượt hỏi/ngày cũng chỉ hàm nền ghi.
+      match /clientChat/{d=**}      { allow read: if canRead(clientId); allow write: if false; }
+      match /clientChatUsage/{d=**} { allow read: if canRead(clientId); allow write: if false; }
     }
   }
 }

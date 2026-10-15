@@ -277,6 +277,43 @@ ok("luat trinh bay: cam LaTeX / tieu de markdown, xem giao an thi goi show_progr
   assert(!/in ra bảng cho coach xem/.test(A.SYSTEM), "con luat cu bat model chep giao an thanh chu");
 });
 
+// ── Trợ lý cho KHÁCH (2026-10-15) ──
+ok("khach: chi tool DOC, khong propose / list_clients, khong co tham so clientId", () => {
+  const names = A.CLIENT_TOOLS.map((t) => t.name);
+  assert(!names.some((n) => /^propose_|list_clients/.test(n)), names.join(","));
+  assert(names.includes("get_program") && names.includes("show_program"));
+  assert(!JSON.stringify(A.CLIENT_TOOLS).includes("clientId"), "model khach khong duoc chon clientId");
+});
+ok("khach: runClientTool tu choi tool ngoai danh sach", async () => {
+  for (const n of ["propose_program", "propose_new_client", "list_clients"]) {
+    const r = await A.runClientTool(n, { clientId: "sang" }, "cindy");
+    assert(r.error, n);
+  }
+  assert((await A.runClientTool("get_program", {}, null)).error, "khong co clientId thi tu choi");
+});
+ok("khach: vong lap dung bo tool + chi dan cua khach, bao 'hoi ve chinh minh'", async () => {
+  const c = fakeClient([{ text: "ok" }]);
+  await A.runAssistant({ client: c, model: "m", messages: [{ role: "user", text: "x" }], clientId: "cindy", audience: "client" });
+  assert.strictEqual(c.seen[0].system_instruction, A.CLIENT_SYSTEM);
+  assert.deepStrictEqual(c.seen[0].tools.map((t) => t.name), A.CLIENT_TOOLS.map((t) => t.name));
+  assert(/Khách đang hỏi về chính mình/.test(JSON.stringify(c.seen[0].input[0])));
+  assert(!/cindy/.test(JSON.stringify(c.seen[0].input[0])), "khong lo id noi bo cho model khach");
+});
+ok("chi dan khach: khong sua giao an, tra loi why tu coach, an toan", () => {
+  for (const k of ["KHÔNG sửa được giáo án", "nhắn coach", "lý do coach ghi", "Không bàn về khách khác",
+    "Bạn không chẩn đoán bệnh", "Dưới 18 tuổi"]) assert(A.CLIENT_SYSTEM.includes(k), k);
+});
+ok("clientAssistant: xac dinh khach theo email + assertCanAccess, gioi han luot/ngay, khach khong co the duyet", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "functions", "index.js"), "utf8");
+  const f = src.slice(src.indexOf("exports.clientAssistant"), src.indexOf("exports.", src.indexOf("exports.clientAssistant") + 10));
+  assert(/collection\("clientEmails"\)\.doc\(role\.email\)/.test(f));
+  assert(/await authz\.assertCanAccess\(request, clientId, db\)/.test(f));
+  assert(/if \(role\.coach && asked\)/.test(f), "chi coach moi chon duoc clientId");
+  assert(/CLIENT_ASK_PER_DAY/.test(f) && /runTransaction/.test(f));
+  assert(/out\.pending = \[\];/.test(f));
+  assert(/audience: "client"/.test(f));
+});
+
 ok("thu vien bai tap co cache, khong doc 360 bai moi lan", () => {
   const src = fs.readFileSync(path.join(__dirname, "..", "functions", "assistant.js"), "utf8");
   assert(/function exerciseLibrary/.test(src), "thieu ham cache thu vien");

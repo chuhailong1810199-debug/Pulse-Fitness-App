@@ -141,6 +141,18 @@ const ok = (n, f) => cases.push([n, f]);
     assert(l.clients.find((c) => c.clientId === "lop_hyrox").isGroup === true);
   });
 
+  // ── Trợ lý khách: clientId bị ÉP về chính khách ──
+  await db.doc("clients/cindy").update({ notes: "ghi chú riêng của coach" });
+  ok("khach: get_client luon tra ve CHINH MINH du model xin khach khac, bo ghi chu coach", async () => {
+    const r = await A.runClientTool("get_client", { clientId: "sang" }, "cindy");
+    assert.strictEqual(r.clientId, "cindy", JSON.stringify(r));
+    assert.strictEqual(r.notes, undefined, "ghi chu noi bo cua coach khong duoc lot ra");
+  });
+  ok("khach: get_program / show_program cua chinh minh", async () => {
+    const r = await A.runClientTool("show_program", { clientId: "sang" }, "cindy");
+    assert(r.display && r.display.clientId === "cindy", JSON.stringify(r));
+  });
+
   ok("khong co role -> tu choi, khong doc Firestore", async () => {
     const r = await A.runTool("list_clients", {}, undefined);
     assert(r.error && !r.clients);
