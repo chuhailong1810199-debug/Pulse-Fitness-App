@@ -929,6 +929,25 @@ async function loadApp() {
   checkActiveTab();
   renderAccessAlert();
   showScreen('app');
+  _applyDeepLink();
+}
+
+/**
+ * Mở thẳng khách / tab từ link thông báo: /index.html?client=cindy&tab=workout
+ * (nhắc "chưa log buổi" — bấm vào là tới đúng chỗ log). Chạy một lần rồi xoá
+ * tham số khỏi URL để tải lại trang không nhảy lại.
+ */
+async function _applyDeepLink() {
+  const q = new URLSearchParams(window.location.search);
+  const cid = q.get('client'), tab = q.get('tab');
+  if (!cid && !tab) return;
+  window.history.replaceState({}, '', window.location.pathname);
+  try {
+    if (cid && userRole === 'coach' && clientsData.some((c) => c.id === cid) && (!activeClient || activeClient.id !== cid)) {
+      await switchClient(cid);
+    }
+    if (tab && /^[a-z]+$/.test(tab) && document.querySelector('.nav-tab[data-page="' + tab + '"]')) showPage(tab);
+  } catch (e) { console.warn('[deeplink]', e); }
 }
 
 // Khách mà coach muốn thấy đầu tiên khi mở app — hồ sơ tập của chính coach.
@@ -2236,9 +2255,61 @@ dshIntro(page);
 + '<button class="dsh-open" aria-label="Mở hồ sơ ' + escHtml(a.c.name) + '" onclick="openClientDash(\'' + escHtml(a.c.id) + '\')">Mở hồ sơ</button></div>';
 */
 
+// ── "Hôm nay chưa log" ────────────────────────────────────────────────
+// Lịch hôm nay đã xong mà khách chưa có buổi tập ghi. Lịch gần như không mang
+// clientId — khớp title ↔ tên khách: BẢN SAO của functions/log-reminder.js
+// (tests/log-reminder.test.js bắt hai bản ra cùng kết quả).
+function _lrFold(s) { return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+function _lrMatchClient(b, clients) {
+  if (b.clientId) return clients.find((c) => c.id === b.clientId) || null;
+  const HON = /^(chi|anh|em|co|chu|bac|ong|ba|pt|lop)\s+/;
+  const core = (x) => _lrFold(x).replace(HON, '').trim();
+  const t = _lrFold(b.title), tc = core(b.title);
+  if (!t) return null;
+  const hits = clients.filter((c) => {
+    const n = _lrFold(c.name), nc = core(c.name);
+    if (!n) return false;
+    if (n === t || (nc && nc === tc)) return true;
+    const word = (needle, hay) => needle.length >= 3 && new RegExp('(^| )' + needle + '( |$)').test(hay);
+    return word(nc, t) || word(tc, n);
+  });
+  return hits.length === 1 ? hits[0] : null;
+}
+async function loadUnloggedToday() {
+  const box = document.getElementById('dsh-unlogged');
+  if (!box || userRole !== 'coach') return;
+  try {
+    const today = _ymd(), now = new Date(), nowMin = now.getHours() * 60 + now.getMinutes();
+    const snap = await getDocs(bookingsQuery(where('date', '==', today)));
+    const hm = (x) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(x || '')); return m ? +m[1] * 60 + +m[2] : null; };
+    const list = [];
+    snap.forEach((d) => {
+      const b = d.data() || {};
+      if (b.status === 'cancelled') return;
+      const st = hm(b.startTime), en = hm(b.endTime) != null ? hm(b.endTime) : (st != null ? st + 60 : null);
+      if (en == null || en > nowMin) return;                 // chưa xong
+      const c = _lrMatchClient(b, clientsData || []);
+      if (!c) return;
+      const startMs = new Date(today + 'T' + b.startTime + ':00').getTime();
+      const lw = _toMs(c.lastWorkoutAt);
+      if (lw && lw >= startMs - 3600e3) return;              // đã log
+      list.push({ c, b });
+    });
+    box.innerHTML = list.length ? '<div class="dsh-unlog"><b>Hôm nay chưa log (' + list.length + ')</b>'
+      + list.map(({ c, b }) => '<button type="button" onclick="dshOpenLog(\'' + escHtml(c.id) + '\')">'
+        + escHtml(c.name || c.id) + ' <span>' + escHtml(b.startTime + (b.endTime ? '–' + b.endTime : '')) + '</span> → Log</button>').join('')
+      + '</div>' : '';
+  } catch (e) { console.warn('[chưa log]', e.code || e.message); }
+}
+async function dshOpenLog(id) {
+  if (!activeClient || activeClient.id !== id) await switchClient(id);
+  showPage('workout');
+}
+
 function renderDashboard() {
   const wrap = document.getElementById('dash-body');
   if (!wrap || userRole !== 'coach') return;
+  setTimeout(loadUnloggedToday, 0);
   const rows = dashRows(), feed = dashFeed(30), st = dashStats();
   const now = Date.now();
 
@@ -2250,6 +2321,7 @@ function renderDashboard() {
           · ${st.total} khách · ${rows.length ? rows.length + ' cần chú ý' : 'không ai cần chú ý'}</p></div>
       <button class="dsh-refill" onclick="backfillDashboard(this)">Tải lại dữ liệu cũ</button>
     </div>
+    <div id="dsh-unlogged"></div>
     <div class="dcs dcs-strip">${dshChipsHTML(clientsData || [], rows)}</div>
     ${dshTabsHTML(rows, feed)}
     <div class="dsh-grid">
@@ -16898,6 +16970,12 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 #cdash-page .cd-badge.cd-ok{color:var(--good,#7ED9A0);border-color:rgba(126,217,160,.35)}
 #cdash-page .cd-badge.cd-warn{color:var(--cd-amber);border-color:rgba(230,179,74,.4)}
 #cdash-page .cd-ask-ai{ background: transparent !important; color: #fff !important; border: 1px solid rgba(143,219,255,.5) !important; }
+.dsh-unlog{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:0 0 14px; padding:12px 14px; border-radius:16px;
+  border:1px solid rgba(230,179,74,.45); background:rgba(230,179,74,.08); color:#fff; font-size:14px; }
+.dsh-unlog b{ margin-right:4px; color:#E6B34A; }
+.dsh-unlog button{ min-height:40px; padding:0 14px; border-radius:999px; border:1px solid rgba(255,255,255,.18); background:rgba(255,255,255,.05);
+  color:#fff; font:700 13px 'Figtree',sans-serif; cursor:pointer; }
+.dsh-unlog button span{ color:rgba(255,255,255,.65); font-weight:600; }
 .day-focus{ margin: 0 0 12px; padding: 12px 14px; border-radius: 14px; border: 1px solid rgba(143,219,255,.22);
   background: rgba(143,219,255,.06); color: rgba(255,255,255,.86); font-size: 13.5px; line-height: 1.45; }
 .day-focus-k{ display: block; margin-bottom: 4px; color: #8FDBFF; font-size: 10.5px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }

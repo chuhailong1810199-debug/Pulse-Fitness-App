@@ -3215,6 +3215,91 @@ exports.scheduleReminders = onSchedule(
         console.log(`[push] nhắc ${b.startTime} ${b.title} -> ${r.sent} máy`);
       }
     }
+
+    // ── Nhắc LOG: buổi hôm nay đã xong 30–180 phút mà khách chưa có buổi tập ghi ──
+    const { dueLogChecks } = require("./log-reminder.js");
+    const due = dueLogChecks(await bookingsOn(now.date), now.minutes);
+    if (due.length) {
+      const st = await unloggedSessions(due, adminUid);
+      for (const x of st) {
+        if (!x.client) { await x.b.ref.update({ logCheckedAt: "no-client" }).catch(() => {}); continue; }
+        if (!x.logged) {
+          const r = await pushToAll({
+            title: `Chưa log buổi ${x.client.name}`,
+            body: `${x.b.startTime}${x.b.endTime ? "–" + x.b.endTime : ""} · bấm để mở và log`,
+            tag: "log_" + x.b.id,
+            url: "/index.html?client=" + encodeURIComponent(x.client.id) + "&tab=workout",
+            sticky: true,
+          }, recipient(x.coachUid));
+          console.log(`[push] nhắc log ${x.client.id} (${x.b.startTime}) -> ${r.sent} máy`);
+        }
+        await x.b.ref.update({ logCheckedAt: new Date().toISOString(), logged: x.logged }).catch(() => {});
+      }
+    }
+  },
+);
+
+/**
+ * Với mỗi buổi: khách nào (khớp title ↔ tên, functions/log-reminder.js) và đã log
+ * chưa (buổi tập ghi từ 60 phút trước giờ bắt đầu trở đi). Đọc danh sách khách
+ * MỘT lần cho mỗi coach trong lượt chạy.
+ */
+async function unloggedSessions(list, adminUid) {
+  const { matchClient, isLogged } = require("./log-reminder.js");
+  const db = getFirestore();
+  const byCoach = {};
+  const out = [];
+  for (const b of list) {
+    const coachUid = b.coachUid || adminUid;
+    if (!coachUid) continue;
+    if (!byCoach[coachUid]) {
+      const snap = await db.collection("clients").where("coachUid", "==", coachUid).get();
+      byCoach[coachUid] = snap.docs.map((d) => ({ id: d.id, name: (d.data() || {}).name || d.id }));
+    }
+    const client = matchClient(b, byCoach[coachUid]);
+    let logged = false;
+    if (client) {
+      const h = await db.collection("clients").doc(client.id).collection("workoutHistory")
+        .orderBy("date", "desc").limit(1).get();
+      const d = h.docs[0] && h.docs[0].data().date;
+      logged = isLogged(b, d && d.toMillis ? d.toMillis() : (d ? Date.parse(d) : 0));
+    }
+    out.push({ b, client, logged, coachUid });
+  }
+  return out;
+}
+
+/**
+ * 21:30 — chặn cuối: gom các buổi HÔM NAY đã xong mà vẫn chưa log, một thông báo
+ * mỗi coach. Bắt cả buổi lọt lưới (lượt 5 phút bị trễ, buổi kết thúc sau 21h…).
+ */
+exports.logDigest = onSchedule(
+  {
+    schedule: "30 21 * * *",
+    timeZone: "Asia/Ho_Chi_Minh",
+    region: "asia-southeast1",
+    secrets: [VAPID_PRIVATE],
+    timeoutSeconds: 120,
+  },
+  async () => {
+    const { endMin } = require("./log-reminder.js");
+    const now = ictNow();
+    const adminUid = await authz.defaultOwnerUid();
+    const ended = (await bookingsOn(now.date)).filter((b) => endMin(b) != null && endMin(b) <= now.minutes);
+    const st = (await unloggedSessions(ended, adminUid)).filter((x) => x.client && !x.logged);
+    const byCoach = {};
+    st.forEach((x) => { (byCoach[x.coachUid] = byCoach[x.coachUid] || []).push(x); });
+    for (const [coachUid, xs] of Object.entries(byCoach)) {
+      const names = [...new Set(xs.map((x) => x.client.name))];
+      const r = await pushToAll({
+        title: `${names.length} buổi hôm nay chưa log`,
+        body: names.join(", ") + " — mở app để log trước khi quên",
+        tag: "log_digest_" + now.date,
+        url: "/index.html?tab=dash",
+        sticky: true,
+      }, recipient(coachUid));
+      console.log(`[push] tổng kết log ${now.date}: ${names.join(", ")} -> ${r.sent} máy`);
+    }
   },
 );
 
