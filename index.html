@@ -227,7 +227,35 @@ function parseSetsRepsSplit(setsReps) {
 }
 
 const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun','SessionA','SessionB','SessionC','SessionD','SessionE','SessionF','SessionG'];
-const MUSCLE_WEIGHTS = {P:1.0, S:0.5, T:0.333, Q:0.25};
+/**
+ * Trọng số vai trò khi đếm set theo nhóm cơ (rà lại 2026-10-15):
+ *  P (cơ chính) = 1 set, S (cơ phụ) = 0,5 set — cách "fractional" của Pelland et al.
+ *  (Sports Med 2025, 67 nghiên cứu): đếm set gián tiếp bằng nửa set dự báo phì đại
+ *  và sức mạnh tốt hơn cả đếm đủ lẫn bỏ hẳn.
+ *  T (cơ ổn định) = 0: không có bằng chứng set "giữ yên" kích thích phì đại; trước
+ *  đây 0,333 làm vai sau sáng lên vì bench press. Q bỏ (không bài nào dùng).
+ */
+const MUSCLE_WEIGHTS = {P:1.0, S:0.5, T:0, Q:0};
+// Tên chuẩn theo vùng trên hình cơ thể. Thư viện trộn hai bộ tên ("GLUTES" và
+// "Glutes", "LAT" và "Latissimus Dorsi") — không chuẩn hoá thì danh sách nhóm cơ
+// hiện một cơ hai dòng và mỗi dòng chỉ một nửa số set.
+const MUSCLE_CANON_LABEL = {
+  'chest': 'Chest', 'delt-f': 'Front Delts', 'delt-s': 'Side Delts', 'delt-r': 'Rear Delts', 'biceps': 'Biceps',
+  'triceps': 'Triceps', 'forearm': 'Forearms', 'abs': 'Abs', 'obliques': 'Obliques', 'quads': 'Quads',
+  'adductors': 'Adductors', 'hams': 'Hamstrings', 'glutes': 'Glutes', 'calves': 'Calves', 'traps': 'Traps',
+  'traps-lo': 'Mid/Lower Traps', 'rhomboids': 'Rhomboids', 'lats': 'Lats', 'teres': 'Teres Major',
+  'rotator': 'Rotator Cuff', 'erectors': 'Erector Spinae',
+};
+/** "GLUTES" / "Glutes" / "gluteus maximus" → "Glutes". Không nhận ra thì giữ nguyên tên. */
+function canonMuscle(name) {
+  if (typeof cdMapMuscle !== 'function') return String(name);
+  const r = cdMapMuscle(name).regions;
+  if (!r.length) return String(name);
+  if (r.length === 1) return MUSCLE_CANON_LABEL[r[0]] || String(name);
+  if (r.length === 3 && r.every((x) => /^delt-/.test(x))) return 'Deltoids';
+  if (r.length === 2 && r.includes('abs') && r.includes('obliques')) return 'Core';
+  return String(name);
+}
 
 /**
  * Volume theo nhóm cơ = SỐ SET (từ 2026-10-10): mỗi bài đã tích góp
@@ -257,13 +285,17 @@ function isWarmupPhase(phase) { return normPhaseTag(phase) === 'warmup'; }
 function muscleSetsForDay(day, isDone) {
   const out = {};
   ((day && day.phases) || []).forEach((phase, pi) => {
-    if (isWarmupPhase(phase)) return;
+    // Khởi động và circuit/conditioning không phải set phì đại: 8 vòng rowing
+    // không phải 8 set đùi trước.
+    const tag = normPhaseTag(phase);
+    if (tag === 'warmup' || tag === 'circuit') return;
     (phase.exercises || []).forEach((ex, ei) => {
       if (!isDone(pi, ei) || !ex.muscles || typeof ex.muscles !== 'object') return;
       const sets = parsePrescription(ex.setsReps).sets;
       Object.entries(ex.muscles).forEach(([muscle, role]) => {
         const w = MUSCLE_WEIGHTS[role] || 0;
-        if (w > 0) out[muscle] = Math.round(((out[muscle] || 0) + w * sets) * 100) / 100;
+        const m = canonMuscle(muscle);
+        if (w > 0) out[m] = Math.round(((out[m] || 0) + w * sets) * 100) / 100;
       });
     });
   });
@@ -282,9 +314,9 @@ function legacyMuscleScale(dayKey) {
 /** volumeByMuscle của một buổi, luôn tính bằng set. */
 function sessionMuscleSets(v) {
   const m = (v && v.volumeByMuscle) || {};
-  if (v && v.muscleUnit === 'sets') return m;
-  const k = legacyMuscleScale(v && v.day), out = {};
-  Object.keys(m).forEach(x => { out[x] = Math.round((Number(m[x]) || 0) * k * 100) / 100; });
+  const k = v && v.muscleUnit === 'sets' ? 1 : legacyMuscleScale(v && v.day), out = {};
+  // Gộp theo tên chuẩn — buổi cũ lưu "GLUTES" và "Glutes" thành hai khoá.
+  Object.keys(m).forEach(x => { const c = canonMuscle(x); out[c] = Math.round(((out[c] || 0) + (Number(m[x]) || 0) * k) * 100) / 100; });
   return out;
 }
 const phaseTagClass = {warmup:'phase-warmup',core:'phase-core',strength:'phase-strength',accessories:'phase-accessories',circuit:'phase-accessories'};
@@ -2633,7 +2665,10 @@ var CD_MUSCLE_MAP = {
   'lower traps': ['traps-lo'], 'middle traps': ['traps-lo'], 'mid traps': ['traps-lo'],
   'rhomboids': ['rhomboids'], 'latissimus dorsi': ['lats'], 'lats': ['lats'], 'teres major': ['teres'],
   'rotator cuff': ['rotator'], 'infraspinatus': ['rotator'],
-  'erector spinae': ['erectors'], 'lower back': ['erectors']
+  'erector spinae': ['erectors'], 'lower back': ['erectors'],
+  // Tên chuẩn (canonMuscle) + bộ tên viết hoa của thư viện gốc — map thẳng, khỏi rơi xuống đoán.
+  'mid lower traps': ['traps-lo'], 'hamstring': ['hams'], 'lat': ['lats'], 'trap': ['traps'], 'calf': ['calves'],
+  'adductor': ['adductors'], 'quad': ['quads'], 'glute': ['glutes'], 'deltoid': ['delt-f', 'delt-s', 'delt-r']
 };
 // Second chance for names nobody added yet. First match wins, so order matters.
 var CD_MUSCLE_GUESS = [
@@ -2983,7 +3018,9 @@ function cdBodyHTML(c, isCoach) {
   var R = cdMusclesIn(_cdd.scope), has = R.all.length > 0;
   var info = R.list.map(function (e) { return { name: e[0], v: e[1], m: cdMapMuscle(e[0]) }; });
   var reg = {}, max = 0;
-  info.forEach(function (i) { i.m.regions.forEach(function (k) { reg[k] = (reg[k] || 0) + i.v; }); });
+  // Một nhóm cơ ứng nhiều vùng ("Deltoids" = 3 đầu vai) thì CHIA ĐỀU, không cộng đủ
+  // vào từng vùng — trước đây 1 set "DELTOID" của bench press thành 3 set vai.
+  info.forEach(function (i) { var n = i.m.regions.length; i.m.regions.forEach(function (k) { reg[k] = (reg[k] || 0) + i.v / n; }); });
   Object.keys(reg).forEach(function (k) { if (reg[k] > max) max = reg[k]; });
   var selI = info.filter(function (i) { return i.name === _cdd.sel; })[0];
   if (!selI) _cdd.sel = null;
