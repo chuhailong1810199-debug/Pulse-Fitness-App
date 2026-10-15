@@ -5146,7 +5146,7 @@ function renderExercises() {
   if (_focus) {
     // Ngay dưới tiêu đề buổi (div đầu tiên của html), trên danh sách pha.
     const cut = html.indexOf('</div>') + 6;
-    html = html.slice(0, cut) + '<div class="day-focus"><span class="day-focus-k">Trọng tâm buổi</span>' + escHtml(_focus) + '</div>' + html.slice(cut);
+    html = html.slice(0, cut) + '<div class="day-focus"><span class="day-focus-k">Trọng tâm buổi</span><span data-i18n-skip>' + escHtml(_focus) + '</span></div>' + html.slice(cut);
   }
 
   // Prepend "done strip" if there are done exercises being hidden
@@ -9579,7 +9579,7 @@ function aiMount() {
   const fab = document.createElement('button');
   fab.id = 'ai-fab';
   fab.type = 'button';
-  fab.setAttribute('aria-label', 'Trợ lý');
+  fab.setAttribute('aria-label', 'Pulse');
   fab.setAttribute('data-i18n-skip', '');
   fab.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">'
     + '<path d="M12 3a9 9 0 0 0-9 9c0 1.6.42 3.1 1.15 4.4L3 21l4.7-1.1A9 9 0 1 0 12 3Z"'
@@ -9592,14 +9592,14 @@ function aiMount() {
 
   const sheet = document.createElement('div');
   sheet.id = 'ai-sheet';
-  // Toàn bộ khung chat bỏ qua bộ dịch VI→EN: nội dung ở đây do model sinh ra,
-  // quét rồi thay chuỗi sẽ cắt xén câu trả lời theo cách không đoán trước được.
-  sheet.setAttribute('data-i18n-skip', '');
+  // KHÔNG bỏ qua cả khung nữa (form, gợi ý, thẻ duyệt là giao diện — phải dịch).
+  // Chỉ bong bóng chat và ô dữ liệu mang data-i18n-skip: câu trả lời của model và
+  // dữ liệu khách mà bị quét-thay chuỗi thì cắt xén không đoán trước được.
   sheet.innerHTML =
     // Vành sáng chạy quanh mép. Thuần trang trí nên ẩn khỏi máy đọc màn hình.
       '<div class="ai-glow" aria-hidden="true"></div>'
     + '<div class="ai-head">'
-      + '<span class="ai-title">Trợ lý</span>'
+      + '<span class="ai-title">Pulse</span>'
       + '<span class="ai-who" id="ai-who"></span>'
       + '<button class="ai-x" type="button" aria-label="Đóng" onclick="aiClose()">✕</button>'
     + '</div>'
@@ -9704,13 +9704,13 @@ function _aiProgramHTML(prog) {
         const q = 'Vì sao chọn ' + x.name + ' ở ' + k + '? Có bài thay nào không?';
         return '<tr class="' + cls + '" data-q="' + escHtml(q) + '" onclick="aiQuick(this.dataset.q)" title="Bấm để hỏi về bài này">'
           + (j === 0 ? '<td class="ai-pt-ph" rowspan="' + ex.length + '"><span title="' + escHtml(ph.name || '') + '">' + lab + '</span></td>' : '')
-          + '<td class="ai-pt-n">' + escHtml(x.name) + '</td>'
-          + '<td class="ai-pt-sr">' + escHtml(x.setsReps || '—') + '</td></tr>';
+          + '<td class="ai-pt-n" data-i18n-skip>' + escHtml(x.name) + '</td>'
+          + '<td class="ai-pt-sr" data-i18n-skip>' + escHtml(x.setsReps || '—') + '</td></tr>';
       }).join('');
     }).join('');
     return '<div class="ai-pg">'
-      + '<div class="ai-pg-h"><b>' + escHtml(k.replace(/^Session/, 'Buổi ')) + '</b>' + (d.label ? '<span> · ' + escHtml(d.label) + '</span>' : '') + '</div>'
-      + (d.focus ? '<div class="ai-pg-f">' + escHtml(d.focus) + '</div>' : '')
+      + '<div class="ai-pg-h"><b>' + escHtml(k.replace(/^Session/, 'Buổi ')) + '</b>' + (d.label ? '<span data-i18n-skip> · ' + escHtml(d.label) + '</span>' : '') + '</div>'
+      + (d.focus ? '<div class="ai-pg-f" data-i18n-skip>' + escHtml(d.focus) + '</div>' : '')
       + '<table class="ai-pt"><thead><tr><th>Pha</th><th>Bài</th><th>Set × Rep</th></tr></thead><tbody>' + rows + '</tbody></table>'
       + '</div>';
   }).join('') + '<div class="ai-pg-tip">Bấm vào một bài để hỏi về bài đó.</div>';
@@ -9785,7 +9785,7 @@ function aiPaint() {
     if (m.role === 'program') return '<div class="ai-msg ai-a ai-pgwrap">' + _aiProgramHTML(m.display && m.display.program) + '</div>';
     // m.show: bản rút gọn cho lượt gửi từ form — prompt đầy đủ vẫn nằm ở m.text
     // và đi sang model, nhưng in cả khối chỉ dẫn dài lên bong bóng thì loãng.
-    return '<div class="ai-msg ai-' + (m.role === 'user' ? 'u' : 'a') + '">'
+    return '<div class="ai-msg ai-' + (m.role === 'user' ? 'u' : 'a') + '" data-i18n-skip>'
       + (m.role === 'user' ? escHtml(m.show || m.text) : _aiFmt(m.text)) + '</div>';
   }).join('') + (_aiBusy ? '<div class="ai-wait">Đang tra dữ liệu…</div>' : '');
   log.scrollTop = log.scrollHeight;
@@ -9828,7 +9828,7 @@ function _aiCard(m, i) {
         : '<b>' + escHtml(em || 'không — coach tự quản') + '</b>';
       return '<div class="ai-cf-r"><span>' + escHtml(k) + '</span>' + cell + '</div>';
     }
-    return '<div class="ai-cf-r"><span>' + escHtml(k) + '</span><b>' + escHtml(v || '—') + '</b></div>';
+    return '<div class="ai-cf-r"><span>' + escHtml(k) + '</span><b data-i18n-skip>' + escHtml(v || '—') + '</b></div>';
   }).join('');
   // data-state lái màu, nhãn góc và việc ẩn nút — KHÔNG để CSS đoán qua sự có
   // mặt của .ai-cf-done/.ai-cf-no. Đoán kiểu đó thì "Đang lưu…" ra xanh "Đã lưu",
@@ -10163,6 +10163,7 @@ async function aiSend(ev, text, show) {
         .map((m) => ({ role: m.role, text: m.text })),
       clientId: activeClient ? activeClient.id : null,
       day: activeDay || null,
+      lang: typeof i18nGet === 'function' ? i18nGet() : 'vi',   // trợ lý trả lời theo ngôn ngữ giao diện
       // Chế độ theo khách: hàm nền lưu câu hỏi + trả lời vào clients/{id}/aiChat.
       thread: _aiMode === 'client' && !!activeClient,
       show: show || null,
@@ -14906,8 +14907,8 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
       </div>
       <div><div class="modal-label">Tempo</div><div class="modal-value" id="modal-tempo"></div></div>
     </div>
-    <div><div class="modal-label">Coaching Cue</div><div class="modal-value" id="modal-cue"></div></div>
-    <div id="modal-why-wrap" style="display:none"><div class="modal-label">Vì sao bài này</div><div class="modal-value modal-why" id="modal-why"></div></div>
+    <div><div class="modal-label">Coaching Cue</div><div class="modal-value" id="modal-cue" data-i18n-skip></div></div>
+    <div id="modal-why-wrap" style="display:none"><div class="modal-label">Vì sao bài này</div><div class="modal-value modal-why" id="modal-why" data-i18n-skip></div></div>
     <div id="modal-strength-history" style="display:none;margin-top:1rem;"></div>
     <div class="modal-actions">
       <button class="modal-close" onclick="closeModal('modal')">Close</button>
@@ -19010,6 +19011,184 @@ const I18N_PAT = {
   'phân tích lúc {0} ·': 'analysed at {0} ·',
 };
 
+
+// ── Bổ sung 2026-10-15: phần giao diện thêm sau đợt dịch đầu (dashboard mới, hồ sơ khách,
+// trợ lý Pulse, lý do chọn bài, nhắc log, lớp nhóm, admin). Gom bằng cách bò qua app ở
+// chế độ EN và lấy mọi chữ tiếng Việt còn hiện.
+Object.assign(I18N_VI_EN, {
+  // Hồ sơ khách (cdash)
+  '← Tất cả khách': '← All clients', 'Đúng lịch': 'On track', 'Mở giáo án để sửa': 'Open program to edit',
+  'Mở giáo án': 'Open program', 'Hỏi AI về khách này': 'Ask Pulse about this client',
+  'Buổi trong 7 ngày': 'Sessions in 7 days', 'Hôm qua': 'Yesterday', 'Lần tập cuối': 'Last workout',
+  'Khối lượng 7 ngày': '7-day volume', 'Đo InBody': 'InBody scan', 'Nhóm cơ': 'Muscle groups',
+  'Buổi gần nhất': 'Last session', '7 ngày': '7 days', '28 ngày': '28 days', 'Trước': 'Front', 'Sau': 'Back',
+  'Đang xem mặt sau. Mặt trước không có vùng nào đã tập.': 'Viewing the back. No front regions trained.',
+  'Đang xem mặt trước. Mặt sau không có vùng nào đã tập.': 'Viewing the front. No back regions trained.',
+  'Đang xem mặt trước. Mặt sau còn': 'Viewing the front. The back has', 'Đang xem mặt sau. Mặt trước còn': 'Viewing the back. The front has',
+  'đã tập.': 'trained.', 'Chưa có vùng nào sáng.': 'No regions lit yet.',
+  'Buổi gần nhất chưa ghi nhóm cơ nào.': 'The last session has no muscle groups logged.',
+  'Chọn 7 hoặc 28 ngày để xem rộng hơn.': 'Pick 7 or 28 days for a wider view.',
+  'Chưa có buổi tập nào được ghi.': 'No workouts logged yet.',
+  'cầu vai': 'traps', 'xô': 'lats', 'ngực': 'chest', 'vai trước': 'front delts', 'vai giữa': 'side delts', 'vai sau': 'rear delts',
+  'tay trước': 'biceps', 'tay sau': 'triceps', 'cẳng tay': 'forearms', 'bụng': 'abs', 'bụng chéo': 'obliques',
+  'đùi trước': 'quads', 'đùi trong': 'adductors', 'đùi sau': 'hamstrings', 'mông': 'glutes', 'bắp chân': 'calves',
+  'thang giữa': 'mid traps', 'cơ trám': 'rhomboids', 'cơ tròn lớn': 'teres major', 'chóp xoay': 'rotator cuff',
+  'cơ dựng sống': 'erector spinae', 'chưa có trên hình': 'not on the figure',
+  'Chưa kết nối đồng hồ.': 'No watch connected.', 'Giáo án': 'Program', 'Buổi tới': 'Next up',
+  'Xem bài và nhập tạ': 'View exercises & log weights', 'Xem chi tiết': 'View details', 'Đang mở bên dưới': 'Open below',
+  'Thu gọn': 'Collapse', 'Chưa tập buổi này': 'Not trained yet', 'Chưa tập buổi nào': 'No sessions yet',
+  'Chưa có': 'None yet', 'Chưa đo': 'Not measured', 'Đổi ảnh đại diện': 'Change photo', 'Xoá ảnh đại diện': 'Remove photo',
+  'Chuyển khách': 'Switch client', 'Khoảng thời gian': 'Time range', 'Mặt cơ thể': 'Body side',
+  'Các buổi trong giáo án': 'Sessions in the program', 'Kết nối Polar để thấy bước chân và calo mỗi ngày ở đây.':
+    'Connect Polar to see daily steps and calories here.',
+  // Thanh khách / picker
+  'Dashboard admin — chỉ admin': 'Admin dashboard — admin only', 'Tìm khách…': 'Search clients…', 'Tìm khách': 'Search clients',
+  'Xoá tìm kiếm': 'Clear search', 'Danh sách khách': 'Client list', 'Khách đang xem: chưa chọn': 'Viewing: no client selected',
+  'cần chú ý': 'needs attention', 'Chi tiết, tempo, video': 'Details, tempo, video',
+  // Dashboard coach
+  'Bảng điều khiển': 'Dashboard', 'Tải lại dữ liệu cũ': 'Reload older data', 'Ổn': 'OK', 'Hoạt động gần đây': 'Recent activity',
+  'Ăn': 'Meal', 'Ảnh': 'Photo', 'Tập': 'Workout', 'Đo': 'Scan', 'Số liệu': 'Numbers', 'Buổi tập tuần này': 'Workouts this week',
+  'Gói dịch vụ': 'Plans', 'khách chưa có gói': 'clients without a plan', 'InBody quá hạn': 'InBody overdue',
+  'quá 8 tuần chưa đo lại': 'over 8 weeks since last scan', 'Hôm nay chưa log': 'Not logged today',
+  'Cần chú ý': 'Needs attention', 'Chưa tập': 'Not training',
+  // Workout
+  'Trọng tâm buổi': 'Session focus', 'Vì sao bài này': 'Why this exercise',
+  'Hoàn thành buổi tập đầu tiên để bắt đầu theo dõi 📈': 'Finish your first workout to start tracking 📈',
+  // Dinh dưỡng
+  'Hôm nay': 'Today', 'Ghi bữa ăn': 'Log a meal', 'Đạm': 'Protein', 'Tinh bột': 'Carbs', 'Chất béo': 'Fat',
+  'đạm': 'protein', 'tinh bột': 'carbs', 'béo': 'fat', 'Tính từ InBody': 'Based on InBody', 'Cân nặng': 'Weight',
+  'Mỡ cơ thể': 'Body fat', 'Khối nạc (LBM)': 'Lean mass (LBM)', 'Cơ xương (SMM)': 'Skeletal muscle (SMM)',
+  'Tính lại từ InBody': 'Recalculate from InBody', 'Chỉnh tay': 'Edit manually', 'Đã ăn hôm nay': 'Eaten today',
+  'Chưa ghi bữa nào hôm nay.': 'No meals logged today.', '30 ngày gần đây': 'Last 30 days', 'Khách dưới 18 tuổi': 'Client under 18',
+  'Khách này chưa có mục tiêu': 'This client has no targets yet', 'Chưa có InBody để tính. Bạn có thể tự đặt mục tiêu.':
+    'No InBody to calculate from. You can set targets yourself.', 'Tự đặt': 'Set manually', 'Vì sao có mục tiêu này': 'Why these targets',
+  'VD: Bún chả, 1 phần': 'e.g. Bún chả, 1 serving', 'Đóng': 'Close', 'Tên': 'Name',
+  // Billing
+  'Chưa có ngày hết hạn — hoá đơn đầu tiên được xác nhận sẽ bắt đầu tính.': 'No end date yet — it starts when the first invoice is confirmed.',
+  'Cài đặt thu tiền': 'Payment settings', 'Xem mã QR để chuyển khoản': 'Show QR code for bank transfer',
+  'Huỷ hoá đơn — chọn gói khác': 'Cancel invoice — choose another plan', 'Lịch sử thanh toán': 'Payment history',
+  'Gói coaching': 'Coaching plans', 'Mọi gói coaching đều có': 'Every coaching plan includes',
+  'Chỉ dùng app, không kèm coaching': 'App only, no coaching', 'mỗi tháng': 'per month',
+  'Chuyển khoản xong, coach xác nhận là gia hạn ngay.': 'Once you transfer, your coach confirms and it renews right away.',
+  // Lịch
+  'Tháng này': 'This month', 'Công ty': 'Company',
+  // Hồi phục / sức khoẻ
+  'Đồng bộ ngay': 'Sync now', 'để kéo dữ liệu và nhận lời khuyên cho hôm nay.': 'to pull data and get today\'s advice.',
+  'Ngủ': 'Sleep', 'Sâu': 'Deep', 'Thức': 'Awake', 'Nhẹ': 'Light',
+  'Không phải tuổi sinh học đo được — ở đây không có xét nghiệm nào. Sáu thói quen bên dưới được tra sang tỉ số nguy cơ tử vong đã công bố, nhân lại, rồi quy ngược ra tuổi. Mô hình lấy nguyên hệ số từ y văn và áp lên một người, nên hãy đọc xu hướng của chính mình chứ đừng đem so với người khác. Mức lệch đang chạm trần ±22% tuổi thật.':
+    'This is not a measured biological age — there is no lab test here. The six habits below are mapped to published mortality hazard ratios, multiplied, and converted back into an age. The model applies population coefficients to one person, so read your own trend rather than comparing with others. The offset is at its ±22% cap of actual age.',
+  // Admin
+  'Quản lý coach': 'Manage coaches', 'Xem tất cả khách': 'View all clients', 'Coach đang hoạt động': 'Active coaches',
+  'Tổng khách': 'Total clients', 'Khách tự đăng nhập': 'Self-login clients', 'Khách tập trong 14 ngày': 'Clients active in 14 days',
+  'Khách': 'Clients', 'Tự đăng nhập': 'Self-login', 'Tập 14 ngày': 'Active 14 days', 'Đăng nhập': 'Last login',
+  'Khách của tôi': 'My clients', 'chưa đăng nhập': 'never logged in',
+  // Trợ lý Pulse — coach
+  'Chế độ chat': 'Chat mode', 'Chung': 'General', 'Gửi': 'Send', 'Hỏi về khách, giáo án, bài tập…': 'Ask about clients, programs, exercises…',
+  'Hỏi gì về khách và giáo án cũng được. Tao tự tra dữ liệu thật trong app.': 'Ask me anything about your clients and programs. I look up the real data in the app.',
+  'Đẩy giáo án và tạo khách mới thì tao làm được, nhưng': 'I can push programs and create clients, but I',
+  'không tự ghi': 'never save on my own', '— tao dựng thẻ, mày bấm Đồng ý mới lưu.': '— I build a card, and it saves only when you tap Approve.',
+  'Soạn giáo án cho khách mới': 'Program for a new client', 'Điền thông tin khách, không cần gõ prompt': 'Fill in the client details, no prompt needed',
+  'Soạn giáo án lớp nhóm': 'Program for a group class', 'HYROX · Strength nhóm nhỏ · Circuit — điền số người, dụng cụ':
+    'HYROX · Small-group strength · Circuit — enter headcount and equipment',
+  'Giáo án của Kem có hợp trình độ không': 'Does Kem\'s program fit her level?', 'Khách nào lâu chưa tập nhất': 'Who hasn\'t trained in the longest?',
+  'Gợi ý bài thay cho Romanian Deadlift': 'Suggest a swap for Romanian Deadlift',
+  'Giáo án cho khách mới': 'Program for a new client', 'Điền những gì mày biết — ô để trống trợ lý sẽ không tự bịa.':
+    'Fill in what you know — Pulse won\'t make up anything left blank.',
+  'Tên khách *': 'Client name *', 'Tuổi': 'Age', 'Giới tính': 'Sex', 'Nam': 'Male', 'Nữ': 'Female', 'Chiều cao (cm)': 'Height (cm)',
+  'Cân nặng (kg)': 'Weight (kg)', 'Trình độ': 'Level', 'Buổi / tuần': 'Sessions / week', 'Mỗi buổi': 'Session length',
+  '45 phút': '45 min', '60 phút': '60 min', '75 phút': '75 min', '90 phút': '90 min', 'Nơi tập': 'Where they train',
+  'Phòng gym đầy đủ': 'Full gym', 'Gym nhỏ / ít máy': 'Small gym / few machines', 'Tại nhà — tạ đơn, dây kháng lực': 'Home — dumbbells, bands',
+  'Không dụng cụ': 'No equipment', 'Mục tiêu *': 'Goal *', 'Chấn thương / bệnh lý': 'Injuries / conditions', 'Ghi chú thêm': 'Extra notes',
+  'Gmail khách (để tự đăng nhập)': 'Client Gmail (for self-login)', 'Soạn giáo án': 'Build program', 'Bỏ trống nếu chưa có': 'Leave blank if unknown',
+  'VD: Minh Anh': 'e.g. Minh Anh', 'VD: giảm mỡ, tăng sức mạnh thân dưới': 'e.g. fat loss, lower-body strength',
+  'VD: đau lưng dưới khi gập người — trống nếu chưa rõ': 'e.g. low-back pain when bending — blank if unknown',
+  'Kinh nghiệm tập, bài thích/ghét, lịch sinh hoạt…': 'Training history, favourite/disliked exercises, schedule…',
+  'Giáo án lớp nhóm': 'Group class program', 'Một lớp = một hồ sơ trong app. Dụng cụ ghi kèm SỐ LƯỢNG để trợ lý chia trạm.':
+    'One class = one profile in the app. List equipment WITH QUANTITIES so Pulse can plan stations.',
+  'Tên lớp *': 'Class name *', 'Kiểu lớp *': 'Class type *', 'Strength nhóm nhỏ': 'Small-group strength', 'Circuit giảm mỡ': 'Fat-loss circuit',
+  'Số người / buổi': 'People / session', 'Dụng cụ có sẵn *': 'Available equipment *', 'Mục tiêu lớp': 'Class goal',
+  'Ghi chú / hạn chế': 'Notes / limits', 'Soạn giáo án lớp': 'Build class program', 'VD: HYROX sáng T3-T5': 'e.g. HYROX Tue–Thu mornings',
+  'VD: 10': 'e.g. 10', 'VD: chuẩn bị giải HYROX tháng 12, thể lực chung': 'e.g. prepare for a December HYROX race, general fitness',
+  'VD: phòng không có chỗ chạy — dùng máy chạy; nhiều học viên đau gối': 'e.g. no running space — use treadmills; several members with knee pain',
+  'VD: 3 SkiErg, 2 Row, 1 sled, 10 cặp tạ đơn 5–20 kg, 8 wall ball 6/9 kg, 6 KB 12–24 kg': 'e.g. 3 SkiErg, 2 Row, 1 sled, 10 DB pairs 5–20 kg, 8 wall balls 6/9 kg, 6 KB 12–24 kg',
+  'lưu lại · chỉ coach xem': 'saved · coaches only', 'Hỏi về': 'Ask about',
+  '. Tao đọc hồ sơ, giáo án, mức tạ và lịch sử tập của khách này trước khi trả lời.': '. I read this client\'s profile, program, loads and history before answering.',
+  'Luồng chat này được': 'This chat is', 'lưu lại': 'saved',
+  '— mở lại vẫn còn. Chỉ coach của khách (và admin) xem được, khách không thấy.': '— it\'s still here when you come back. Only the client\'s coach (and admin) can see it; the client can\'t.',
+  'Hôm nay khách không khoẻ — chỉnh buổi': 'Client not feeling well today — adjust the session',
+  'Ngủ kém, mệt, ốm, đau ở đâu… → bảng chỉnh buổi hôm nay': 'Poor sleep, tired, sick, pain… → today\'s adjusted session',
+  'Viết đoạn ngắn giải thích giáo án hiện tại để gửi khách': 'Write a short explanation of the current program to send the client',
+  'Khách tiến bộ thế nào 4 tuần qua? Có nên tăng tạ không?': 'How has the client progressed over 4 weeks? Time to increase weights?',
+  'Trợ lý chỉnh buổi CHO HÔM NAY — giáo án gốc giữ nguyên.': 'Pulse adjusts the session FOR TODAY — the original program stays as is.',
+  'Tình trạng': 'Condition', 'Ngủ kém': 'Poor sleep', 'Mệt / stress': 'Tired / stressed', 'Cảm nhẹ (mũi, họng)': 'Mild cold (nose, throat)',
+  'Sốt / ốm toàn thân': 'Fever / whole-body illness', 'Đau mỏi cơ sau tập': 'Muscle soreness (DOMS)', 'Đau khớp / chấn thương': 'Joint pain / injury',
+  'Buổi định tập': 'Planned session', 'Mức đau (0–10)': 'Pain level (0–10)', 'Đau ở đâu / mô tả': 'Where it hurts / description',
+  'Chỉnh buổi hôm nay': 'Adjust today\'s session', 'VD: vai phải khi đẩy qua đầu; ngủ 4 tiếng': 'e.g. right shoulder on overhead pressing; slept 4 hours',
+  'VD: hôm qua đá bóng 90 phút': 'e.g. played 90 minutes of football yesterday',
+  'Tạo lớp nhóm': 'Create group class', 'Tạo khách mới': 'Create new client', 'Đẩy giáo án': 'Push program', 'Lớp nhóm': 'Group class',
+  'Mục tiêu': 'Goal', 'Buổi/tuần': 'Sessions/week', 'Đồng ý': 'Approve', 'Bỏ qua': 'Skip', 'Giáo án cũ': 'Old program',
+  'Giáo án mới': 'New program', 'Đổi gì': 'Changes', 'Đã lưu': 'Saved', 'Đã bỏ qua': 'Skipped', 'Đang lưu…': 'Saving…',
+  'Xem giáo án': 'View program', 'Bấm vào một bài để hỏi về bài đó.': 'Tap an exercise to ask about it.',
+  'Pha': 'Phase', 'Bài': 'Exercise', 'Khởi động': 'Warm-up', 'Chính': 'Main', 'Phụ': 'Accessory', 'Đang tra dữ liệu…': 'Looking up data…',
+  // Trợ lý Pulse — khách
+  'lưu lại · coach của bạn xem được': 'saved · your coach can see it', 'Hỏi mình về': 'Ask me about', 'giáo án của bạn': 'your program',
+  ': vì sao tập bài này, làm sao cho đúng kỹ thuật, nên tăng tạ chưa…': ': why an exercise is there, how to do it right, whether to go heavier…',
+  'Mình chỉ xem được dữ liệu của bạn và': 'I only see your own data and I', 'không sửa giáo án': 'can\'t change your program',
+  '— muốn đổi bài thì nhắn coach. Cuộc trò chuyện được lưu, coach của bạn cũng xem được.': '— message your coach to change anything. This chat is saved and your coach can see it.',
+  'Hôm nay mình không khoẻ — nên tập sao?': 'Not feeling great today — how should I train?', 'Ngủ kém, mệt, ốm, đau ở đâu…': 'Poor sleep, tired, sick, pain…',
+  'Mình tiến bộ thế nào mấy tuần qua? Đã nên tăng tạ chưa?': 'How have I progressed lately? Should I go heavier?',
+  'Hỏi về giáo án, bài tập của bạn…': 'Ask about your program and exercises…', 'Hôm nay bạn thế nào?': 'How are you today?',
+  'Trợ lý gợi ý tập sao cho hôm nay — giáo án coach soạn giữ nguyên. Nhớ báo coach nhé.': 'Pulse suggests how to train today — your coach\'s program stays as is. Remember to tell your coach.',
+});
+
+// Mẫu NGUYÊN CÂU nhiều biến {0} {1}…: khớp cả câu; phần biến được dịch tiếp nếu chính nó là
+// giao diện ("2 tuần trước", "Chưa tập"), còn là dữ liệu (tên khách, nhãn buổi) thì giữ nguyên.
+const I18N_FULL = {
+  '{0#} bài': '{0} exercises', '+ {0#} bài nữa': '+ {0} more', '{0#} bài · {1#} phần': '{0} exercises · {1} parts',
+  '{0#} ngày': '{0} days', '{0#} tuần': '{0} weeks', '{0#} tuần trước': '{0} weeks ago', '{0#} ngày trước': '{0} days ago',
+  '{0#} vùng': '{0} regions', 'Ngày {0}': 'On {0}', 'ngày {0}': 'on {0}', 'hôm qua {0}': 'yesterday {0}', 'hôm nay {0}': 'today {0}',
+  'Tập {0} · {1}/{2} bài · {3} kg': 'Trained {0} · {1}/{2} exercises · {3} kg', 'Tập {0} · {1}/{2} bài': 'Trained {0} · {1}/{2} exercises',
+  '{0} · {1}/{2} bài · {3} kg': '{0} · {1}/{2} exercises · {3} kg', '{0} · {1}/{2} bài': '{0} · {1}/{2} exercises',
+  'Buổi {0}': 'Session {0}', 'Buổi {0} · {1}': 'Session {0} · {1}',
+  '{0}, xem bài và nhập tạ': '{0}, view exercises & log weights', '{0}, xem chi tiết': '{0}, view details',
+  'Mức tạ {0}': 'Weight for {0}', 'Ghi lại {0}, {1} kcal': 'Log again: {0}, {1} kcal',
+  'Chưa tập {0#} ngày': 'No training for {0} days', 'Quá hạn đo InBody {0#} tuần': 'InBody overdue by {0} weeks',
+  '{0#} khách cần chú ý': '{0} clients need attention', 'Khách đang xem: {0}. {1} khách cần chú ý': 'Viewing: {0}. {1} clients need attention',
+  'Khách đang xem: {0}, {1}. {2} khách cần chú ý': 'Viewing: {0}, {1}. {2} clients need attention',
+  '{0} · {1} khách · {2} cần chú ý': '{0} · {1} clients · {2} need attention', '{0} · {1} khách · không ai cần chú ý': '{0} · {1} clients · nobody needs attention',
+  'Thứ Hai, {0}': 'Monday, {0}', 'Thứ Ba, {0}': 'Tuesday, {0}', 'Thứ Tư, {0}': 'Wednesday, {0}', 'Thứ Năm, {0}': 'Thursday, {0}',
+  'Thứ Sáu, {0}': 'Friday, {0}', 'Thứ Bảy, {0}': 'Saturday, {0}', 'Chủ Nhật, {0}': 'Sunday, {0}',
+  'Hình cơ thể, đang xem mặt {0}. Mặt trước {1} vùng đã tập, mặt sau {2} vùng. Số liệu ở danh sách nhóm cơ.':
+    'Body figure, viewing the {0}. Front: {1} regions trained, back: {2}. Numbers are in the muscle list.',
+  'trước': 'front', 'sau': 'back',
+  'Mặt trước, {0} vùng đã tập': 'Front, {0} regions trained', 'Mặt sau, {0} vùng đã tập': 'Back, {0} regions trained',
+  '{0} · Buổi {1} · {2} · {3}/{4} bài · đơn vị: set': '{0} · Session {1} · {2} · {3}/{4} exercises · unit: sets',
+  '{0} buổi trong {1} ngày · đơn vị: set': '{0} sessions in {1} days · unit: sets',
+  'Bước chân và calo của {0} sẽ hiện ở đây khi khách kết nối Polar.': '{0}\'s steps and calories will show here once they connect Polar.',
+  'Hình sẽ tô theo nhóm cơ sau buổi đầu tiên của {0}.': 'The figure fills in by muscle group after {0}\'s first session.',
+  'Còn {0#} kcal': '{0} kcal left', 'Còn {0#} g': '{0} g left',
+  '{0} · {1} tháng · lập {2}': '{0} · {1} months · issued {2}', '/ {0} tháng · {1} ₫/tháng': '/ {0} months · {1} ₫/month',
+  'Tiết kiệm {0} ₫ so với trả từng tháng': 'Save {0} ₫ vs paying monthly', 'Đã bao gồm quyền dùng app — gói {0}': 'Includes app access — {0} plan',
+  'Xác nhận đã nhận tiền · gia hạn đến {0}': 'Confirm payment received · renews until {0}', '{0} · app {1} tháng': '{0} · app {1} months',
+  '{0#}% tổng': '{0}% of total',
+  '{0} buổi đã đặt · quy đổi {1} session (mỗi tiếng bắt đầu tính 1 session)': '{0} sessions booked · {1} billable sessions (each started hour counts as 1)',
+  '{0}% số buổi cam kết · mục tiêu đã giới hạn': '{0}% of committed sessions · goal capped',
+  'Polar · chưa đồng bộ từ {0}': 'Polar · not synced since {0}', '/ {0} bước · {1}': '/ {0} steps · {1}',
+  'bước trong 7 ngày · {0}/{1} ngày đạt {2}': 'steps in 7 days · {0}/{1} days hit {2}', 'kcal cả ngày': 'kcal all day',
+  'kém · ANS {0}': 'poor · ANS {0}', '{0} · thấp · không tập, tính từ nhịp tim cả ngày': '{0} · low · rest day, from all-day heart rate',
+  'thức giấc {0} · {1} chu kỳ': 'awake {0} · {1} cycles', 'qua {0} đêm · nằm giường {1}': 'over {0} nights · in bed {1}',
+  '{0#} đêm': '{0} nights', '{0} đêm gần nhất': 'last {0} nights', 'đêm {0}': 'night of {0}', '{0} ngủ': '{0} asleep',
+  'TB 14 đêm {0}': '14-night avg {0}', 'Sâu {0}': 'Deep {0}', 'Nhẹ {0}': 'Light {0}', 'Thức {0}': 'Awake {0}',
+  'nền {0}': 'baseline {0}', '{0#} phút': '{0} min', '{0#} buổi': '{0} sessions', '{0} / nền {1}': '{0} / baseline {1}',
+  'đang xem: {0}': 'viewing: {0}', 'Hôm nay {0} thế nào?': 'How is {0} today?',
+  'Vì sao chọn từng bài trong buổi {0}?': 'Why each exercise in session {0}?',
+  'Cho mình xem buổi {0} và vì sao chia như vậy': 'Show me session {0} and why it\'s built that way',
+  'Vì sao mình tập từng bài trong buổi {0}?': 'Why do I do each exercise in session {0}?',
+  '1 tuần trước': '1 week ago', '1 ngày trước': '1 day ago', '1 ngày': '1 day', '1 tuần': '1 week', '1 buổi': '1 session', '1 bài': '1 exercise', '1 đêm': '1 night',
+  'Đo InBody · {0} kg · {1}% mỡ · SMM {2}': 'InBody · {0} kg · {1}% fat · SMM {2}',
+  'Hôm nay chưa log ({0})': 'Not logged today ({0})', 'Chưa log buổi {0}': 'Session not logged: {0}',
+};
+
 // ── I18N — chuyển toàn app giữa tiếng Việt và tiếng Anh ───────────────────
 //
 // Cách làm: KHÔNG bọc từng chuỗi trong mã nguồn. File này 13.700 dòng, chuỗi
@@ -19026,8 +19205,9 @@ const I18N_PAT = {
 // luôn giữ tiếng Anh ở CẢ HAI chế độ, đúng yêu cầu của coach.
 
 const I18N_LANG_KEY = 'pulse_lang';
-let _lang = 'vi';
-try { _lang = localStorage.getItem(I18N_LANG_KEY) === 'en' ? 'en' : 'vi'; } catch (_e) {}
+// Mặc định TIẾNG ANH (coach yêu cầu 2026-10-15); ai đã chọn VI thì giữ VI.
+let _lang = 'en';
+try { _lang = localStorage.getItem(I18N_LANG_KEY) === 'vi' ? 'vi' : 'en'; } catch (_e) {}
 
 /** Thẻ không được đụng tới: nội dung do người dùng nhập hoặc mã máy. */
 const I18N_SKIP_TAG = { SCRIPT: 1, STYLE: 1, TEXTAREA: 1, INPUT: 1, CODE: 1, PRE: 1 };
@@ -19048,7 +19228,7 @@ const _i18nNorm = (s) => s.replace(/\s+/g, ' ').trim();
 
 // Dựng sẵn hai bảng tra lúc nạp: khớp nguyên câu (nhanh, an toàn nhất) và
 // khớp một phần (cho câu bị ghép từ nhiều mảnh có biến chen giữa).
-let _i18nExact = null, _i18nSub = null, _i18nPat = null;
+let _i18nExact = null, _i18nSub = null, _i18nPat = null, _i18nFull = null;
 
 function _i18nBuild() {
   if (_i18nExact) return;
@@ -19068,6 +19248,39 @@ function _i18nBuild() {
       p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('([\\s\\S]{0,80}?)');
     return [new RegExp(rx), I18N_PAT[k]];
   });
+
+  // Mẫu nguyên câu nhiều biến (I18N_FULL): neo ^…$, biến khớp lười.
+  _i18nFull = Object.keys(I18N_FULL)
+    .sort((a, b) => b.replace(/\{\d#?\}/g, '').length - a.replace(/\{\d#?\}/g, '').length)
+    .map((k) => {
+      const order = [];
+      // {0} = bất kỳ; {0#} = chỉ số ("12", "2.805") — để "WOD dài nhất tuần" không bị đọc là "{0} tuần".
+      const rx = _i18nNorm(k).split(/(\{\d#?\})/).map((p) => {
+        const m = /^\{(\d)(#?)\}$/.exec(p);
+        if (m) { order.push(+m[1]); return m[2] ? '([\\d.,]+)' : '(.+?)'; }
+        return p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      }).join('');
+      return [new RegExp('^' + rx + '$', 's'), I18N_FULL[k], order];
+    });
+}
+
+/** Một mảnh (biến trong mẫu): là giao diện thì dịch, là dữ liệu thì giữ. depth chặn đệ quy. */
+function _i18nFrag(x, depth) {
+  const t = _i18nNorm(x);
+  const hit = _i18nExact.get(t);
+  if (hit != null) return hit;
+  const f = depth < 3 ? _i18nFullMatch(t, depth + 1) : null;
+  return f != null ? f : x;
+}
+function _i18nFullMatch(norm, depth) {
+  for (const [rx, en, order] of _i18nFull) {
+    const m = norm.match(rx);
+    if (!m) continue;
+    const vals = {};
+    order.forEach((idx, i) => { vals[idx] = _i18nFrag(m[i + 1], depth || 0); });
+    return en.replace(/\{(\d)\}/g, (_, i) => (vals[i] != null ? vals[i] : ''));
+  }
+  return null;
 }
 
 /** Dịch một chuỗi. Không có bản dịch thì trả nguyên văn tiếng Việt. */
@@ -19075,7 +19288,9 @@ function T(vi) {
   if (_lang !== 'en' || typeof vi !== 'string' || !vi) return vi;
   _i18nBuild();
   const hit = _i18nExact.get(_i18nNorm(vi));
-  return hit != null ? hit : vi;
+  if (hit != null) return hit;
+  const f = _i18nFullMatch(_i18nNorm(vi), 0);
+  return f != null ? f : vi;
 }
 
 /** Dịch nội dung một text node. Trả chuỗi mới, hoặc null nếu không đổi gì. */
@@ -19085,6 +19300,10 @@ function _i18nText(raw) {
 
   const exact = _i18nExact.get(norm);
   if (exact != null) return exact;
+  // Mẫu nguyên câu TRƯỚC khớp-một-phần: khớp-một-phần sẽ thay nửa câu thành tiếng
+  // Anh ("No training 122 ngày") và mẫu nguyên câu không còn nhận ra câu gốc nữa.
+  const full = _i18nFullMatch(norm, 0);
+  if (full != null) return full;
 
   let out = norm, changed = false;
   for (const [rx, en] of _i18nPat) {
@@ -19117,9 +19336,12 @@ function i18nApply(root) {
   }
   for (const [n, t] of jobs) n.nodeValue = t;
 
-  // placeholder và title không nằm trong text node.
-  for (const el of scope.querySelectorAll('[placeholder],[title]')) {
-    for (const attr of ['placeholder', 'title']) {
+  // placeholder, title, aria-label không nằm trong text node.
+  const attrs = ['placeholder', 'title', 'aria-label'];
+  const els = scope.querySelectorAll('[placeholder],[title],[aria-label]');
+  for (const el of (scope.matches && scope.matches('[placeholder],[title],[aria-label]') ? [scope, ...els] : els)) {
+    if (el.closest('[data-i18n-skip]')) continue;
+    for (const attr of attrs) {
       const v = el.getAttribute(attr);
       if (!v) continue;
       const t = _i18nText(v);
@@ -19144,9 +19366,11 @@ function i18nWatch() {
   new MutationObserver((muts) => {
     if (_lang !== 'en') return;
     for (const m of muts) {
-      if (m.addedNodes.length || m.type === 'characterData') { _i18nSchedule(); return; }
+      if (m.addedNodes.length || m.type === 'characterData' || m.type === 'attributes') { _i18nSchedule(); return; }
     }
-  }).observe(document.body, { childList: true, subtree: true, characterData: true });
+  }).observe(document.body, { childList: true, subtree: true, characterData: true,
+    // aria-label/title hay được đặt lại bằng setAttribute (hình cơ thể, khách đang xem).
+    attributes: true, attributeFilter: ['placeholder', 'title', 'aria-label'] });
 }
 
 function i18nGet() { return _lang; }

@@ -3435,6 +3435,7 @@ exports.coachAssistant = onCall(
         messages,
         clientId,
         day: request.data && request.data.day,
+        lang: request.data && request.data.lang === "en" ? "en" : "vi",
         role,
       });
       // Chat THEO KHÁCH (thread:true): lưu câu hỏi + trả lời vào
@@ -3536,7 +3537,8 @@ exports.clientAssistant = onCall(
     try {
       const r = await runAssistant({
         client, model: GEMINI_MODEL, messages, clientId, audience: "client",
-        day: request.data && request.data.day, role,
+        day: request.data && request.data.day,
+        lang: request.data && request.data.lang === "en" ? "en" : "vi", role,
       });
       // Lưu để khách mở lại vẫn còn; coach của khách cũng đọc được (luật clientChat).
       if (!role.coach) {

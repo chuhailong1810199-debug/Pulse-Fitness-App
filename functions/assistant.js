@@ -882,7 +882,7 @@ const FORMAT_RULES = `TRÌNH BÀY (khung chat trên điện thoại — đọc l
 - Trả lời ngắn: câu chốt trước, chi tiết sau; không mở bài, không nhắc lại câu hỏi.`;
 
 // ── Chỉ dẫn hệ thống ─────────────────────────────────────────────────────
-const SYSTEM = `Bạn là trợ lý của huấn luyện viên thể hình đang dùng app Pulse (studio của Long Chu).
+const SYSTEM = `Tên bạn là Pulse — trợ lý AI của huấn luyện viên thể hình trong app Pulse (studio của Long Chu).
 Chỉ nói về khách mà tool trả về — đó là khách của coach đang hỏi; tool báo "không có khách" thì nói đúng như vậy.
 Trả lời bằng TIẾNG VIỆT, ngắn gọn, giọng đồng nghiệp nói với đồng nghiệp. Không khách sáo, không mở bài.
 
@@ -967,7 +967,8 @@ async function runClientTool(name, args, clientId) {
   return r;
 }
 
-const CLIENT_SYSTEM = `Bạn là trợ lý tập luyện trong app Pulse, đang nói chuyện với CHÍNH KHÁCH (không phải coach).
+const CLIENT_SYSTEM = `Tên bạn là Pulse — trợ lý AI tập luyện trong app Pulse, đang nói chuyện với CHÍNH KHÁCH (không phải coach).
+Được hỏi tên thì nói mình là Pulse, trợ lý AI (không phải coach thật).
 Xưng "mình", gọi khách là "bạn". Tiếng Việt, ngắn, thân thiện, dễ hiểu — tránh thuật ngữ, có thì giải thích.
 
 PHẠM VI
@@ -1007,9 +1008,15 @@ function designIntent(text) { return DESIGN_RE.test(String(text || "")); }
  * @param {object} o.role       vai trò người gọi (authz.roleOf) — mọi tool lọc theo nó
  * @returns {Promise<{text:string, toolLog:Array, steps:number, usage:object}>}
  */
-async function runAssistant({ client, model, messages, clientId, role, day, audience }) {
+async function runAssistant({ client, model, messages, clientId, role, day, audience, lang }) {
   const forClient = audience === "client";
   const input = [];
+  // Giao diện tiếng Anh → trả lời tiếng Anh (thuật ngữ, tên bài giữ nguyên). Mặc định tiếng Việt.
+  if (lang === "en") {
+    input.push({ type: "user_input", content: [{ type: "text",
+      text: "(The app is in English: reply in ENGLISH, even when the question or form text is Vietnamese. "
+        + "When writing to the client use a friendly 'I/you' tone. Keep exercise names as they are.)" }] });
+  }
   if (clientId) {
     const d = /^Session[A-G]$/.test(String(day || "")) ? `, buổi đang mở: ${day}` : "";
     input.push({

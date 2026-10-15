@@ -32,7 +32,8 @@ test('hai che do chat: luong theo khach luu lai, tra loi ve dung luong da hoi', 
 test('ly do chon bai hien cho MOI nguoi: o "i" va truong focus tren dau buoi', () => {
   assert.match(s, /id="modal-why"/);
   assert.match(s, /whyWrap\.style\.display = ex\.why \? '' : 'none'/);
-  assert.match(s, /'<div class="day-focus"><span class="day-focus-k">Trọng tâm buổi<\/span>' \+ escHtml\(_focus\)/);
+  // Nội dung trọng tâm là chữ coach viết → nằm trong vùng data-i18n-skip, bộ dịch không đụng.
+  assert.match(s, /'<div class="day-focus"><span class="day-focus-k">Trọng tâm buổi<\/span><span data-i18n-skip>' \+ escHtml\(_focus\)/);
 });
 
 test('nut "Hoi AI ve khach nay" chi cho coach', () => {
