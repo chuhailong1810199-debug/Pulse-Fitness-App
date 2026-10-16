@@ -84,3 +84,35 @@ test('het thoi gian thi dung, khong de ham nen chet o 180 giay', async () => {
   assert.ok(r.steps < A.MAX_STEPS_DESIGN, 'chay ' + r.steps + ' vong du da het gio');
   assert.ok(A.TIME_BUDGET_MS < 180000);
 });
+
+// ── Đẩy nhầm khách (2026-10-16): đang mở Anh Đạo, hỏi "giáo án của anh đạo", model đề xuất
+// vào hồ sơ Long Chu, coach bấm đồng ý → giáo án của chính coach bị ghi đè.
+test('propose_program tu choi de xuat vao khach khong duoc hoi toi', async () => {
+  const people = { dao: { name: 'Anh Đạo', program: {} }, longchu: { name: 'Long Chu', program: {} } };
+  const db2 = { collection: (n) => ({
+    doc: (id) => ({ get: async () => ({ exists: n === 'clients' && !!people[id], id, data: () => people[id] }) }),
+    get: async () => ({ empty: false, docs: (n === 'exercises' ? LIB : []).map((x) => ({ id: x.id, data: () => x })) }),
+  }) };
+  const prog = { SessionA: { label: 'A', focus: 'x', phases: [{ name: 'Main', tag: 'strength',
+    exercises: [{ name: 'Goblet Squat (Dumbbell)', setsReps: '3 × 10', why: 'y' }] }] } };
+  const read = { 'get_client:longchu': true, 'get_exercise_loads:longchu': true, 'get_client:dao': true, 'get_exercise_loads:dao': true };
+  const ask = 'tao muốn design lại giáo án của anh đạo, gồm 3 block mỗi session';
+  const bad = await A.execTool(db2, 'propose_program', { clientId: 'longchu', program: prog }, ROLE,
+    { read, openClientId: 'dao', userText: ask });
+  assert.strictEqual(bad.rejected, true, 'phai chan: hoi Anh Dao ma ghi vao Long Chu');
+  const good = await A.execTool(db2, 'propose_program', { clientId: 'dao', program: prog }, ROLE,
+    { read, openClientId: 'dao', userText: ask });
+  assert.strictEqual(good.needsConfirm, true, JSON.stringify(good.errors));
+  // Khong co khach dang mo, cau hoi khong neu ten khach dich → khong doan.
+  const blind = await A.execTool(db2, 'propose_program', { clientId: 'longchu', program: prog }, ROLE,
+    { read, openClientId: null, userText: ask });
+  assert.strictEqual(blind.rejected, true);
+  assert.strictEqual(A.nameInText('An', 'giáo án anh đạo'), false, '"giáo án" khong phai ten khach An');
+});
+
+test('the duyet canh bao do + hoi lai khi ghi vao khach khac khach dang mo', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.match(html, /function _aiOtherClient\(a\)/);
+  assert.match(html, /class="ai-cf-warn"/);
+  assert.match(html, /if \(_aiOtherClient\(m\.action\)\) \{[\s\S]{0,200}confirm\(/);
+});

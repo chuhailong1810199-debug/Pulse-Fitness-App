@@ -9850,8 +9850,18 @@ function _aiCard(m, i) {
   }
   const table = p.table && Object.keys(p.table).length
     ? '<details class="ai-cf-tb" open><summary>Xem giáo án</summary>' + _aiProgramHTML(p.table) + '</details>' : '';
+  // Đẩy vào khách KHÁC khách đang mở → cảnh báo đỏ ngay trên thẻ (2026-10-16: giáo án soạn
+  // khi đang xem Anh Đạo bị đẩy vào hồ sơ Long Chu; thẻ chỉ ghi tên ở một dòng nhỏ).
+  const warn = _aiOtherClient(a)
+    ? '<div class="ai-cf-warn"><span aria-hidden="true">⚠ </span><span>' + escHtml('Giáo án này ghi vào ' + (p.client || a.clientId) + ', không phải '
+      + (activeClient.name || activeClient.id) + ' đang mở.') + '</span></div>' : '';
   return '<div class="ai-cf" data-state="' + st + '"><div class="ai-cf-h">'
-    + escHtml(title) + '</div>' + body + table + foot + '</div>';
+    + escHtml(title) + '</div>' + warn + body + table + foot + '</div>';
+}
+
+/** Thẻ đẩy giáo án nhắm vào khách khác khách đang mở trên màn hình. */
+function _aiOtherClient(a) {
+  return !!(a && a.kind === 'apply_program' && activeClient && a.clientId && a.clientId !== activeClient.id);
 }
 
 /** Coach gõ Gmail trên thẻ tạo khách — ghi thẳng vào action, không vẽ lại (giữ con trỏ). */
@@ -9865,6 +9875,10 @@ async function aiApprove(i) {
   // Cho bấm lại sau khi lỗi: mạng rớt giữa chừng là chuyện thường, bắt coach
   // hỏi lại trợ lý từ đầu chỉ để lấy lại đúng đề xuất cũ là vô lý.
   if (!m || (m.state !== 'chờ' && String(m.state).indexOf('lỗi') !== 0)) return;
+  if (_aiOtherClient(m.action)) {
+    const who = (m.preview && m.preview.client) || m.action.clientId;
+    if (!confirm(T('Ghi đè giáo án của ' + who + '? Bạn đang mở ' + (activeClient.name || activeClient.id) + '.'))) return;
+  }
   if (m.action.kind === 'create_client') {
     const em = String(m.action.email || '').trim().toLowerCase();
     if (em && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) { m.state = 'lỗi: Gmail không hợp lệ'; aiPaint(); return; }
@@ -17011,6 +17025,8 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .dsh-unlog button span{ color:rgba(255,255,255,.65); font-weight:600; }
 .day-focus{ margin: 0 0 12px; padding: 12px 14px; border-radius: 14px; border: 1px solid rgba(143,219,255,.22);
   background: rgba(143,219,255,.06); color: rgba(255,255,255,.86); font-size: 13.5px; line-height: 1.45; }
+.ai-cf-warn{ margin: 6px 0 8px; padding: 8px 10px; border-radius: 10px; background: rgba(255,82,82,.14);
+  border: 1px solid rgba(255,82,82,.55); color: #FFB3B3; font-size: 13px; font-weight: 700; line-height: 1.35; }
 .day-focus-k{ display: block; margin-bottom: 4px; color: #8FDBFF; font-size: 10.5px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
 .modal-why{ color: rgba(255,255,255,.88); line-height: 1.45; }
 #cdash-page .cd-goto{flex:none;min-height:46px;padding:0 20px;border-radius:999px;border:0;background:var(--accent-strong,#1C90FF);color:var(--on-accent,#161111);font:800 14px 'Figtree',sans-serif;cursor:pointer}
@@ -19186,6 +19202,8 @@ const I18N_FULL = {
   'Vì sao mình tập từng bài trong buổi {0}?': 'Why do I do each exercise in session {0}?',
   '1 tuần trước': '1 week ago', '1 ngày trước': '1 day ago', '1 ngày': '1 day', '1 tuần': '1 week', '1 buổi': '1 session', '1 bài': '1 exercise', '1 đêm': '1 night',
   'Đo InBody · {0} kg · {1}% mỡ · SMM {2}': 'InBody · {0} kg · {1}% fat · SMM {2}',
+  'Giáo án này ghi vào {0}, không phải {1} đang mở.': 'This program will be written to {0}, not {1} (currently open).',
+  'Ghi đè giáo án của {0}? Bạn đang mở {1}.': 'Overwrite {0}\'s program? You have {1} open.',
   'Hôm nay chưa log ({0})': 'Not logged today ({0})', 'Chưa log buổi {0}': 'Session not logged: {0}',
 };
 

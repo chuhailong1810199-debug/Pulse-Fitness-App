@@ -14,6 +14,7 @@
 const { canManageDoc, canViewDoc } = require("./authz.js");
 const { buildLibIndex, resolveProgram, PHASE_TAGS, normalizePhaseTag, squash, suggest } = require("./program-lib.js");
 const { getFirestore } = require("firebase-admin/firestore");
+const { fold } = require("./log-reminder.js");
 
 /** Trần số vòng gọi tool cho một câu hỏi. */
 const MAX_STEPS = 8;   // hỏi đáp: đọc → (đọc thêm) → trả lời
@@ -335,6 +336,43 @@ function exerciseHit(v, q) {
   return ws.every((w) => has(w) || (w.length > 4 && w.endsWith("s") && has(w.slice(0, -1))));
 }
 
+/** Tên khách có được nhắc trong câu hỏi không — bỏ dấu, bỏ xưng hô, khớp nguyên từ ≥ 3 ký tự. */
+function nameInText(name, text) {
+  const n = fold(name), core = n.replace(/^(chi|anh|em|co|chu|bac|ong|ba|lop)\s+/, "");
+  if (!n) return false;
+  // Tên ngắn ("An") bỏ dấu là trùng chữ thường ("giáo ÁN" → "giao an"): so CÓ dấu.
+  if (core.length <= 2) {
+    const keep = (x) => " " + String(x || "").toLowerCase().normalize("NFC").replace(/[^\p{L}\p{N}]+/gu, " ").trim() + " ";
+    const nm = keep(name).trim().split(" ").pop();
+    return keep(text).includes(" " + nm + " ");
+  }
+  const t = " " + fold(text) + " ";
+  if (t.includes(" " + n + " ")) return true;
+  if (core.length >= 3 && t.includes(" " + core + " ")) return true;
+  // Họ tên đầy đủ, câu hỏi gọi tên riêng ("anh Tiến" ↔ "Trần Văn Tiến").
+  const last = n.split(" ").pop();
+  return n.includes(" ") && last.length >= 3 && t.includes(" " + last + " ");
+}
+
+/**
+ * Đề xuất có nhắm đúng khách coach đang nói tới không (2026-10-16: coach mở Anh Đạo,
+ * gõ "design lại giáo án của anh đạo", model đề xuất vào hồ sơ Long Chu — coach bấm
+ * đồng ý, giáo án của chính coach bị ghi đè). Trả câu lỗi, hoặc null nếu ổn.
+ *  Hợp lệ khi câu hỏi (3 tin gần nhất) nêu tên khách đích, hoặc khách đích là khách đang mở.
+ */
+function targetMismatch({ targetId, targetName, openId, openName, text }) {
+  if (text == null) return null;
+  const targetNamed = nameInText(targetName, text) || nameInText(targetId, text);
+  if (targetNamed) return null;
+  // Không nhắc tên khách đích: chỉ chấp nhận khi đó CHÍNH là khách đang mở (câu "tiếp tục",
+  // "sửa buổi B" trong luồng của khách). Không có khách đang mở mà cũng không nêu tên → không đoán.
+  if (openId && targetId === openId) return null;
+  return `Câu hỏi không nhắc tới '${targetName || targetId}'`
+    + (openId ? ` — coach đang mở ${openName || openId}` : "")
+    + `. Dùng đúng clientId của khách được hỏi (${openId || "tra list_clients theo tên trong câu hỏi"}), `
+    + "đọc lại hồ sơ khách đó rồi soạn lại.";
+}
+
 /**
  * Thân các tool — KHÔNG tự kiểm quyền. Chỉ gọi qua runTool (coach, đã gác theo
  * coach) hoặc runClientTool (khách, đã ép clientId = chính họ).
@@ -530,6 +568,16 @@ async function execTool(db, name, a, role, ctx) {
     // nhắc thôi thì model vẫn có lúc bỏ qua.
     const c0 = await db.collection("clients").doc(a.clientId).get();
     const isGroup = c0.exists && (c0.data() || {}).isGroup === true;
+    if (ctx && ctx.userText != null && c0.exists) {
+      let openName = null;
+      if (ctx.openClientId && ctx.openClientId !== a.clientId) {
+        const o = await db.collection("clients").doc(ctx.openClientId).get().catch(() => null);
+        openName = o && o.exists ? (o.data() || {}).name || null : null;
+      }
+      const bad = targetMismatch({ targetId: a.clientId, targetName: (c0.data() || {}).name,
+        openId: ctx.openClientId || null, openName, text: ctx.userText });
+      if (bad) return { rejected: true, errors: [bad] };
+    }
     if (ctx && ctx.read) {
       // Lớp nhóm không có "mức tạ của khách" — mỗi học viên một mức — nên chỉ đòi hồ sơ lớp.
       const need = isGroup ? ["get_client"] : ["get_client", "get_exercise_loads"];
@@ -1080,7 +1128,10 @@ async function runAssistant({ client, model, messages, clientId, role, day, audi
   const toolLog = [];
   const pending = [];        // đề xuất chờ coach duyệt
   const displays = [];       // bảng app tự vẽ (show_program)
-  const ctx = { read: {} };   // tool đọc đã chạy trong lượt này: { "get_client:cindy": true }
+  // read: tool đọc đã chạy trong lượt này ({ "get_client:cindy": true }).
+  // openClientId + userText: để propose_program kiểm đề xuất nhắm đúng khách được hỏi.
+  const ctx = { read: {}, openClientId: forClient ? null : (clientId || null),
+    userText: (messages || []).filter((m) => m.role !== "assistant").slice(-3).map((m) => String(m.text || "")).join("\n") };
   const lastUser = [...(messages || [])].reverse().find((m) => m.role !== "assistant");
   let design = designIntent(lastUser && lastUser.text);
   let usage = null;
@@ -1254,4 +1305,4 @@ function buildMorningPush({ bookings, rec }) {
 }
 
 module.exports = { CLIENT_TOOLS, CLIENT_TOOL_NAMES, CLIENT_SYSTEM, runClientTool, TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, METHOD, GROUP_METHOD, EXPLAIN_METHOD, FORMAT_RULES, compactProgram, checkRationale, GROUP_FORMATS, groupName, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, THINK_DESIGN, designIntent, runTool, runAssistant, progSummary, shapeReply,
-  validateProgram, validateNewClient, makeClientId, LEVELS, MAX_STEPS_DESIGN, TIME_BUDGET_MS, exerciseHit };
+  validateProgram, validateNewClient, makeClientId, LEVELS, MAX_STEPS_DESIGN, TIME_BUDGET_MS, exerciseHit, targetMismatch, nameInText };
