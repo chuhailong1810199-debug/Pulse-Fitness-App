@@ -9802,6 +9802,9 @@ function _aiCard(m, i) {
     rows.push(['Giáo án cũ', before]);
     rows.push(['Giáo án mới', after]);
     if (p.summary) rows.push(['Đổi gì', p.summary]);
+    // Đề xuất vài buổi: nói rõ buổi nào giữ nguyên, buổi nào bị xoá — coach không phải đoán.
+    if ((p.kept || []).length) rows.push(['Giữ nguyên', p.kept.join(', ')]);
+    if ((p.dropped || []).length) rows.push(['Xoá buổi', p.dropped.join(', ')]);
   } else if (a.kind === 'create_client') {
     rows.push(['Tên', p.name]);
     rows.push(['Id', p.clientId]);
@@ -19204,6 +19207,7 @@ const I18N_FULL = {
   'Đo InBody · {0} kg · {1}% mỡ · SMM {2}': 'InBody · {0} kg · {1}% fat · SMM {2}',
   'Giáo án này ghi vào {0}, không phải {1} đang mở.': 'This program will be written to {0}, not {1} (currently open).',
   'Ghi đè giáo án của {0}? Bạn đang mở {1}.': 'Overwrite {0}\'s program? You have {1} open.',
+  'Giữ nguyên': 'Unchanged', 'Xoá buổi': 'Sessions removed',
   'Hôm nay chưa log ({0})': 'Not logged today ({0})', 'Chưa log buổi {0}': 'Session not logged: {0}',
 };
 

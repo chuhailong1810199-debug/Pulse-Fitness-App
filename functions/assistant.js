@@ -152,6 +152,9 @@ const TOOLS = [
             ". name phải là tên ĐÚNG Y như search_exercises trả về (pha warmup/circuit được dùng bài ngoài thư viện).",
         },
         summary: { type: "string", description: "một câu nói rõ thay đổi gì so với giáo án cũ" },
+        dropSessions: { type: "array", items: { type: "string" },
+          description: "buổi CŨ muốn XOÁ hẳn (VD [\"SessionD\",\"SessionE\"] khi giảm 5 → 3 buổi/tuần). "
+            + "Buổi cũ không có trong program và không nằm đây thì GIỮ NGUYÊN." },
       },
       required: ["clientId", "program"],
     },
@@ -607,20 +610,34 @@ async function execTool(db, name, a, role, ctx) {
         note: "Sửa HẾT các lỗi trên trong một lần rồi đề xuất lại: tên bài lấy ĐÚNG Y từ thư viện "
           + "(search_exercises với queries = mọi bài lỗi), thêm focus mỗi buổi và why mỗi bài chính/phụ." };
     }
+    // Đề xuất chỉ vài buổi = SỬA những buổi đó, giữ các buổi còn lại. Trước đây giáo án
+    // đề xuất THAY cả giáo án: model đẩy mỗi SessionA → coach duyệt → B, C, D, E của Anh Đạo
+    // biến mất (2026-10-16). Muốn bỏ buổi cũ phải nói rõ bằng dropSessions.
+    const drop = new Set((Array.isArray(a.dropSessions) ? a.dropSessions : []).map(String));
+    const kept = Object.keys(old).filter((k) => !(k in r.program) && !drop.has(k)).sort();
+    const merged = {};
+    for (const k of kept) merged[k] = old[k];
+    Object.assign(merged, r.program);
+    const program = Object.fromEntries(Object.keys(merged).sort().map((k) => [k, merged[k]]));
+    const dropped = Object.keys(old).filter((k) => drop.has(k) && !(k in r.program)).sort();
     return {
       needsConfirm: true,
-      action: { kind: "apply_program", clientId: a.clientId, program: r.program },
+      action: { kind: "apply_program", clientId: a.clientId, program },
       preview: {
         client: (c.data() || {}).name || c.id,
         summary: a.summary || "",
         before: progSummary(old),
-        after: progSummary(r.program),
+        after: progSummary(program),
         exercises: v.stats.exercises,
         renamed: r.renamed.slice(0, 20),
-        table: compactProgram(r.program),
+        changed: Object.keys(r.program).sort(),
+        kept,
+        dropped,
+        table: compactProgram(program),
       },
-      note: "Đã gửi cho coach duyệt. Nói cho coach biết thay đổi gì, rồi dừng — "
-        + "đừng gọi lại tool này.",
+      note: "Đã gửi cho coach duyệt"
+        + (kept.length ? ` (đổi ${Object.keys(r.program).sort().join(", ")}; GIỮ NGUYÊN ${kept.join(", ")})` : "")
+        + ". Nói cho coach biết thay đổi gì, rồi dừng — đừng gọi lại tool này.",
     };
   }
 
@@ -995,6 +1012,9 @@ GIÁO ÁN
   (VD ["goblet squat","kettlebell swing","push up"]), không gọi lẻ từng bài. Bị từ chối thì sửa HẾT lỗi
   trong một lần. Số lượt có hạn — tra lắt nhắt là hết lượt trước khi kịp đề xuất.
 - Không có khách đang mở mà câu hỏi nêu tên khách: list_clients tìm id, rồi đọc hồ sơ ngay lượt sau.
+- propose_program chỉ gửi những buổi ĐỔI: buổi cũ không gửi thì được GIỮ NGUYÊN. Soạn lại cả giáo án thì gửi
+  ĐỦ mọi buổi trong MỘT lần đề xuất (không chia mỗi lần một buổi). Muốn bỏ hẳn buổi cũ (giảm số buổi/tuần)
+  thì ghi vào dropSessions.
 - Soạn/sửa giáo án cho khách ĐÃ CÓ hồ sơ: lượt đầu gọi CÙNG LÚC get_client, get_exercise_loads và
   get_program của khách đó — xem chấn thương, mức tạ thật, giáo án cũ — rồi mới soạn. Server từ chối
   propose_program nếu chưa đọc.

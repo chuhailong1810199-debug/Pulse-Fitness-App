@@ -116,3 +116,23 @@ test('the duyet canh bao do + hoi lai khi ghi vao khach khac khach dang mo', () 
   assert.match(html, /class="ai-cf-warn"/);
   assert.match(html, /if \(_aiOtherClient\(m\.action\)\) \{[\s\S]{0,200}confirm\(/);
 });
+
+// Đề xuất mỗi SessionA → duyệt → B, C, D, E của Anh Đạo biến mất (2026-10-16).
+test('de xuat vai buoi thi giu cac buoi con lai; bo buoi phai noi ro', async () => {
+  const oldDay = (n) => ({ label: n, phases: [{ name: 'Main', tag: 'strength', exercises: [{ name: 'Goblet Squat (Dumbbell)', setsReps: '3 × 10' }] }] });
+  const people = { dao: { name: 'Anh Đạo', program: { SessionA: oldDay('A'), SessionB: oldDay('B'), SessionC: oldDay('C'), SessionD: oldDay('D') } } };
+  const db2 = { collection: (n) => ({
+    doc: (id) => ({ get: async () => ({ exists: n === 'clients' && !!people[id], id, data: () => people[id] }) }),
+    get: async () => ({ empty: false, docs: (n === 'exercises' ? LIB : []).map((x) => ({ id: x.id, data: () => x })) }),
+  }) };
+  const newA = { SessionA: { label: 'A2', focus: 'f', phases: [{ name: 'Block 1', tag: 'strength',
+    exercises: [{ name: 'Goblet Squat (Dumbbell)', setsReps: '3 × 8', why: 'w' }] }] } };
+  const ctx = { read: { 'get_client:dao': true, 'get_exercise_loads:dao': true }, openClientId: 'dao', userText: 'sửa buổi A của anh đạo' };
+  const r = await A.execTool(db2, 'propose_program', { clientId: 'dao', program: newA }, ROLE, ctx);
+  assert.deepStrictEqual(Object.keys(r.action.program), ['SessionA', 'SessionB', 'SessionC', 'SessionD']);
+  assert.strictEqual(r.action.program.SessionA.label, 'A2');
+  assert.deepStrictEqual(r.preview.kept, ['SessionB', 'SessionC', 'SessionD']);
+  const d = await A.execTool(db2, 'propose_program', { clientId: 'dao', program: newA, dropSessions: ['SessionD'] }, ROLE, ctx);
+  assert.deepStrictEqual(Object.keys(d.action.program), ['SessionA', 'SessionB', 'SessionC']);
+  assert.deepStrictEqual(d.preview.dropped, ['SessionD']);
+});
