@@ -9891,7 +9891,9 @@ async function aiApprove(i) {
   try {
     const fn = firebase.app().functions('asia-southeast1')
       .httpsCallable('coachApply', { timeout: 60000 });
-    await fn({ action: m.action });
+    const res = await fn({ action: m.action });
+    // Đề xuất vài buổi được ghép lên giáo án hiện tại ở server — lấy bản ĐÃ GHÉP để vẽ.
+    if (m.action.kind === 'apply_program' && res && res.data && res.data.program) m.action.program = res.data.program;
     m.state = 'xong';
     // Dữ liệu vừa đổi dưới Firestore — nạp lại để màn hình không còn bản cũ.
     if (m.action.kind === 'apply_program' && activeClient
@@ -10172,7 +10174,8 @@ async function aiSend(ev, text, show) {
   try {
     // Khách gọi clientAssistant (chỉ đọc, server tự xác định khách theo email).
     const fn = firebase.app().functions('asia-southeast1')
-      .httpsCallable(_aiMode === 'self' ? 'clientAssistant' : 'coachAssistant', { timeout: 180000 });
+      // Bằng timeoutSeconds của hàm nền (300) — ngắn hơn thì app bỏ cuộc trước khi server trả lời.
+      .httpsCallable(_aiMode === 'self' ? 'clientAssistant' : 'coachAssistant', { timeout: 300000 });
     // Chỉ gửi lượt người và máy, bỏ dòng nhật ký tool — nó là thứ hiện cho
     // coach xem, không phải ngữ cảnh model cần đọc lại.
     const res = await fn({

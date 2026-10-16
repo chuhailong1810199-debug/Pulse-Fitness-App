@@ -24,8 +24,22 @@ const MAX_STEPS = 8;   // hỏi đáp: đọc → (đọc thêm) → trả lời
  * 6 bài (2026-10-16: Anh Đạo, "3 block mỗi buổi" → chạm trần, mất cả bản nháp).
  */
 const MAX_STEPS_DESIGN = 14;
-/** Hàm nền chết ở 180 giây — không mở vòng mới sau mốc này, trả lời với những gì đã có. */
-const TIME_BUDGET_MS = 140 * 1000;
+/**
+ * Hàm nền chết ở 300 giây. Sau TIME_BUDGET_MS không mở vòng mới; một lượt gọi model đang
+ * chạy bị cắt ở TIME_BUDGET_MS + HARD_STOP_MS. Chỉ chặn trước khi mở vòng là chưa đủ: vòng
+ * viết giáo án một mình có thể mất 60–90 giây (2026-10-16: 504 ở 180 giây).
+ */
+const TIME_BUDGET_MS = 230 * 1000;
+const HARD_STOP_MS = 50 * 1000;
+
+/** Ghép buổi đổi lên giáo án: buổi không gửi thì giữ, buổi trong drop thì bỏ. Khoá xếp A→Z. */
+function mergeProgram(current, changed, drop) {
+  const d = new Set((Array.isArray(drop) ? drop : []).map(String));
+  const out = {};
+  for (const [k, v] of Object.entries(current || {})) if (!d.has(k)) out[k] = v;
+  Object.assign(out, changed || {});
+  return Object.fromEntries(Object.keys(out).sort().map((k) => [k, out[k]]));
+}
 /** Mức suy luận: "minimal" | "low" | "medium" | "high". Xem chú thích ở vòng lặp. */
 const THINK_DISPATCH = "minimal";
 const THINK_COMPOSE = "low";
@@ -613,16 +627,15 @@ async function execTool(db, name, a, role, ctx) {
     // Đề xuất chỉ vài buổi = SỬA những buổi đó, giữ các buổi còn lại. Trước đây giáo án
     // đề xuất THAY cả giáo án: model đẩy mỗi SessionA → coach duyệt → B, C, D, E của Anh Đạo
     // biến mất (2026-10-16). Muốn bỏ buổi cũ phải nói rõ bằng dropSessions.
-    const drop = new Set((Array.isArray(a.dropSessions) ? a.dropSessions : []).map(String));
+    const dropList = (Array.isArray(a.dropSessions) ? a.dropSessions : []).map(String);
+    const drop = new Set(dropList);
     const kept = Object.keys(old).filter((k) => !(k in r.program) && !drop.has(k)).sort();
-    const merged = {};
-    for (const k of kept) merged[k] = old[k];
-    Object.assign(merged, r.program);
-    const program = Object.fromEntries(Object.keys(merged).sort().map((k) => [k, merged[k]]));
+    const program = mergeProgram(old, r.program, dropList);   // để xem trước trên thẻ
     const dropped = Object.keys(old).filter((k) => drop.has(k) && !(k in r.program)).sort();
     return {
       needsConfirm: true,
-      action: { kind: "apply_program", clientId: a.clientId, program },
+      // Gửi CHỈ buổi đổi + merge: coachApply ghép lên giáo án lúc bấm duyệt.
+      action: { kind: "apply_program", clientId: a.clientId, program: r.program, merge: true, dropSessions: dropped },
       preview: {
         client: (c.data() || {}).name || c.id,
         summary: a.summary || "",
@@ -1154,13 +1167,17 @@ async function runAssistant({ client, model, messages, clientId, role, day, audi
     userText: (messages || []).filter((m) => m.role !== "assistant").slice(-3).map((m) => String(m.text || "")).join("\n") };
   const lastUser = [...(messages || [])].reverse().find((m) => m.role !== "assistant");
   let design = designIntent(lastUser && lastUser.text);
-  let usage = null;
+  const usage = { input: 0, output: 0, thought: 0 };
+  const stepMs = [];
+  let timedOut = false;
   let steps = 0;
   const t0 = Date.now();
+  const soft = timeBudgetMs || TIME_BUDGET_MS;
+  const hardAt = t0 + soft + (timeBudgetMs ? Math.min(HARD_STOP_MS, timeBudgetMs) : HARD_STOP_MS);
   let lastReject = null;     // lỗi của lần propose_* bị từ chối gần nhất
   const budget = () => (design ? MAX_STEPS_DESIGN : MAX_STEPS);
 
-  while (steps < budget() && (steps === 0 || Date.now() - t0 < (timeBudgetMs || TIME_BUDGET_MS))) {
+  while (steps < budget() && (steps === 0 || Date.now() - t0 < soft)) {
     steps++;
     // Gemini 3 mặc định suy luận dài. Chính chú thích trong callGemini ghi đó
     // là thứ từng đẩy lời gọi ảnh món ăn vượt trần 60 giây.
@@ -1171,15 +1188,33 @@ async function runAssistant({ client, model, messages, clientId, role, day, audi
     //
     // Thấy giáo án nó soạn hời hợt thì nâng THINK_COMPOSE lên "medium"; đây là
     // chỗ đánh đổi giữa nhanh và sâu, và nó nằm ở đúng một dòng.
-    const interaction = await client.interactions.create({
-      model, input, tools: forClient ? CLIENT_TOOLS : TOOLS, system_instruction: forClient ? CLIENT_SYSTEM : SYSTEM,
-      generation_config: { thinking_level: steps === 1 ? THINK_DISPATCH : design ? THINK_DESIGN : THINK_COMPOSE },
-    });
-    usage = interaction.usage || usage;
+    const ts = Date.now();
+    const left = Math.max(1000, hardAt - ts);
+    let interaction;
+    try {
+      // Cắt cứng lượt gọi model trước khi hàm nền bị Cloud Run giết (504, mất cả câu trả lời).
+      interaction = await Promise.race([
+        client.interactions.create({
+          model, input, tools: forClient ? CLIENT_TOOLS : TOOLS, system_instruction: forClient ? CLIENT_SYSTEM : SYSTEM,
+          generation_config: { thinking_level: steps === 1 ? THINK_DISPATCH : design ? THINK_DESIGN : THINK_COMPOSE },
+        }, { timeout: left }),
+        new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error("assistant-deadline"), { deadline: true })), left)),
+      ]);
+    } catch (e) {
+      if (!e || !(e.deadline || /timed? ?out|abort/i.test(String(e.message)))) throw e;
+      stepMs.push(Date.now() - ts);
+      timedOut = true;
+      break;
+    }
+    stepMs.push(Date.now() - ts);
+    const u = interaction.usage || {};
+    usage.input += u.total_input_tokens || 0;
+    usage.output += u.total_output_tokens || 0;
+    usage.thought += u.total_thought_tokens || 0;
 
     const calls = (interaction.steps || []).filter((s) => s.type === "function_call");
     if (!calls.length) {
-      return { text: interaction.output_text || "", toolLog, pending, displays, steps, usage };
+      return { text: interaction.output_text || "", toolLog, pending, displays, steps, usage, ms: Date.now() - t0, stepMs };
     }
 
     // Giữ nguyên các bước model sinh ra rồi mới nối kết quả — bỏ qua là model
@@ -1221,24 +1256,33 @@ async function runAssistant({ client, model, messages, clientId, role, day, audi
     });
   }
 
+  if (Date.now() - t0 >= soft) timedOut = true;
   // Hết vòng mà model vẫn đòi gọi tool: trả lời thật thà thay vì lặng thinh.
   // Đang soạn dở mà bị từ chối thì nói rõ vướng gì — coach biết đường gõ tiếp.
   const en = lang === "en";
   let text;
-  if (lastReject && (lastReject.errors || []).length) {
+  if (pending.length) {
+    // Đã có thẻ duyệt rồi mới hết giờ/lượt: đừng bảo coach "hỏi lại" — thẻ vẫn dùng được.
+    text = en ? "The proposal is ready below — review it and approve. (I ran out of time before writing a summary.)"
+      : "Đề xuất đã sẵn bên dưới — xem và bấm Đồng ý. (Hết giờ trước khi kịp viết phần tóm tắt.)";
+  } else if (lastReject && (lastReject.errors || []).length) {
     const errs = lastReject.errors.slice(0, 8).map((e) => "• " + e).join("\n");
     text = (en
       ? "I drafted the program but ran out of steps before it passed the checks. Still blocking:\n"
       : "Tao soạn xong bản nháp nhưng hết lượt trước khi qua được bước kiểm. Còn vướng:\n")
       + errs + (en ? "\n\nSend \"continue\" and I'll fix these and propose again."
         : "\n\nNhắn \"tiếp tục\" để tao sửa nốt và đề xuất lại.");
+  } else if (timedOut) {
+    text = en
+      ? "Writing this took longer than one turn allows. Send \"continue\" — what I've read so far isn't lost, I'll pick up from the program."
+      : "Soạn câu này lâu hơn mức một lượt cho phép. Nhắn \"tiếp tục\" để tao soạn nốt.";
   } else {
     text = en
       ? "This needed more lookups than one turn allows. Narrow it down (e.g. name the client, or one client at a time)."
       : "Câu này cần tra nhiều hơn mức cho phép trong một lượt. Hỏi hẹp lại giúp tao "
         + "(ví dụ nêu rõ tên khách, hoặc hỏi từng khách một).";
   }
-  return { text, toolLog, pending, displays, steps, usage, hitLimit: true };
+  return { text, toolLog, pending, displays, steps, usage, hitLimit: true, timedOut, ms: Date.now() - t0, stepMs };
 }
 
 /**
@@ -1325,4 +1369,4 @@ function buildMorningPush({ bookings, rec }) {
 }
 
 module.exports = { CLIENT_TOOLS, CLIENT_TOOL_NAMES, CLIENT_SYSTEM, runClientTool, TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, METHOD, GROUP_METHOD, EXPLAIN_METHOD, FORMAT_RULES, compactProgram, checkRationale, GROUP_FORMATS, groupName, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, THINK_DESIGN, designIntent, runTool, runAssistant, progSummary, shapeReply,
-  validateProgram, validateNewClient, makeClientId, LEVELS, MAX_STEPS_DESIGN, TIME_BUDGET_MS, exerciseHit, targetMismatch, nameInText };
+  validateProgram, validateNewClient, makeClientId, LEVELS, MAX_STEPS_DESIGN, TIME_BUDGET_MS, HARD_STOP_MS, mergeProgram, exerciseHit, targetMismatch, nameInText };

@@ -82,7 +82,7 @@ test('het thoi gian thi dung, khong de ham nen chet o 180 giay', async () => {
   const r = await A.runAssistant({ client: slow, model: 'm', messages: [{ role: 'user', text: 'soạn giáo án' }], role: ROLE, timeBudgetMs: 50 });
   assert.ok(r.hitLimit);
   assert.ok(r.steps < A.MAX_STEPS_DESIGN, 'chay ' + r.steps + ' vong du da het gio');
-  assert.ok(A.TIME_BUDGET_MS < 180000);
+  assert.ok(A.TIME_BUDGET_MS + A.HARD_STOP_MS < 300000);
 });
 
 // ── Đẩy nhầm khách (2026-10-16): đang mở Anh Đạo, hỏi "giáo án của anh đạo", model đề xuất
@@ -129,10 +129,37 @@ test('de xuat vai buoi thi giu cac buoi con lai; bo buoi phai noi ro', async () 
     exercises: [{ name: 'Goblet Squat (Dumbbell)', setsReps: '3 × 8', why: 'w' }] }] } };
   const ctx = { read: { 'get_client:dao': true, 'get_exercise_loads:dao': true }, openClientId: 'dao', userText: 'sửa buổi A của anh đạo' };
   const r = await A.execTool(db2, 'propose_program', { clientId: 'dao', program: newA }, ROLE, ctx);
-  assert.deepStrictEqual(Object.keys(r.action.program), ['SessionA', 'SessionB', 'SessionC', 'SessionD']);
-  assert.strictEqual(r.action.program.SessionA.label, 'A2');
+  // Hành động chỉ mang buổi đổi + merge; coachApply ghép lên giáo án lúc bấm duyệt.
+  assert.strictEqual(r.action.merge, true);
+  assert.deepStrictEqual(Object.keys(r.action.program), ['SessionA']);
+  assert.deepStrictEqual(r.preview.after.map((x) => x.day), ['SessionA', 'SessionB', 'SessionC', 'SessionD']);
   assert.deepStrictEqual(r.preview.kept, ['SessionB', 'SessionC', 'SessionD']);
+  const merged = A.mergeProgram(people.dao.program, r.action.program, r.action.dropSessions);
+  assert.deepStrictEqual(Object.keys(merged), ['SessionA', 'SessionB', 'SessionC', 'SessionD']);
+  assert.strictEqual(merged.SessionA.label, 'A2');
   const d = await A.execTool(db2, 'propose_program', { clientId: 'dao', program: newA, dropSessions: ['SessionD'] }, ROLE, ctx);
-  assert.deepStrictEqual(Object.keys(d.action.program), ['SessionA', 'SessionB', 'SessionC']);
   assert.deepStrictEqual(d.preview.dropped, ['SessionD']);
+  assert.deepStrictEqual(Object.keys(A.mergeProgram(people.dao.program, d.action.program, d.action.dropSessions)),
+    ['SessionA', 'SessionB', 'SessionC']);
+  // Hai thẻ duyệt nối tiếp (A rồi B): thẻ sau ghép lên bản ĐÃ có A mới, không đè lại A cũ.
+  const afterA = A.mergeProgram(people.dao.program, { SessionA: newA.SessionA }, []);
+  const afterB = A.mergeProgram(afterA, { SessionB: { ...newA.SessionA, label: 'B2' } }, []);
+  assert.strictEqual(afterB.SessionA.label, 'A2');
+  assert.strictEqual(afterB.SessionB.label, 'B2');
+});
+
+test('cat cung luot goi model truoc khi ham nen bi giet; thoi han khop timeout cua ham + app', async () => {
+  const hang = { interactions: { create: () => new Promise(() => {}) } };   // model treo mãi
+  const t = Date.now();
+  const r = await A.runAssistant({ client: hang, model: 'm', messages: [{ role: 'user', text: 'soạn giáo án' }], role: ROLE, timeBudgetMs: 40 });
+  assert.ok(Date.now() - t < 2000, 'phai tu dung, khong treo');
+  assert.ok(r.hitLimit && r.timedOut);
+  assert.match(r.text, /tiếp tục/);
+  const idx = fs.readFileSync(path.join(__dirname, '..', 'functions', 'index.js'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const i = idx.indexOf('exports.coachAssistant'); const secs = +/timeoutSeconds: (\d+)/.exec(idx.slice(i, i + 800))[1];
+  assert.ok((A.TIME_BUDGET_MS + A.HARD_STOP_MS) / 1000 < secs - 10, 'runAssistant phai dung truoc khi Cloud Run cat');
+  assert.match(html, /'coachAssistant', \{ timeout: (\d+) \}/);
+  assert.strictEqual(+/'coachAssistant', \{ timeout: (\d+) \}/.exec(html)[1], secs * 1000, 'app cho dung bang ham nen');
+  assert.match(idx, /u\.input \?\? "\?"/, 'log token doc dung truong');
 });

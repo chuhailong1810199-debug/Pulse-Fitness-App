@@ -3391,8 +3391,10 @@ exports.coachAssistant = onCall(
   {
     region: "asia-southeast1",
     secrets: [GEMINI_API_KEY],
-    // Một câu hỏi có thể gọi tool vài vòng, mỗi vòng là một lượt gọi model.
-    timeoutSeconds: 180,
+    // Một câu hỏi có thể gọi tool vài vòng, mỗi vòng là một lượt gọi model. Soạn cả giáo án
+    // 3 buổi (đọc hồ sơ → tra → viết ~20 bài kèm why/cue) đã chạm 180 giây → 504 (2026-10-16).
+    // runAssistant tự dừng trước mốc này (TIME_BUDGET_MS + HARD_STOP_MS).
+    timeoutSeconds: 300,
     memory: "512MiB",
   },
   async (request) => {
@@ -3456,9 +3458,13 @@ exports.coachAssistant = onCall(
         ]).catch((e) => console.warn("[coachAssistant] không lưu được chat:", e.message));
       }
       const u = r.usage || {};
+      // Tên trường usage của Interactions API là total_*_tokens — đọc input_tokens thì log
+      // luôn ra "?" và không ai biết một câu tốn bao nhiêu token.
       console.log(`[coachAssistant] ${r.steps} vòng, ${r.toolLog.length} tool `
         + `(${r.toolLog.map((t) => t.name).join(", ") || "không"}), `
-        + `token vào ${u.input_tokens ?? "?"} ra ${u.output_tokens ?? "?"}`);
+        + `token vào ${u.input ?? "?"} ra ${u.output ?? "?"} nghĩ ${u.thought ?? "?"}, `
+        + `${Math.round((r.ms || 0) / 1000)}s [${(r.stepMs || []).map((x) => Math.round(x / 1000)).join("+")}]`
+        + (r.timedOut ? " — HẾT GIỜ" : ""));
       // Qua shapeReply, đừng liệt kê tay từng trường ở đây — đó là chỗ đã làm
       // rơi mất `pending` và thẻ duyệt không bao giờ hiện ra.
       return shapeReply(r);
@@ -3490,7 +3496,7 @@ const CLIENT_ASK_PER_DAY = 40;
  * chọn được. Coach gọi kèm clientId để xem thử như khách (assertCanView).
  */
 exports.clientAssistant = onCall(
-  { region: "asia-southeast1", secrets: [GEMINI_API_KEY], timeoutSeconds: 180, memory: "512MiB" },
+  { region: "asia-southeast1", secrets: [GEMINI_API_KEY], timeoutSeconds: 300, memory: "512MiB" },
   async (request) => {
     const db = getFirestore();
     const role = await authz.roleOf(request, db);
@@ -3580,18 +3586,21 @@ exports.coachApply = onCall(
     const role = await authz.requireCoach(request);
     const email = role.email;
 
-    const { validateProgram, validateNewClient } = require("./assistant.js");
+    const { validateProgram, validateNewClient, mergeProgram } = require("./assistant.js");
     const act = (request.data && request.data.action) || {};
     const db = getFirestore();
 
     if (act.kind === "apply_program") {
       // Kiểm lại ở đây, không tin đề xuất: máy khách sửa được action trên đường đi.
       await authz.assertCanManage(request, String(act.clientId || ""), db);
-      const v = validateProgram(act.program);
-      if (!v.ok) throw new HttpsError("invalid-argument", v.errors.join(" | "));
       const ref = db.collection("clients").doc(String(act.clientId || ""));
       const cur = await ref.get();
       if (!cur.exists) throw new HttpsError("not-found", `Không có khách '${act.clientId}'.`);
+      // merge: đề xuất chỉ mang những buổi ĐỔI → ghép lên giáo án HIỆN TẠI lúc bấm duyệt
+      // (không phải lúc đề xuất): hai thẻ duyệt nối tiếp nhau không đè mất buổi của nhau.
+      if (act.merge === true) act.program = mergeProgram((cur.data() || {}).program || {}, act.program, act.dropSessions);
+      const v = validateProgram(act.program);
+      if (!v.ok) throw new HttpsError("invalid-argument", v.errors.join(" | "));
 
       // Giữ bản cũ trước khi ghi đè. Đẩy nhầm giáo án là mất cả kế hoạch tập
       // của một người; không có bản lưu thì không có đường lùi.
@@ -3622,7 +3631,7 @@ exports.coachApply = onCall(
       await batch.commit();
       console.log(`[coachApply] giáo án -> ${act.clientId}: ${v.stats.days} buổi, ${v.stats.exercises} bài, `
         + `mang tạ cũ theo ${carried.length} bài`);
-      return { ok: true, clientId: act.clientId, ...v.stats, carriedLoads: carried.length };
+      return { ok: true, clientId: act.clientId, ...v.stats, carriedLoads: carried.length, program: act.program };
     }
 
     if (act.kind === "create_client") {
