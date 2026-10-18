@@ -1,0 +1,258 @@
+/**
+ * Kiểm giáo án Pulse đề xuất theo khung phương pháp (METHOD trong assistant.js) — bằng CODE,
+ * không chỉ nhắc trong prompt (2026-10-19, coach yêu cầu):
+ *  1. Volume: số set làm việc mỗi nhóm cơ mỗi tuần theo trình độ; mỗi buổi một nhóm cơ không quá ~10 set.
+ *  2. Đủ mẫu chuyển động trong tuần (squat, hinge, đẩy/kéo ngang/dọc, core, một chân/carry).
+ *  4. Thời lượng ước tính của mỗi buổi khớp thời lượng coach đặt.
+ * Thuần, không I/O — test được. Đếm set GIỐNG app (muscleSetsForDay trong index.html):
+ * bỏ pha warmup + circuit, cơ chính 1 set, cơ phụ 0,5, cơ ổn định 0.
+ */
+const { normalizePhaseTag } = require("./program-lib.js");
+
+const MUSCLE_WEIGHTS = { P: 1, S: 0.5, T: 0, Q: 0 };
+/** Khoảng set làm việc / nhóm cơ / tuần (METHOD mục 1). */
+const VOLUME = { Beginner: [6, 10], Intermediate: [10, 16], Advanced: [14, 20] };
+/** Một nhóm cơ trong MỘT buổi. */
+const PER_SESSION_MAX = 10;
+/** Dư thêm để nửa set (cơ phụ) không làm giáo án đúng khung bị chặn oan. */
+const SLACK = 1;
+/** Nhóm cơ chính: thiếu volume thì nhắc (không chặn). */
+const MAJOR = ["Quads", "Hamstrings", "Glutes", "Chest", "Lats"];
+
+/** Số set từ "3 × 8-10", "4 vòng × 15", "3 x 10/bên". Không ghi số set → 1 (giống app). */
+function parseSets(setsReps) {
+  const raw = String(setsReps || "").toLowerCase().replace(/[×]/g, "x").trim();
+  const m = raw.match(/^(\d+)\s*(?:(?:rounds?|vòng|hiệp|sets?)\s*[x·:]|x)/);
+  return m ? Math.max(1, parseInt(m[1], 10)) : 1;
+}
+
+/**
+ * Tên nhóm cơ về MỘT bộ chuẩn (khớp canonMuscle của app): giáo án cũ còn "GLUTES",
+ * "HAMSTRING", "Latissimus Dorsi", "DELTOID" — không gộp thì một cơ tách làm hai dòng,
+ * mỗi dòng chỉ nửa số set, và kiểm volume sai cả hai chiều.
+ */
+const CANON = [
+  [/^(glutes?|gluteus( maximus| medius| minimus)?|glute (max|med))$/, "Glutes"],
+  [/^hamstrings?$/, "Hamstrings"], [/^(quads?|quadriceps)$/, "Quads"],
+  [/^(lats?|latissimus( dorsi)?)$/, "Lats"], [/^(chest|pecs?|pectorals?|pectoralis( major)?)$/, "Chest"],
+  [/^(front delts?|anterior delt(oid)?s?)$/, "Front Delts"], [/^(side delts?|lateral delt(oid)?s?|medial delt(oid)?s?)$/, "Side Delts"],
+  [/^(rear delts?|posterior delt(oid)?s?|rear deltoids?)$/, "Rear Delts"], [/^(delts?|deltoids?|shoulders?)$/, "Deltoids"],
+  [/^(abs|abdominals?|rectus abdominis)$/, "Abs"], [/^(obliques?)$/, "Obliques"],
+  [/^(traps?|trapezius|upper traps?)$/, "Traps"], [/^(mid\/lower traps|lower traps?|mid(dle)? traps?)$/, "Mid/Lower Traps"],
+  [/^(adductors?)$/, "Adductors"], [/^(triceps?)$/, "Triceps"], [/^(biceps?)$/, "Biceps"], [/^(calf|calves)$/, "Calves"],
+  [/^(forearms?)$/, "Forearms"], [/^(rhomboids?)$/, "Rhomboids"], [/^(erector spinae|erectors?|lower back)$/, "Erector Spinae"],
+  [/^(rotator cuff)$/, "Rotator Cuff"], [/^(teres major)$/, "Teres Major"],
+];
+function canonMuscle(name) {
+  const k = String(name || "").trim().toLowerCase().replace(/\s+/g, " ");
+  for (const [re, out] of CANON) if (re.test(k)) return out;
+  return String(name || "").trim();
+}
+
+const working = (ph) => { const t = normalizePhaseTag(ph); return t === "strength" || t === "accessories"; };
+const round1 = (x) => Math.round(x * 10) / 10;
+
+/** { totals: {Glutes: 9,…}, perSession: {SessionA: {Glutes: 4,…}} } */
+function muscleSets(program) {
+  const totals = {}, perSession = {};
+  for (const [day, d] of Object.entries(program || {})) {
+    const s = (perSession[day] = {});
+    for (const ph of (d && d.phases) || []) {
+      if (!working(ph)) continue;
+      for (const x of (ph && ph.exercises) || []) {
+        const n = parseSets(x && x.setsReps);
+        for (const [m0, role] of Object.entries((x && x.muscles) || {})) {
+          const m = canonMuscle(m0);
+          const w = MUSCLE_WEIGHTS[role] || 0;
+          if (!w) continue;
+          s[m] = round1((s[m] || 0) + w * n);
+          totals[m] = round1((totals[m] || 0) + w * n);
+        }
+      }
+    }
+  }
+  return { totals, perSession };
+}
+
+/**
+ * Mục 1. errors = vượt trần (chặn); warnings = nhóm cơ chính dưới sàn (chỉ nhắc).
+ * exceptions { Glutes: "coach muốn ưu tiên mông" }: nhóm cơ coach CHỦ Ý dồn volume ("coach nói
+ * khác thì theo coach") — được vượt trần tuần, nhưng phải ghi lý do và hiện trên thẻ duyệt.
+ * Trần MỖI BUỔI vẫn giữ: >10 set một nhóm cơ trong một buổi là set rác, ưu tiên cỡ nào cũng vậy.
+ */
+function volumeIssues(program, level, exceptions) {
+  const range = VOLUME[level] || VOLUME.Beginner;
+  const { totals, perSession } = muscleSets(program);
+  const ex = {};
+  for (const [k, v] of Object.entries(exceptions && typeof exceptions === "object" ? exceptions : {})) {
+    if (String(v || "").trim()) ex[canonMuscle(k)] = String(v).trim();
+  }
+  const errors = [], warnings = [], waived = [];
+  for (const [m, v] of Object.entries(totals)) {
+    if (v <= range[1] + SLACK) continue;
+    if (ex[m]) waived.push(`${m} ${v} set/tuần (khung ${range[0]}–${range[1]}): ${ex[m]}`);
+    else errors.push({ k: "vol:" + m, m: `Volume ${m}: ${v} set/tuần, vượt khung ${level || "Beginner"} ${range[0]}–${range[1]}. `
+      + `Bớt set/bài có ${m}, hoặc nếu coach CHỦ Ý ưu tiên nhóm này thì ghi volumeExceptions.${m} = lý do.` });
+  }
+  for (const [day, s] of Object.entries(perSession)) {
+    for (const [m, v] of Object.entries(s)) {
+      if (v > PER_SESSION_MAX + SLACK) errors.push({ k: `sess:${day}:${m}`, m: `${day}: ${m} ${v} set trong một buổi, tối đa ~${PER_SESSION_MAX}. Dời bớt sang buổi khác.` });
+    }
+  }
+  for (const m of MAJOR) {
+    const v = totals[m] || 0;
+    if (v < range[0]) warnings.push(`${m} chỉ ${v} set/tuần (khung ${range[0]}–${range[1]}).`);
+  }
+  return { errors, warnings, totals, waived };
+}
+
+// ── Mục 2: mẫu chuyển động ───────────────────────────────────────────────
+/** Máy cardio tên có "row" không phải bài kéo. */
+const ERG = /\berg\b|ski ?erg|rower|rowing machine|\brow (easy|interval|pace|sprint)|assault|air ?bike|treadmill|\brun\b|jog/i;
+const PATTERNS = [
+  ["squat", "gập gối (squat/lunge)", /squat|lunge|leg press|step[\s-]?up|pistol|hack|leg extension|wall sit|sissy|cossack/i],
+  ["hinge", "gập hông (hinge)", /deadlift|\brdl\b|romanian|good ?morning|hip thrust|glute bridge|swing|hinge|pull[\s-]?through|back extension|hyperextension|\bclean\b|snatch|kickstand/i],
+  ["hpush", "đẩy ngang", /bench|push[\s-]?up|press[\s-]?up|chest press|floor press|\bdips?\b|\bfly\b|flye|pec deck|svend/i],
+  ["vpush", "đẩy dọc", /overhead|shoulder press|military|push press|arnold|landmine press|pike|handstand|\bohp\b|thruster|\bjerk\b|z[\s-]?press|y[\s-]?press/i],
+  ["hpull", "kéo ngang", /\brows?\b|rowing|face ?pull|inverted|reverse fly|rear delt fly|pull[\s-]?apart|seal row/i],
+  ["vpull", "kéo dọc", /pull[\s-]?up|chin[\s-]?up|pull[\s-]?down|lat pull|pulldown/i],
+  ["core", "core chống xoay / chống duỗi", /plank|dead ?bug|pallof|bird ?dog|crunch|sit[\s-]?up|rollout|ab wheel|hollow|wood ?chop|russian twist|leg raise|knee raise|toes[\s-]?to[\s-]?bar|v[\s-]?up|mountain climber|anti[\s-]?rotation|suitcase|copenhagen|landmine rotation|stir the pot/i],
+  ["single", "một chân hoặc carry", /lunge|split squat|step[\s-]?up|single[\s-]?leg|one[\s-]?leg|\bsl\b|pistol|bulgarian|carry|farmer|suitcase|skater|cossack|kickstand/i],
+];
+const PATTERN_KEYS = PATTERNS.map((p) => p[0]);
+
+/** Mẫu chuyển động có mặt trong tuần (bỏ khởi động; máy cardio không tính là bài kéo). */
+function patternsCovered(program) {
+  const have = new Set();
+  for (const d of Object.values(program || {})) {
+    for (const ph of (d && d.phases) || []) {
+      if (normalizePhaseTag(ph) === "warmup") continue;
+      for (const x of (ph && ph.exercises) || []) {
+        const n = String((x && x.name) || "");
+        if (ERG.test(n)) continue;
+        for (const [k, , re] of PATTERNS) if (re.test(n)) have.add(k);
+      }
+    }
+  }
+  return have;
+}
+
+/**
+ * Mục 2. Thiếu mẫu → lỗi, TRỪ khi đề xuất ghi lý do bỏ trong `exceptions` ({ vpush: "vai đang hồi phục" }).
+ * Chấn thương là lý do hợp lệ để bỏ một mẫu — nhưng phải nói ra, coach thấy trên thẻ duyệt.
+ */
+function coverageIssues(program, exceptions) {
+  const have = patternsCovered(program);
+  const ex = exceptions && typeof exceptions === "object" ? exceptions : {};
+  const errors = [], waived = [];
+  for (const [k, label] of PATTERNS) {
+    if (have.has(k)) continue;
+    const why = String(ex[k] || "").trim();
+    if (why) waived.push(`${label}: ${why}`);
+    else errors.push({ k: "cov:" + k, m: `Cả tuần thiếu mẫu ${label} [${k}]. Thêm một bài, hoặc nếu chấn thương không cho phép thì ghi coverageExceptions.${k} = lý do.` });
+  }
+  return { errors, waived, covered: [...have] };
+}
+
+// ── Mục 4: thời lượng buổi ───────────────────────────────────────────────
+/** Phút ước tính cho một bài circuit: "3 × 40s" → 3×(40s + 20s nghỉ); "1 × 12 phút" → 12; "4 vòng × 15" → 4×1. */
+function circuitMinutes(setsReps) {
+  const raw = String(setsReps || "").toLowerCase().replace(/[×]/g, "x");
+  const n = parseSets(raw);
+  const t = raw.match(/x\s*(\d+(?:[.,]\d+)?)\s*(s|sec|giây|min|mins|phút)\b/);
+  if (t) {
+    const v = parseFloat(t[1].replace(",", "."));
+    const min = /^(s|sec|giây)$/.test(t[2]) ? v / 60 : v;
+    return n * (min + (min < 2 ? 1 / 3 : 0));
+  }
+  return n * 1;
+}
+
+/** Phút ước tính một buổi: khởi động 5–10 phút; set làm việc ~2,5 phút (gồm nghỉ), superset ~1,75. */
+function estimateMinutes(day) {
+  let total = 0;
+  for (const ph of (day && day.phases) || []) {
+    const tag = normalizePhaseTag(ph);
+    const exs = (ph && ph.exercises) || [];
+    if (tag === "warmup") { total += Math.min(10, Math.max(5, exs.length * 2)); continue; }
+    if (tag === "circuit") { for (const x of exs) total += circuitMinutes(x && x.setsReps); continue; }
+    const paired = exs.length >= 2 && /superset|block|cặp|pair|\bss\b|giant|tri[\s-]?set/i.test(String(ph.name || ""));
+    for (const x of exs) total += parseSets(x && x.setsReps) * (paired ? 1.75 : 2.5);
+  }
+  return Math.round(total);
+}
+
+/** Mục 4. Dài quá 30% (+5 phút) → lỗi; ngắn hơn 60% → nhắc. Không có thời lượng đích thì bỏ qua. */
+function durationIssues(program, minutes) {
+  const target = Number(minutes);
+  const est = {};
+  for (const [k, d] of Object.entries(program || {})) est[k] = estimateMinutes(d);
+  if (!(target > 0)) return { errors: [], warnings: [], est };
+  const errors = [], warnings = [];
+  for (const [k, m] of Object.entries(est)) {
+    if (m > target * 1.3 + 5) errors.push({ k: "dur:" + k, m: `${k}: ước tính ~${m} phút, dài hơn buổi ${target} phút. Bớt set/bài hoặc gộp superset.` });
+    else if (m < target * 0.6) warnings.push(`${k}: ước tính ~${m} phút, ngắn so với buổi ${target} phút.`);
+  }
+  return { errors, warnings, est };
+}
+
+/** Đẩy : kéo (set) — chỉ nhắc khi đẩy nhiều hơn kéo quá 1,5 lần. */
+function pushPullWarning(program) {
+  let push = 0, pull = 0;
+  for (const d of Object.values(program || {})) {
+    for (const ph of (d && d.phases) || []) {
+      if (!working(ph)) continue;
+      for (const x of (ph && ph.exercises) || []) {
+        const n = String((x && x.name) || ""), s = parseSets(x && x.setsReps);
+        if (ERG.test(n)) continue;
+        if (PATTERNS[2][2].test(n) || PATTERNS[3][2].test(n)) push += s;
+        else if (PATTERNS[4][2].test(n) || PATTERNS[5][2].test(n)) pull += s;
+      }
+    }
+  }
+  return push > 0 && push > Math.max(pull, 1) * 1.5 ? [`Đẩy ${push} set : kéo ${pull} set — khung đòi ≈ 1 : 1.`] : [];
+}
+
+/**
+ * Lỗi nào MỚI so với giáo án cũ. Sửa một buổi mà các buổi KHÔNG đụng tới đã vượt khung từ
+ * trước thì không bắt model sửa buổi coach không nhờ — lỗi cũ thành lời nhắc.
+ * @returns {{errors:{k,m}[], inherited:string[]}}
+ */
+function newErrors(next, before) {
+  const had = new Set((before || []).map((e) => e.k));
+  return { errors: next.filter((e) => !had.has(e.k)), inherited: next.filter((e) => had.has(e.k)).map((e) => e.m) };
+}
+
+/**
+ * Chạy mọi kiểm cho một giáo án CẢ TUẦN.
+ * @param {object} program  giáo án đã qua resolveProgram (bài đã gắn muscles)
+ * @param {object} o  { level, minutes, exceptions, isGroup }
+ * @returns {{errors:{k:string,m:string}[], warnings:string[], volume:object, est:object, waived:string[]}}
+ */
+function checkProgram(program, o = {}) {
+  // Lớp nhóm: trình độ trộn, dụng cụ có hạn, học viên đi 1 buổi — khung volume 1-1 không áp.
+  if (o.isGroup) {
+    const d = durationIssues(program, o.minutes);
+    return { errors: d.errors, warnings: d.warnings, volume: {}, est: d.est, waived: [] };
+  }
+  const v = volumeIssues(program, o.level, o.volumeExceptions);
+  const c = coverageIssues(program, o.coverageExceptions);
+  const d = durationIssues(program, o.minutes);
+  return {
+    errors: [...v.errors, ...c.errors, ...d.errors],
+    warnings: [...v.warnings, ...d.warnings, ...pushPullWarning(program)],
+    volume: v.totals, est: d.est, waived: [...v.waived, ...c.waived],
+  };
+}
+
+/** "45 phút" / "60" / "1h" → 45 / 60 / 60; không đọc được → null. */
+function parseMinutes(v) {
+  const s = String(v == null ? "" : v).toLowerCase();
+  const h = s.match(/(\d+(?:[.,]\d+)?)\s*(h|giờ|tiếng)/);
+  if (h) return Math.round(parseFloat(h[1].replace(",", ".")) * 60);
+  const m = s.match(/\d+/);
+  return m ? +m[0] : null;
+}
+
+module.exports = { canonMuscle, parseSets, muscleSets, volumeIssues, patternsCovered, coverageIssues, estimateMinutes,
+  durationIssues, pushPullWarning, checkProgram, newErrors, parseMinutes, VOLUME, PATTERN_KEYS, PER_SESSION_MAX };

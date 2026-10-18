@@ -11,6 +11,13 @@ const { initializeApp } = fnRequire("firebase-admin/app");
 const { getFirestore } = fnRequire("firebase-admin/firestore");
 initializeApp({ projectId: "demo-pulse-rules" });
 const A = require(path.join(__dirname, "..", "..", "functions", "assistant.js"));
+// File này kiểm QUYỀN và thư viện bằng giáo án 1 bài. Khung phương pháp (volume, đủ mẫu chuyển
+// động) kiểm riêng ở tests/program-check.test.js — ở đây miễn mẫu chuyển động để giáo án 1 bài qua.
+const ALL_PATTERNS = Object.fromEntries(require(path.join(__dirname, "..", "..", "functions", "program-check.js"))
+  .PATTERN_KEYS.map((k) => [k, "test quyền"]));
+const _runTool = A.runTool;
+A.runTool = (name, args, ...rest) => _runTool(name,
+  /^propose_/.test(name) ? { coverageExceptions: ALL_PATTERNS, ...(args || {}) } : args, ...rest);
 
 const RA = { coach: true, admin: false, uid: "coachA" };
 const RB = { coach: true, admin: false, uid: "coachB" };

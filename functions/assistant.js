@@ -15,6 +15,17 @@ const { canManageDoc, canViewDoc } = require("./authz.js");
 const { buildLibIndex, resolveProgram, PHASE_TAGS, normalizePhaseTag, squash, suggest } = require("./program-lib.js");
 const { getFirestore } = require("firebase-admin/firestore");
 const { fold } = require("./log-reminder.js");
+const PC = require("./program-check.js");
+
+/** Tham số chung của hai tool đề xuất: ngoại lệ có lý do + thời lượng buổi. */
+const CHECK_PARAMS = {
+  sessionMinutes: { type: "integer", description: "thời lượng MỖI buổi (phút) coach đặt — server ước tính và chặn buổi dài quá" },
+  volumeExceptions: { type: "object",
+    description: "nhóm cơ coach CHỦ Ý dồn volume vượt khung trình độ → lý do. VD {\"Glutes\": \"coach muốn ưu tiên mông\"}. Hiện trên thẻ duyệt." },
+  coverageExceptions: { type: "object",
+    description: "mẫu chuyển động BỎ vì chấn thương/hạn chế → lý do. Khoá: " + PC.PATTERN_KEYS.join(" | ")
+      + ". VD {\"vpush\": \"vai phải đang hồi phục\"}." },
+};
 
 /** Trần số vòng gọi tool cho một câu hỏi. */
 const MAX_STEPS = 8;   // hỏi đáp: đọc → (đọc thêm) → trả lời
@@ -166,6 +177,7 @@ const TOOLS = [
             ". name phải là tên ĐÚNG Y như search_exercises trả về (pha warmup/circuit được dùng bài ngoài thư viện).",
         },
         summary: { type: "string", description: "một câu nói rõ thay đổi gì so với giáo án cũ" },
+        ...CHECK_PARAMS,
         dropSessions: { type: "array", items: { type: "string" },
           description: "buổi CŨ muốn XOÁ hẳn (VD [\"SessionD\",\"SessionE\"] khi giảm 5 → 3 buổi/tuần). "
             + "Buổi cũ không có trong program và không nằm đây thì GIỮ NGUYÊN." },
@@ -192,6 +204,7 @@ const TOOLS = [
         sessionsPerWeek: { type: "integer", description: "1–7" },
         notes: { type: "string" },
         healthConditions: { type: "string", description: "chấn thương, bệnh lý coach vừa kể" },
+        ...CHECK_PARAMS,
         isGroup: { type: "boolean",
           description: "true = đây là LỚP NHÓM (một hồ sơ cho cả lớp), không phải một người. Lớp không có email." },
         groupFormat: { type: "string", description: "Chỉ khi isGroup: " + GROUP_FORMATS.join(" | ") },
@@ -632,6 +645,20 @@ async function execTool(db, name, a, role, ctx) {
     const kept = Object.keys(old).filter((k) => !(k in r.program) && !drop.has(k)).sort();
     const program = mergeProgram(old, r.program, dropList);   // để xem trước trên thẻ
     const dropped = Object.keys(old).filter((k) => drop.has(k) && !(k in r.program)).sort();
+    // Kiểm theo khung (volume, mẫu chuyển động, thời lượng) trên CẢ TUẦN sau khi ghép.
+    const cd = c.data() || {};
+    const opts = { level: cd.level, isGroup: cd.isGroup === true,
+      minutes: Number(a.sessionMinutes) || Number(cd.durationMin) || null,
+      volumeExceptions: a.volumeExceptions, coverageExceptions: a.coverageExceptions };
+    const chk = PC.checkProgram(program, opts);
+    // Sửa vài buổi: lỗi đã có sẵn ở giáo án cũ không chặn — chỉ chặn lỗi đề xuất này gây ra.
+    const base = kept.length ? PC.checkProgram(mergeProgram(old, {}, dropList), opts).errors : [];
+    const { errors: fresh, inherited } = PC.newErrors(chk.errors, base);
+    if (fresh.length) {
+      return { rejected: true, errors: fresh.map((e) => e.m),
+        note: "Giáo án vượt khung phương pháp. Sửa HẾT các lỗi trên trong một lần rồi đề xuất lại "
+          + "(coach chủ ý thì ghi volumeExceptions / coverageExceptions kèm lý do)." };
+    }
     return {
       needsConfirm: true,
       // Gửi CHỈ buổi đổi + merge: coachApply ghép lên giáo án lúc bấm duyệt.
@@ -646,6 +673,10 @@ async function execTool(db, name, a, role, ctx) {
         changed: Object.keys(r.program).sort(),
         kept,
         dropped,
+        volume: chk.volume,
+        minutes: chk.est,
+        waived: chk.waived,
+        warnings: [...chk.warnings, ...inherited.map((m) => "Có sẵn từ giáo án cũ: " + m)].slice(0, 12),
         table: compactProgram(program),
       },
       note: "Đã gửi cho coach duyệt"
@@ -672,6 +703,7 @@ async function execTool(db, name, a, role, ctx) {
     }
     let program = a.program || {};
     let renamed = [];
+    let chk = null;
     if (a.program && Object.keys(a.program).length) {
       const lib = await libFor(db, {});
       if (lib.errors.length) return { rejected: true, errors: lib.errors };
@@ -681,9 +713,12 @@ async function execTool(db, name, a, role, ctx) {
           note: "Đổi HẾT các bài trên sang tên ĐÚNG Y trong thư viện (search_exercises với queries), rồi đề xuất lại." };
       }
       const why = checkRationale(r.program);
-      if (why.length) {
-        return { rejected: true, errors: why.slice(0, 12),
-          note: "Thêm focus cho mỗi buổi và why cho mỗi bài chính/phụ, rồi đề xuất lại." };
+      chk = PC.checkProgram(r.program, { level: a.level || "Beginner", isGroup: a.isGroup === true,
+        minutes: Number(a.sessionMinutes) || Number(a.durationMin) || null,
+        volumeExceptions: a.volumeExceptions, coverageExceptions: a.coverageExceptions });
+      if (why.length || chk.errors.length) {
+        return { rejected: true, errors: [...why, ...chk.errors.map((e) => e.m)].slice(0, 60),
+          note: "Sửa HẾT các lỗi trên trong một lần (focus/why, volume, mẫu chuyển động, thời lượng) rồi đề xuất lại." };
       }
       program = r.program; renamed = r.renamed;
     }
@@ -711,6 +746,7 @@ async function execTool(db, name, a, role, ctx) {
         healthConditions: a.healthConditions || "",
         email: em,
         program,
+        sessionMinutes: Number(a.sessionMinutes) || null,
       },
       preview: {
         clientId: id,
@@ -725,6 +761,10 @@ async function execTool(db, name, a, role, ctx) {
         renamed: renamed.slice(0, 20),
         table: a.program ? compactProgram(program) : null,
         login: isGroup ? "lớp nhóm — không đăng nhập" : (em || "chưa có email — khách này coach tự quản"),
+        volume: chk ? chk.volume : {},
+        minutes: chk ? chk.est : {},
+        waived: chk ? chk.waived : [],
+        warnings: chk ? chk.warnings.slice(0, 12) : [],
       },
       note: "Đã gửi cho coach duyệt. Nói cho coach biết sẽ tạo gì, rồi dừng.",
     };
@@ -908,7 +948,13 @@ const METHOD = `PHƯƠNG PHÁP SOẠN GIÁO ÁN (khung của studio — coach n�
 2. REP THEO MỤC TIÊU
    - Sức mạnh: bài chính 3–6 rep × 3–5 set, nghỉ 2–3 phút; bài phụ 6–10 rep.
    - Tăng cơ: 6–12 rep (bài cô lập 10–15), nghỉ 60–120 giây (bài chính tới 2–3 phút).
-   - Giảm mỡ: GIỮ tạ nặng như tăng cơ để giữ cơ; thêm 8–15 phút circuit/conditioning cuối buổi.
+   - Giảm mỡ: GIỮ tạ nặng như tăng cơ để giữ cơ. Hai kiểu buổi:
+     (a) Truyền thống (mặc định): bài chính + bài phụ, thêm 8–15 phút circuit/conditioning cuối buổi.
+     (b) MẬT ĐỘ — khi coach nói "block", "superset", "mật độ", "giữ tim cao": mỗi buổi 3 block, mỗi block
+         2 bài làm xen kẽ (superset). Cặp KHÔNG tranh cùng nhóm cơ: thân dưới + thân trên, hoặc đẩy + kéo.
+         Nghỉ 30–45 giây giữa hai bài, 60–90 giây sau cả cặp (ghi trong cue). Block 1 tag strength (cặp nặng
+         nhất, 6–10 rep), block 2 tag accessories (8–12 rep), block 3 accessories hoặc circuit (finisher
+         30–45 giây làm, hoặc core + bài đơn khớp). Tên pha "Block 1 — Superset …". Tạ vẫn để dư 2–3 rep.
      Không biến cả buổi thành cardio.
    - Sức bền / HYROX: giữ 1–2 bài sức mạnh chính mỗi buổi, phần còn lại là interval/trạm.
    - Độ gắng sức: Beginner để dư 2–3 rep (RIR 2–3), không tập tới thất bại bài nhiều khớp.
@@ -930,7 +976,11 @@ const METHOD = `PHƯƠNG PHÁP SOẠN GIÁO ÁN (khung của studio — coach n�
    không tạo buổi riêng trừ khi coach yêu cầu.
 Chấn thương: tránh hoặc thay bài gây đau, giữ tải trong khoảng không đau, ghi rõ bài thay và vì sao.
 Dưới 18 tuổi: ưu tiên kỹ thuật, RIR 2–3, không test 1RM, không tập tới thất bại.
-Khi in giáo án: kèm một dòng tổng số set làm việc mỗi nhóm cơ chính trong tuần, để coach đối chiếu mục 1.`;
+Khi in giáo án: kèm một dòng tổng số set làm việc mỗi nhóm cơ chính trong tuần, để coach đối chiếu mục 1.
+SERVER TỰ KIỂM khi đề xuất (sai là bị trả lỗi): volume mỗi nhóm cơ/tuần không vượt trần trình độ, mỗi buổi
+một nhóm cơ ≤ ~10 set, cả tuần đủ 8 mẫu chuyển động (squat, hinge, hpush, vpush, hpull, vpull, core, single),
+và buổi không dài quá thời lượng (sessionMinutes; ~2,5 phút/set, superset ~1,75). Coach CHỦ Ý dồn volume một
+nhóm cơ hoặc bỏ một mẫu vì chấn thương → ghi volumeExceptions / coverageExceptions kèm lý do, đừng lách.`;
 
 // ── Lớp nhóm ────────────────────────────────────────────────────────────
 // Một hồ sơ clients có isGroup:true = MỘT LỚP. Giáo án dùng chung cho mọi
@@ -1191,6 +1241,7 @@ async function runAssistant({ client, model, messages, clientId, role, day, audi
     const ts = Date.now();
     const left = Math.max(1000, hardAt - ts);
     let interaction;
+    let timer = null;
     try {
       // Cắt cứng lượt gọi model trước khi hàm nền bị Cloud Run giết (504, mất cả câu trả lời).
       interaction = await Promise.race([
@@ -1198,13 +1249,16 @@ async function runAssistant({ client, model, messages, clientId, role, day, audi
           model, input, tools: forClient ? CLIENT_TOOLS : TOOLS, system_instruction: forClient ? CLIENT_SYSTEM : SYSTEM,
           generation_config: { thinking_level: steps === 1 ? THINK_DISPATCH : design ? THINK_DESIGN : THINK_COMPOSE },
         }, { timeout: left }),
-        new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error("assistant-deadline"), { deadline: true })), left)),
+        new Promise((_, rej) => { timer = setTimeout(() => rej(Object.assign(new Error("assistant-deadline"), { deadline: true })), left); }),
       ]);
     } catch (e) {
       if (!e || !(e.deadline || /timed? ?out|abort/i.test(String(e.message)))) throw e;
       stepMs.push(Date.now() - ts);
       timedOut = true;
       break;
+    } finally {
+      // Gỡ đồng hồ khi model trả lời kịp: để lại thì mỗi lượt treo một timer tới ~280 giây.
+      clearTimeout(timer);
     }
     stepMs.push(Date.now() - ts);
     const u = interaction.usage || {};
@@ -1369,4 +1423,4 @@ function buildMorningPush({ bookings, rec }) {
 }
 
 module.exports = { CLIENT_TOOLS, CLIENT_TOOL_NAMES, CLIENT_SYSTEM, runClientTool, TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, METHOD, GROUP_METHOD, EXPLAIN_METHOD, FORMAT_RULES, compactProgram, checkRationale, GROUP_FORMATS, groupName, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, THINK_DESIGN, designIntent, runTool, runAssistant, progSummary, shapeReply,
-  validateProgram, validateNewClient, makeClientId, LEVELS, MAX_STEPS_DESIGN, TIME_BUDGET_MS, HARD_STOP_MS, mergeProgram, exerciseHit, targetMismatch, nameInText };
+  validateProgram, validateNewClient, makeClientId, LEVELS, CHECK_PARAMS, MAX_STEPS_DESIGN, TIME_BUDGET_MS, HARD_STOP_MS, mergeProgram, exerciseHit, targetMismatch, nameInText };

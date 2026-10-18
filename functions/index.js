@@ -3677,6 +3677,9 @@ exports.coachApply = onCall(
         coachUid: (request.auth && request.auth.uid) || null,
         createdAt: new Date().toISOString(),
         createdBy: "coachAssistant",
+        // Thời lượng buổi coach đặt — propose_program sau này dùng để kiểm buổi dài quá.
+        ...(Number.isInteger(Number(act.sessionMinutes)) && Number(act.sessionMinutes) > 0 && act.isGroup !== true
+          ? { durationMin: Number(act.sessionMinutes) } : {}),
         // Lớp nhóm: một hồ sơ cho cả lớp (validateNewClient đã bắt email trống).
         ...(act.isGroup === true ? {
           isGroup: true,

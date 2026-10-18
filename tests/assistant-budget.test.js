@@ -22,6 +22,13 @@ const LIB = [
   { id: 'e5', name: 'Narrow Push Up (BW)', tool: 'Bodyweight', muscles: { Chest: 'P', Triceps: 'S' } },
   { id: 'e6', name: 'Walking Lunge (Bodyweight)', tool: 'Bodyweight', muscles: { Quads: 'P', Glutes: 'S' } },
   { id: 'e7', name: 'Walking Lunge (Dumbbell)', tool: 'Dumbbell', muscles: { Quads: 'P', Glutes: 'P' } },
+  // Đủ 8 mẫu chuyển động cho ca kiểm khung (thư viện được cache trong một lần chạy).
+  { id: 'e8', name: 'Romanian Deadlift (Dumbbell)', tool: 'Dumbbell', muscles: { Hamstrings: 'P', Glutes: 'P' } },
+  { id: 'e9', name: 'Shoulder Press (Dumbbell)', tool: 'Dumbbell', muscles: { 'Front Delts': 'P' } },
+  { id: 'e10', name: 'Seated Row (Cable)', tool: 'Cable', muscles: { Lats: 'P' } },
+  { id: 'e11', name: 'Lat Pulldown (Cable)', tool: 'Cable', muscles: { Lats: 'P' } },
+  { id: 'e12', name: 'Plank (Bodyweight)', tool: 'Bodyweight', muscles: { Abs: 'P' } },
+  { id: 'e13', name: 'Hip Thrust (Barbell)', tool: 'Barbell', muscles: { Glutes: 'P' } },
 ];
 const db = { collection: (n) => ({
   doc: (id) => ({ get: async () => ({ exists: n === 'clients' && id === 'dao', id,
@@ -100,7 +107,9 @@ test('propose_program tu choi de xuat vao khach khong duoc hoi toi', async () =>
   const bad = await A.execTool(db2, 'propose_program', { clientId: 'longchu', program: prog }, ROLE,
     { read, openClientId: 'dao', userText: ask });
   assert.strictEqual(bad.rejected, true, 'phai chan: hoi Anh Dao ma ghi vao Long Chu');
-  const good = await A.execTool(db2, 'propose_program', { clientId: 'dao', program: prog }, ROLE,
+  // Ca này chỉ kiểm khách đích — miễn các mẫu chuyển động để giáo án một bài vẫn qua phần khung.
+  const allEx = Object.fromEntries(require('../functions/program-check.js').PATTERN_KEYS.map((k) => [k, 'test']));
+  const good = await A.execTool(db2, 'propose_program', { clientId: 'dao', program: prog, coverageExceptions: allEx }, ROLE,
     { read, openClientId: 'dao', userText: ask });
   assert.strictEqual(good.needsConfirm, true, JSON.stringify(good.errors));
   // Khong co khach dang mo, cau hoi khong neu ten khach dich → khong doan.
@@ -162,4 +171,40 @@ test('cat cung luot goi model truoc khi ham nen bi giet; thoi han khop timeout c
   assert.match(html, /'coachAssistant', \{ timeout: (\d+) \}/);
   assert.strictEqual(+/'coachAssistant', \{ timeout: (\d+) \}/.exec(html)[1], secs * 1000, 'app cho dung bang ham nen');
   assert.match(idx, /u\.input \?\? "\?"/, 'log token doc dung truong');
+});
+
+test('propose_program chan giao an vuot khung; sua 1 buoi thi loi cu khong chan, chi nhac', async () => {
+  const ex = (name, setsReps, why) => ({ name, setsReps, why: why || 'w' });
+  // Thư viện giả đủ bài cho 8 mẫu.
+  const lib = [['Goblet Squat (Dumbbell)', { Quads: 'P', Glutes: 'S' }], ['Romanian Deadlift (Dumbbell)', { Hamstrings: 'P', Glutes: 'P' }],
+    ['Narrow Push Up (BW)', { Chest: 'P' }], ['Shoulder Press (Dumbbell)', { 'Front Delts': 'P' }], ['Seated Row (Cable)', { Lats: 'P' }],
+    ['Lat Pulldown (Cable)', { Lats: 'P' }], ['Plank (Bodyweight)', { Abs: 'P' }], ["Farmer's Carry (Dumbbell)", { Forearms: 'P' }],
+    ['Hip Thrust (Barbell)', { Glutes: 'P' }]].map(([name, muscles], i) => ({ id: 'L' + i, name, muscles }));
+  const week = { SessionA: { label: 'A', focus: 'f', phases: [{ name: 'Main', tag: 'strength', exercises: [
+      ex('Goblet Squat (Dumbbell)', '3 × 10'), ex('Narrow Push Up (BW)', '3 × 8'), ex('Seated Row (Cable)', '3 × 10'), ex('Plank (Bodyweight)', '3 × 30s')] }] },
+    SessionB: { label: 'B', focus: 'f', phases: [{ name: 'Main', tag: 'strength', exercises: [
+      ex('Romanian Deadlift (Dumbbell)', '3 × 8'), ex('Shoulder Press (Dumbbell)', '3 × 10'), ex('Lat Pulldown (Cable)', '3 × 10'), ex("Farmer's Carry (Dumbbell)", '3 × 30s')] }] } };
+  const people = { kim: { name: 'Kim', level: 'Beginner', program: {} } };
+  const db3 = { collection: (n) => ({
+    doc: (id) => ({ get: async () => ({ exists: n === 'clients' && !!people[id], id, data: () => people[id] }) }),
+    get: async () => ({ empty: false, docs: (n === 'exercises' ? lib : []).map((x) => ({ id: x.id, data: () => x })) }),
+  }) };
+  const ctx = { read: { 'get_client:kim': true, 'get_exercise_loads:kim': true }, openClientId: 'kim', userText: 'soạn giáo án cho Kim' };
+  const ok = await A.execTool(db3, 'propose_program', { clientId: 'kim', program: week, sessionMinutes: 60 }, ROLE, ctx);
+  assert.strictEqual(ok.needsConfirm, true, JSON.stringify(ok.errors));
+  assert.ok(ok.preview.volume.Glutes > 0 && ok.preview.minutes.SessionA > 0);
+  // Dồn mông: thêm 3 bài × 4 set Hip Thrust → vượt trần Beginner → chặn; ghi lý do → qua, hiện "Ngoại lệ".
+  const heavy = JSON.parse(JSON.stringify(week));
+  heavy.SessionA.phases.push({ name: 'Glutes', tag: 'accessories', exercises: [ex('Hip Thrust (Barbell)', '4 × 10'), ex('Hip Thrust (Barbell)', '4 × 10')] });
+  const bad = await A.execTool(db3, 'propose_program', { clientId: 'kim', program: heavy }, ROLE, ctx);
+  assert.strictEqual(bad.rejected, true);
+  assert.ok(bad.errors.some((e) => /Volume Glutes/.test(e)));
+  const waived = await A.execTool(db3, 'propose_program', { clientId: 'kim', program: heavy, volumeExceptions: { Glutes: 'coach muốn ưu tiên mông' } }, ROLE, ctx);
+  assert.strictEqual(waived.needsConfirm, true, JSON.stringify(waived.errors));
+  assert.ok(waived.preview.waived.some((w) => /ưu tiên mông/.test(w)));
+  // Giáo án cũ ĐÃ vượt (dồn mông) → sửa riêng SessionB không bị chặn vì lỗi của SessionA cũ.
+  people.kim.program = JSON.parse(JSON.stringify(waived.action.program));   // bản đã gắn muscles, như trong Firestore
+  const editB = await A.execTool(db3, 'propose_program', { clientId: 'kim', program: { SessionB: week.SessionB } }, ROLE, ctx);
+  assert.strictEqual(editB.needsConfirm, true, JSON.stringify(editB.errors));
+  assert.ok(editB.preview.warnings.some((w) => /Có sẵn từ giáo án cũ/.test(w)));
 });
