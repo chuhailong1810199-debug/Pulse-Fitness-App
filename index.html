@@ -9942,7 +9942,7 @@ function _aiNewClientForm() {
     + '<div class="ai-nf-g">'
       + f('Tên khách *', '<input name="name" required autocomplete="off" placeholder="VD: Minh Anh">', true)
       + f('Tuổi', '<input name="age" type="number" inputmode="numeric" min="8" max="90" placeholder="—">')
-      + f('Giới tính', '<select name="gender"><option value="">—</option><option>Nam</option><option>Nữ</option></select>')
+      + f('Giới tính', '<select name="gender"><option value="">—</option><option value="Nam">' + _i18nMale() + '</option><option value="Nữ">' + _i18nFemale() + '</option></select>')
       + f('Chiều cao (cm)', '<input name="height" type="number" inputmode="decimal" min="100" max="230" placeholder="—">')
       + f('Cân nặng (kg)', '<input name="weight" type="number" inputmode="decimal" min="25" max="250" placeholder="—">')
       + f('Trình độ', '<select name="level">' + opt(_AI_NF_LEVELS, 'Beginner') + '</select>')
@@ -14392,8 +14392,8 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
           <div class="onb-label">Giới tính</div>
           <select id="onb-gender" class="onb-select">
             <option value="">—</option>
-            <option value="Male">Nam</option>
-            <option value="Female">Nữ</option>
+            <option value="Male" data-i18n-gender="m">Nam</option>
+            <option value="Female" data-i18n-gender="f">Nữ</option>
           </select>
         </div>
       </div>
@@ -19116,7 +19116,7 @@ Object.assign(I18N_VI_EN, {
   'Gợi ý bài thay cho Romanian Deadlift': 'Suggest a swap for Romanian Deadlift',
   'Giáo án cho khách mới': 'Program for a new client', 'Điền những gì mày biết — ô để trống trợ lý sẽ không tự bịa.':
     'Fill in what you know — Pulse won\'t make up anything left blank.',
-  'Tên khách *': 'Client name *', 'Tuổi': 'Age', 'Giới tính': 'Sex', 'Nam': 'Male', 'Nữ': 'Female', 'Chiều cao (cm)': 'Height (cm)',
+  'Tên khách *': 'Client name *', 'Tuổi': 'Age', 'Giới tính': 'Sex', 'Chiều cao (cm)': 'Height (cm)',
   'Cân nặng (kg)': 'Weight (kg)', 'Trình độ': 'Level', 'Buổi / tuần': 'Sessions / week', 'Mỗi buổi': 'Session length',
   '45 phút': '45 min', '60 phút': '60 min', '75 phút': '75 min', '90 phút': '90 min', 'Nơi tập': 'Where they train',
   'Phòng gym đầy đủ': 'Full gym', 'Gym nhỏ / ít máy': 'Small gym / few machines', 'Tại nhà — tạ đơn, dây kháng lực': 'Home — dumbbells, bands',
@@ -19400,6 +19400,17 @@ function i18nWatch() {
 
 function i18nGet() { return _lang; }
 
+// "Nam" là TÊN KHÁCH (Nam, namdoxuan) — không được đưa "Nam" → "Male" vào từ điển: bộ dịch
+// đổi cả tên khách trên lịch thành "Male" (2026-10-19). Ô chọn giới tính tự gắn nhãn ở đây.
+function _i18nMale() { return _lang === 'en' ? 'Male' : 'Nam'; }
+function _i18nFemale() { return _lang === 'en' ? 'Female' : 'Nữ'; }
+function _i18nGenderOptions(root) {
+  (root || document).querySelectorAll('option[data-i18n-gender]').forEach((o) => {
+    o.textContent = o.getAttribute('data-i18n-gender') === 'm' ? _i18nMale() : _i18nFemale();
+    o.setAttribute('data-i18n-skip', '');
+  });
+}
+
 /** Đổi ngôn ngữ. Việt là mã nguồn gốc nên chỉ có cách nạp lại trang. */
 function i18nSet(lang) {
   const next = lang === 'en' ? 'en' : 'vi';
@@ -19428,6 +19439,7 @@ function i18nMountSwitch() {
 
 document.addEventListener('DOMContentLoaded', () => {
   document.documentElement.lang = _lang;
+  _i18nGenderOptions();
   i18nMountSwitch();
   i18nApply(document.body);
   i18nWatch();

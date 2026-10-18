@@ -51,3 +51,14 @@ test('aria-label cung duoc dich va theo doi', () => {
   assert.match(s, /\['placeholder', 'title', 'aria-label'\]/);
   assert.match(s, /attributeFilter: \['placeholder', 'title', 'aria-label'\]/);
 });
+
+test('ten khach KHONG bao gio bi dich (2026-10-19: khach "Nam" hien thanh "Male" tren lich)', () => {
+  const names = ['An', 'Anh Đạo', 'Antony', 'Chị Linh', 'Chị Tâm', 'Rome', 'Thai Son', 'Trần Văn Tiến', 'Chị Nguyệt',
+    'Cindy', 'Giao', 'Joost', 'Kem', 'Lee', 'Long Chu', 'Nam', 'Nguyên', 'Sang', 'anh Soobin', 'Jenny'];
+  for (const n of names) assert.strictEqual(api.tr(n), n, 'ten khach bi dich: ' + n);
+  // Trong câu ghép, tên vẫn giữ nguyên.
+  assert.strictEqual(api.tr('Khách đang xem: Nam. 3 khách cần chú ý'), 'Viewing: Nam. 3 clients need attention');
+  // Ô chọn giới tính gắn nhãn ở nguồn, không qua từ điển.
+  assert.match(s, /function _i18nMale\(\)/);
+  assert.doesNotMatch(s, /'Nam': 'Male'/);
+});
