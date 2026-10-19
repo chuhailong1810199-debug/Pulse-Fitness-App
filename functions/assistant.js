@@ -511,8 +511,23 @@ async function execTool(db, name, a, role, ctx) {
   }
 
   if (name === "get_exercise_loads") {
-    const snap = await db.collection("clients").doc(a.clientId)
-      .collection("workoutHistory").orderBy("date", "desc").limit(12).get();
+    // Tạ ĐANG ĐIỀN SẴN trong ô (sessionLoads, theo vị trí bài) → quy về TÊN bài theo giáo án hiện
+    // tại. Đây là số coach nhìn thấy khi soạn tay (RDL 50 kg, Lat Pulldown 37,5 kg của Anh Đạo);
+    // lịch sử tập nhiều khách trống, chỉ đọc lịch sử là model tưởng khách chưa có mức tạ nào.
+    const cref = db.collection("clients").doc(a.clientId);
+    const [cdoc, slSnap] = await Promise.all([cref.get(), cref.collection("sessionLoads").get().catch(() => null)]);
+    const current = {};
+    const prog = (cdoc.exists && (cdoc.data() || {}).program) || {};
+    if (slSnap) slSnap.forEach((d) => {
+      const day = d.id, v = d.data() || {}, el = v.exerciseLoads || {}, sl = v.setLoads || {};
+      ((prog[day] && prog[day].phases) || []).forEach((ph, pi) => ((ph && ph.exercises) || []).forEach((x, ei) => {
+        const k = `${a.clientId}_${day}_${pi}_${ei}`;
+        const sets = Array.isArray(sl[k]) ? sl[k].map(Number).filter((n) => n > 0) : [];
+        const kg = Number(el[k]) > 0 ? Number(el[k]) : (sets.length ? Math.max(...sets) : null);
+        if (x && x.name && kg) current[x.name] = { kg, day, sets: sets.length ? sets : undefined };
+      }));
+    });
+    const snap = await cref.collection("workoutHistory").orderBy("date", "desc").limit(12).get();
     const byEx = {};
     await Promise.all(snap.docs.map(async (d) => {
       const date = iso(d.data().date);
@@ -525,12 +540,14 @@ async function execTool(db, name, a, role, ctx) {
       });
     }));
     const keys = Object.keys(byEx);
-    if (!keys.length) return { empty: true, note: "Chưa có mức tạ nào được ghi." };
+    if (!keys.length && !Object.keys(current).length) return { empty: true, note: "Chưa có mức tạ nào được ghi." };
     const out = {};
     for (const k of keys.slice(0, CAP)) {
       out[k] = byEx[k].sort((x, y) => String(x.date).localeCompare(String(y.date))).slice(-6);
     }
-    return { loads: out };
+    return { current, loads: out,
+      note: "current = tạ đang điền sẵn trong ô của từng bài (theo TÊN bài trong giáo án hiện tại) — mốc để "
+        + "ghi 'Last load' và tạ tiếp theo. loads = lịch sử các buổi đã log." };
   }
 
   if (name === "search_exercises") {
@@ -670,6 +687,7 @@ async function execTool(db, name, a, role, ctx) {
         after: progSummary(program),
         exercises: v.stats.exercises,
         renamed: r.renamed.slice(0, 20),
+        reused: (r.reused || []).slice(0, 20),
         changed: Object.keys(r.program).sort(),
         kept,
         dropped,
@@ -982,6 +1000,44 @@ một nhóm cơ ≤ ~10 set, cả tuần đủ 8 mẫu chuyển động (squat, 
 và buổi không dài quá thời lượng (sessionMinutes; ~2,5 phút/set, superset ~1,75). Coach CHỦ Ý dồn volume một
 nhóm cơ hoặc bỏ một mẫu vì chấn thương → ghi volumeExceptions / coverageExceptions kèm lý do, đừng lách.`;
 
+// ── Quy trình soạn của coach (2026-10-19) ───────────────────────────────
+// Chép từ cách giáo án Sang / Cindy / Thái Sơn / Anh Đạo được soạn tay và coach duyệt:
+// đọc hết dữ liệu → giữ bài + tên cũ để nối tạ → cặp bài không tranh cơ → cue có số thật
+// → why gắn số liệu của khách → tóm tắt cho coach. Ví dụ là buổi B của Anh Đạo (đã duyệt).
+const PLAYBOOK = `QUY TRÌNH SOẠN GIÁO ÁN (cách coach Long Chu soạn — làm đúng thứ tự)
+1. ĐỌC HẾT trước khi soạn (một lượt, gọi song song): get_client (tuổi, cân nặng, % mỡ, SMM từ baseline/checkpoint,
+   bệnh lý, ghi chú), get_program (giáo án cũ đầy đủ), get_exercise_loads (current = tạ đang điền sẵn từng bài),
+   get_training_history (tập đều không, buổi nào hay bỏ).
+2. CHỐT KHUNG theo đúng lời coach (số buổi, cách chia, kiểu buổi). Lời coach khác hồ sơ (VD hồ sơ ghi 5 buổi,
+   coach nói 3) → làm theo coach và NÊU sự khác biệt trong tóm tắt để coach sửa hồ sơ.
+3. CHỌN BÀI: ưu tiên GIỮ bài khách đang tập tốt và có tạ (current) nếu hợp khung mới — viết ĐÚNG TÊN CŨ của bài
+   (server tự đổi tên thư viện về tên cũ để nối tạ, nhưng tự viết đúng thì đỡ một vòng). Bài mới lấy từ thư viện.
+   Với khách giảm mỡ nặng cân: ưu tiên bài nhiều khớp, ít va đập (không nhảy cao, không chạy dài).
+4. CẶP BÀI (superset/block): hai bài không tranh cùng nhóm cơ — gập hông + kéo dọc, mông + kéo ngang, thân dưới
+   + đẩy, bài tư thế + tay. Bài nặng nhất ở block 1.
+5. CUE có SỐ THẬT: "Rest 45s before next exercise | <kỹ thuật ngắn>. Last load: 50kg." Có current thì luôn ghi
+   Last load; bài đang dư sức thì ghi mốc tăng ("go to 24kg if all reps are clean"). Chưa có tạ thì "chọn tạ để
+   còn dư 2–3 rep". Nghỉ ghi trong cue, không tạo bài "Rest".
+6. WHY gắn với CHÍNH khách: nhắc mục tiêu, số liệu, chấn thương, hoặc vì sao bài này đi cặp với bài kia — không
+   viết "bài tốt cho chân". FOCUS của buổi: 1–2 câu nói buổi này phục vụ mục tiêu thế nào.
+7. ĐỀ XUẤT một lần đủ mọi buổi coach nhờ (propose_program). Bị trả lỗi thì sửa hết trong một lần.
+8. TÓM TẮT cho coach (không chép lại bảng — thẻ duyệt đã vẽ): chia buổi thế nào; mang tạ cũ được bài nào; set/tuần
+   các nhóm cơ chính; điều coach cần quyết (hồ sơ lệch số buổi, bài chưa có tạ, ngoại lệ đã ghi).
+
+VÍ DỤ MỘT BUỔI ĐÃ ĐƯỢC COACH DUYỆT (khách giảm mỡ, Beginner, 99,9 kg, 40,8% mỡ; kiểu mật độ):
+SessionB "Pull & Hinge Density (3 Blocks)"
+ focus: "Posterior-chain and back day as 3 supersets: hinge + vertical pull, glutes + row, then posture + arms.
+   Short rests between the pair keep heart rate high for fat loss while loads stay where he already is."
+ Block 1 — Hinge + Pull Superset [strength]
+  · Romanian Deadlift · 3 × 8 · 3-1-1 · cue "Rest 45s before next exercise | Hinge from the hips, bar close to the
+    legs. Last load: 50kg." · why "Main hip-hinge for hamstrings and glutes — biggest muscles burn the most energy,
+    and he is already strong here."
+  · Wide Grip Lat Pulldown (Cable) · 3 × 10 · cue "Rest 90s after completing pair | … Last load: 37.5kg." · why
+    "Vertical pull pairs with the hinge without competing for the same muscles, so rest stays short."
+ Block 2 — Glute + Row Superset [accessories]: Hip Thrust 3 × 12 (40kg) + Chest-Supported DB Row 3 × 10 (28kg,
+   why: chest support takes the lower back out so he can row hard right after hip thrusts)
+ Block 3 — Posture & Arms Finisher [accessories]: Face Pull 3 × 15 + DB Hammer Curl 3 × 12`;
+
 // ── Lớp nhóm ────────────────────────────────────────────────────────────
 // Một hồ sơ clients có isGroup:true = MỘT LỚP. Giáo án dùng chung cho mọi
 // học viên có mặt, trình độ trộn lẫn, dụng cụ có hạn — khác hẳn soạn 1-1.
@@ -1085,6 +1141,8 @@ GIÁO ÁN
   Trong câu trả lời KHÔNG chép lại từng bài; chỉ 2–4 câu: chia buổi thế nào, tổng set mỗi nhóm cơ, điểm cần lưu ý.
 
 ${METHOD}
+
+${PLAYBOOK}
 
 ${GROUP_METHOD}
 
@@ -1423,4 +1481,4 @@ function buildMorningPush({ bookings, rec }) {
 }
 
 module.exports = { CLIENT_TOOLS, CLIENT_TOOL_NAMES, CLIENT_SYSTEM, runClientTool, TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, METHOD, GROUP_METHOD, EXPLAIN_METHOD, FORMAT_RULES, compactProgram, checkRationale, GROUP_FORMATS, groupName, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, THINK_DESIGN, designIntent, runTool, runAssistant, progSummary, shapeReply,
-  validateProgram, validateNewClient, makeClientId, LEVELS, CHECK_PARAMS, MAX_STEPS_DESIGN, TIME_BUDGET_MS, HARD_STOP_MS, mergeProgram, exerciseHit, targetMismatch, nameInText };
+  validateProgram, validateNewClient, makeClientId, LEVELS, CHECK_PARAMS, PLAYBOOK, MAX_STEPS_DESIGN, TIME_BUDGET_MS, HARD_STOP_MS, mergeProgram, exerciseHit, targetMismatch, nameInText };

@@ -145,7 +145,19 @@ function matchExercise(name, idx) {
 function resolveProgram(prog, idx, o = {}) {
   const strict = o.strict !== false, rename = o.rename !== false, setBw = o.setBw !== false;
   const keep = o.keepNames || new Set();
-  const errors = [], renamed = [];
+  const errors = [], renamed = [], reused = [];
+  // Tên thư viện → TÊN CŨ trong giáo án khách. Model hay viết tên thư viện đầy đủ
+  // ("Goblet Squat (Dumbbell)") cho đúng bài khách đang tập dưới tên cũ ("Goblet Squat")
+  // → tạ điền sẵn và lịch sử nối theo tên bị đứt (Anh Đạo 2026-10-16: SessionA mất hết tạ).
+  // Coach soạn tay thì luôn giữ tên cũ; server làm y vậy.
+  const alias = new Map();
+  if (rename && keep.size) {
+    for (const old of keep) {
+      const r = matchExercise(old, idx);
+      const libs = r.ex ? [r.ex.name] : (r.ambiguous || []);
+      for (const n of libs) if (!alias.has(n)) alias.set(n, old);
+    }
+  }
   let matched = 0, total = 0;
   const out = {};
   for (const [dk, day] of Object.entries(prog || {})) {
@@ -171,10 +183,20 @@ function resolveProgram(prog, idx, o = {}) {
               // hiện thành −37 (35 − 72 kg cân nặng).
               const isOld = keep.has(String(x.name || "").trim());
               if (setBw && !isOld && /body\s*weight|^bw$/i.test(String(r.ex.tool || "")) && y.bw === undefined) y.bw = true;
-              if (rename && !keep.has(String(x.name || "").trim()) && r.ex.name !== x.name) {
-                renamed.push([x.name, r.ex.name]); y.name = r.ex.name;
+              if (rename && !keep.has(String(x.name || "").trim())) {
+                const old = alias.get(r.ex.name);
+                if (old) {
+                  reused.push([x.name, old]); y.name = old; delete y.bw;   // tên cũ: không đổi nghĩa số kg
+                } else if (r.ex.name !== x.name) {
+                  renamed.push([x.name, r.ex.name]); y.name = r.ex.name;
+                }
               }
               return y;
+            }
+            // Tên cũ mơ hồ về dụng cụ ("Goblet Squat"): giữ tên, nhưng các bản cùng nhóm cơ thì
+            // vẫn gắn muscles — không thì bài không được đếm volume / tô hình cơ thể.
+            if (keep.has(String(x.name || "").trim()) && r.ambiguous && r.muscles && !(x.muscles && Object.keys(x.muscles).length)) {
+              matched++; return { ...x, muscles: r.muscles };
             }
             // Mơ hồ về dụng cụ nhưng cùng nhóm cơ: không đổi tên (không đoán dụng
             // cụ), vẫn gắn được muscles khi không ở chế độ nghiêm (backfill).
@@ -194,7 +216,7 @@ function resolveProgram(prog, idx, o = {}) {
       }),
     };
   }
-  return { program: out, errors, renamed, matched, total };
+  return { program: out, errors, renamed, reused, matched, total };
 }
 
 module.exports = { PHASE_TAGS, normalizePhaseTag, squash, buildLibIndex, matchExercise, resolveProgram, suggest };

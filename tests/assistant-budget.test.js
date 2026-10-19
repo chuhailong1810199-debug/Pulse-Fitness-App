@@ -208,3 +208,46 @@ test('propose_program chan giao an vuot khung; sua 1 buoi thi loi cu khong chan,
   assert.strictEqual(editB.needsConfirm, true, JSON.stringify(editB.errors));
   assert.ok(editB.preview.warnings.some((w) => /Có sẵn từ giáo án cũ/.test(w)));
 });
+
+// ── Soạn như coach (2026-10-19) ───────────────────────────────────────────
+test('ten thu vien cua bai khach dang tap duoc doi ve TEN CU de noi ta (Anh Dao: SessionA mat het ta)', () => {
+  const { buildLibIndex, resolveProgram } = require('../functions/program-lib.js');
+  const lib = [{ name: 'Goblet Squat (Dumbbell)', tool: 'Dumbbell', muscles: { Quads: 'P', Glutes: 'S' } },
+    { name: 'Goblet Squat (Kettlebell)', tool: 'Kettlebell', muscles: { Quads: 'P', Glutes: 'S' } },
+    { name: 'Dead Bug (Bodyweight)', tool: 'Bodyweight', muscles: { Abs: 'P' } },
+    { name: 'Hip Thrust (Barbell)', tool: 'Barbell', muscles: { Glutes: 'P' } }];
+  const prog = { SessionA: { phases: [{ name: 'Main', tag: 'strength', exercises: [
+    { name: 'Goblet Squat (Dumbbell)', setsReps: '3 × 10' }, { name: 'Dead Bug (Bodyweight)', setsReps: '3 × 8' },
+    { name: 'Hip Thrust (Barbell)', setsReps: '3 × 10' }, { name: 'Goblet Squat', setsReps: '3 × 10' }] }] } };
+  const r = resolveProgram(prog, buildLibIndex(lib), { keepNames: new Set(['Goblet Squat', 'Dead Bug']) });
+  const ex = r.program.SessionA.phases[0].exercises;
+  assert.deepStrictEqual(ex.map((x) => x.name), ['Goblet Squat', 'Dead Bug', 'Hip Thrust (Barbell)', 'Goblet Squat']);
+  assert.deepStrictEqual(ex[0].muscles, { Quads: 'P', Glutes: 'S' }, 'giu ten cu nhung van gan nhom co');
+  assert.strictEqual(ex[1].bw, undefined, 'ten cu khong tu bat bw (doi nghia so kg)');
+  assert.deepStrictEqual(ex[3].muscles, { Quads: 'P', Glutes: 'S' }, 'ten cu mo ho DB/KB cung nhom co van duoc gan');
+  assert.strictEqual(r.reused.length, 2);
+});
+
+test('get_exercise_loads tra ta DANG DIEN SAN theo ten bai (khach chua log van co moc ta)', async () => {
+  const program = { SessionB: { phases: [{ name: 'B1', tag: 'strength', exercises: [{ name: 'Romanian Deadlift' }, { name: 'Wide Grip Lat Pulldown (Cable)' }] }] } };
+  const sl = { SessionB: { exerciseLoads: { dao_SessionB_0_0: 50, dao_SessionB_0_1: null }, setLoads: { dao_SessionB_0_1: [35, 37.5, 37.5] } } };
+  const q = { orderBy() { return q; }, limit() { return q; }, get: async () => ({ docs: [], empty: true, forEach() {} }) };
+  const db4 = { collection: () => ({ doc: () => ({
+    get: async () => ({ exists: true, data: () => ({ program }) }),
+    collection: (n) => n === 'sessionLoads'
+      ? { get: async () => ({ forEach: (f) => Object.entries(sl).forEach(([id, v]) => f({ id, data: () => v })) }) }
+      : q,
+  }) }) };
+  const r = await A.execTool(db4, 'get_exercise_loads', { clientId: 'dao' }, ROLE, {});
+  assert.strictEqual(r.current['Romanian Deadlift'].kg, 50);
+  assert.strictEqual(r.current['Wide Grip Lat Pulldown (Cable)'].kg, 37.5, 'khong co o chung thi lay set nang nhat');
+});
+
+test('prompt co quy trinh soan cua coach + vi du da duyet; form nhac tom tat', () => {
+  assert.match(A.SYSTEM, /QUY TRÌNH SOẠN GIÁO ÁN/);
+  assert.match(A.PLAYBOOK, /Last load/);
+  assert.match(A.PLAYBOOK, /VÍ DỤ MỘT BUỔI ĐÃ ĐƯỢC COACH DUYỆT/);
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.match(html, /Làm theo QUY TRÌNH SOẠN GIÁO ÁN/);
+  assert.match(html, /'Nối tạ cũ'/);
+});

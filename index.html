@@ -9804,6 +9804,8 @@ function _aiCard(m, i) {
     if (p.summary) rows.push(['Đổi gì', p.summary]);
     // Đề xuất vài buổi: nói rõ buổi nào giữ nguyên, buổi nào bị xoá — coach không phải đoán.
     if ((p.kept || []).length) rows.push(['Giữ nguyên', p.kept.join(', ')]);
+    // Bài viết tên thư viện được đổi về tên cũ để nối tạ — coach biết tạ cũ vẫn còn.
+    if ((p.reused || []).length) rows.push(['Nối tạ cũ', p.reused.map((x) => x[1]).join(', ')]);
     if ((p.dropped || []).length) rows.push(['Xoá buổi', p.dropped.join(', ')]);
     _aiCheckRows(p, rows);
   } else if (a.kind === 'create_client') {
@@ -10143,7 +10145,9 @@ function aiBuildProgramPrompt(d) {
       : 'Kiểu buổi truyền thống: bài chính → bài phụ → circuit cuối nếu mục tiêu cần.',
     'Chọn bài theo đúng dụng cụ ở nơi tập, và tránh/thay bài động vào chỗ chấn thương nếu có.',
     'Không chép từng bài ra chữ — thẻ duyệt tự vẽ bảng. Chỉ 2–4 câu giải thích vì sao chia như vậy.',
+    'Làm theo QUY TRÌNH SOẠN GIÁO ÁN (cặp bài không tranh cơ, cue ghi nghỉ + kỹ thuật, why gắn số liệu của khách này).',
     'Rồi gọi propose_new_client MỘT lần, kèm luôn giáo án vừa soạn' + (email ? ' và Gmail ' + email : '') + ', để tao duyệt.',
+    'Tóm tắt cho tao: chia buổi thế nào, set/tuần các nhóm cơ chính, điều tao cần quyết.',
   ];
   if (age > 0 && age < 18) {
     rules.push('Khách DƯỚI 18 tuổi: ưu tiên kỹ thuật, tải vừa phải, không tập tới thất bại; nhắc cần phụ huynh đồng ý.');
@@ -19233,7 +19237,7 @@ const I18N_FULL = {
   'Giáo án này ghi vào {0}, không phải {1} đang mở.': 'This program will be written to {0}, not {1} (currently open).',
   'Ghi đè giáo án của {0}? Bạn đang mở {1}.': 'Overwrite {0}\'s program? You have {1} open.',
   'Giữ nguyên': 'Unchanged', 'Xoá buổi': 'Sessions removed', 'Set/tuần': 'Sets/week', 'Thời lượng': 'Duration',
-  'Ngoại lệ': 'Exceptions', 'Lưu ý': 'Notes', 'Kiểu buổi': 'Session style',
+  'Ngoại lệ': 'Exceptions', 'Lưu ý': 'Notes', 'Kiểu buổi': 'Session style', 'Nối tạ cũ': 'Weights carried over',
   'Truyền thống — bài chính, bài phụ, circuit cuối': 'Classic — main lifts, accessories, finisher circuit',
   'Mật độ — 3 block superset × 2 bài, giữ tim cao': 'Density — 3 superset blocks × 2 exercises, heart rate high',
   'Hôm nay chưa log ({0})': 'Not logged today ({0})', 'Chưa log buổi {0}': 'Session not logged: {0}',
