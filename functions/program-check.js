@@ -241,17 +241,60 @@ function exerciseMinutes(setsReps) {
   return n;
 }
 
-/** { run, station } phút của một buổi — bỏ khởi động. */
+/** Một lượng chạy ghi bằng chữ: "800m", "1 km", "3 phút", "3'" → phút. */
+function amountMinutes(v, unit) {
+  const n = parseFloat(String(v).replace(",", "."));
+  if (/^km$/.test(unit)) return n * 5.5;
+  if (/^m$/.test(unit)) return (n / 1000) * 5.5;
+  if (/^(s|sec|giây)$/.test(unit)) return n / 60;
+  return n;   // phút / min / '
+}
+const AMT = "(\\d+(?:[.,]\\d+)?)\\s*(km|m|phút|min|mins|'|s|sec|giây)(?![a-zà-ỹ])";
+/** "chạy 800m", "800m chạy", "run 3 phút", "3' run" trong một đoạn chữ → phút (một lần). */
+function runInText(t) {
+  const s = String(t || "").toLowerCase();
+  const a = s.match(new RegExp("(?:chạy|run|jog)\\s*" + AMT)) || s.match(new RegExp(AMT + "\\s*(?:chạy|run|jog)"));
+  return a ? amountMinutes(a[1], a[2]) : 0;
+}
+const ROUNDS = /(\d+)\s*(?:vòng|rounds?|lượt|x)\b/i;
+
+/**
+ * { run, station, how } phút của một buổi — bỏ khởi động. Model không phải lúc nào cũng ghi chạy thành
+ * MỘT DÒNG BÀI: hay viết trong tên pha ("5 vòng: chạy 3 phút → trạm") hoặc trong set×rep của bài trạm
+ * ("4 vòng × (800m chạy + 15 wall ball)"). Không đọc mấy chỗ đó thì buổi đúng mẫu vẫn ra "chạy 0 phút"
+ * và model sửa mãi không qua (2026-10-19: 10 lần đề xuất bị từ chối liền).
+ */
 function runStationMinutes(day) {
   let run = 0, station = 0;
+  const how = [];
   for (const ph of (day && day.phases) || []) {
     if (normalizePhaseTag(ph) === "warmup") continue;
-    for (const x of (ph && ph.exercises) || []) {
-      const m = exerciseMinutes(x && x.setsReps);
-      if (RUN.test(String((x && x.name) || ""))) run += m; else station += m;
+    const exs = (ph && ph.exercises) || [];
+    const rowRun = exs.some((x) => RUN.test(String((x && x.name) || "")));
+    // Chạy ghi ở tên pha, không có dòng bài chạy: số vòng × lượng chạy mỗi vòng.
+    if (!rowRun) {
+      const pr = runInText(ph && ph.name);
+      if (pr) {
+        const r = String((ph && ph.name) || "").match(ROUNDS);
+        const m = pr * (r ? +r[1] : 1);
+        run += m; how.push(`tên pha "${String(ph.name).slice(0, 40)}": ~${Math.round(m)}'`);
+      }
+    }
+    for (const x of exs) {
+      const name = String((x && x.name) || "");
+      if (RUN.test(name)) { const m = exerciseMinutes(x && x.setsReps); run += m; how.push(`${name} ~${Math.round(m)}'`); continue; }
+      // Chạy lồng trong set×rep của bài trạm: tách phần chạy ra, phần còn lại tính là trạm.
+      const inner = runInText(x && x.setsReps);
+      if (inner) {
+        const m = parseSets(x && x.setsReps) * inner;
+        run += m; how.push(`trong "${name}": ~${Math.round(m)}'`);
+        station += parseSets(x && x.setsReps);
+        continue;
+      }
+      station += exerciseMinutes(x && x.setsReps);
     }
   }
-  return { run: Math.round(run), station: Math.round(station) };
+  return { run: Math.round(run), station: Math.round(station), how };
 }
 
 /**
@@ -268,8 +311,10 @@ function hybridIssues(program) {
       warnings.push(`${k}: label nên bắt đầu bằng loại buổi (${SESSION_TYPES.join(" / ")}).`);
     }
     if (RUN_FIRST.test(label) && rs.run < rs.station) {
-      errors.push({ k: "run:" + k, m: `${k} (${label.split("—")[0].trim()}): chạy ~${rs.run} phút < trạm ~${rs.station} phút. `
-        + "Buổi này chạy phải nhiều hơn trạm — tăng quãng/thời gian chạy hoặc bớt trạm (bài thay chạy ghi \"(thay chạy)\")." });
+      errors.push({ k: "run:" + k, m: `${k} (${label.split("—")[0].trim()}): chạy ~${rs.run} phút < trạm ~${rs.station} phút`
+        + (rs.how.length ? ` (đếm được chạy: ${rs.how.join("; ")})` : " — server KHÔNG thấy bài chạy nào") + ". "
+        + "Ghi chạy thành DÒNG BÀI RIÊNG: name \"Run\" (không chỗ chạy: \"Row (thay chạy)\"), setsReps theo thời gian "
+        + "VD \"5 × 3 phút\", đặt cùng pha với trạm; tổng phút chạy phải lớn hơn tổng phút trạm." });
     }
   }
   return { errors, warnings, split };

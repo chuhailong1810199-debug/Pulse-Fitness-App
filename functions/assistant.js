@@ -1065,7 +1065,8 @@ LỚP HYBRID / HYROX (groupFormat hyrox) — theo cách các training club đang
 - 8 TRẠM THI: SkiErg, Sled Push, Sled Pull, Burpee Broad Jump, Row, Farmers Carry, Sandbag Lunges, Wall Balls.
   Chạy chiếm ~60% thời gian thi → trong buổi Compromised / Engine / Race Sim, TỔNG THỜI GIAN CHẠY PHẢI
   NHIỀU HƠN TỔNG THỜI GIAN Ở TRẠM (server kiểm). Lớp trộn trình độ: chạy THEO THỜI GIAN ("4 × 3 phút"), không
-  theo mét, để cả lớp bắt đầu và xong cùng lúc.
+  theo mét, để cả lớp bắt đầu và xong cùng lúc. Chạy LUÔN là một DÒNG BÀI riêng (name "Run", setsReps "5 × 3 phút")
+  nằm cùng pha với trạm — VD pha "Khối chính — 5 vòng" gồm: Run 5 × 3 phút, SkiErg 5 × 2 phút.
 - LOẠI BUỔI — label mỗi buổi BẮT ĐẦU bằng đúng một loại: "Compromised — …", "Strength Endurance — …",
   "Engine — …", "Foundation — …", "Race Sim — …", "Partner — …". Mẫu cho 60 phút (45 phút thì co khối chính):
   · Compromised (buổi chủ lực): warmup 10' (row/ski nhẹ + động tác của buổi) → kỹ thuật 1 trạm 8' (lúc còn
@@ -1382,7 +1383,17 @@ async function runAssistant({ client, model, messages, clientId, role, day, audi
       toolLog.push({ name: c.name, args: c.arguments || {}, empty: !!(result && (result.empty || result.error)) });
       if (result && result.needsConfirm) pending.push({ action: result.action, preview: result.preview });
       if (result && result.display) displays.push(result.display);
-      if (c.name.startsWith("propose_")) lastReject = result && result.rejected ? result : null;
+      if (c.name.startsWith("propose_")) {
+        lastReject = result && result.rejected ? result : null;
+        // Ghi lại đề xuất bị từ chối (rút gọn) — để lần sau xem được model đã viết gì, không phải đoán.
+        if (lastReject) {
+          const prog = (c.arguments && c.arguments.program) || {};
+          const brief = Object.entries(prog).map(([d, v]) => d + " " + String((v && v.label) || "") + ": "
+            + ((v && v.phases) || []).map((ph) => "[" + String((ph && ph.name) || "") + "] "
+              + ((ph && ph.exercises) || []).map((x) => String((x && x.name) || "") + " " + String((x && x.setsReps) || "")).join(", ")).join(" | "));
+          console.log("[assistant] đề xuất bị từ chối:", JSON.stringify({ errors: (lastReject.errors || []).slice(0, 4), program: brief }).slice(0, 3000));
+        }
+      }
       input.push({
         type: "function_result",
         call_id: c.id,

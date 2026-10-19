@@ -72,3 +72,22 @@ test('form lop: giai doan + cho chay; prompt gan loai buoi theo so buoi/tuan', (
   assert.match(api._aiGroupForm(), /name="phase"/);
   assert.match(api._aiGroupForm(), /name="run"/);
 });
+
+test('chay ghi trong ten pha hoac trong set×rep van duoc dem (10 lan de xuat bi tu choi 2026-10-19)', () => {
+  // Chạy trong tên pha, dòng bài chỉ có trạm.
+  const inName = { label: 'Compromised — x', phases: [{ name: 'Khối chính — 5 vòng: chạy 3 phút → trạm', tag: 'circuit',
+    exercises: [{ name: 'SkiErg', setsReps: '5 × 1 phút' }, { name: 'Wall Ball', setsReps: '5 × 1 phút' }] }] };
+  const a = C.runStationMinutes(inName);
+  assert.strictEqual(a.run, 15); assert.strictEqual(a.station, 10);
+  assert.deepStrictEqual(C.hybridIssues({ SessionA: inName }).errors, []);
+  // Chạy lồng trong set×rep của bài trạm.
+  const inReps = { label: 'Compromised — x', phases: [{ name: 'Main', tag: 'circuit',
+    exercises: [{ name: 'Wall Ball', setsReps: '4 vòng × (800m chạy + 15 wall ball)' }] }] };
+  const b = C.runStationMinutes(inReps);
+  assert.ok(b.run > b.station, JSON.stringify(b));
+  // Không có chạy ở đâu cả → lỗi nói rõ server không thấy bài chạy + cách ghi đúng.
+  const none = { label: 'Compromised — x', phases: [{ name: 'Main', tag: 'circuit', exercises: [{ name: 'SkiErg', setsReps: '3 × 1 phút' }] }] };
+  const e = C.hybridIssues({ SessionA: none }).errors[0].m;
+  assert.match(e, /KHÔNG thấy bài chạy/);
+  assert.match(e, /DÒNG BÀI RIÊNG/);
+});
