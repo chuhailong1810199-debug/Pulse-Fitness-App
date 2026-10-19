@@ -1063,8 +1063,8 @@ const GROUP_METHOD = `LỚP NHÓM (hồ sơ có isGroup, hoặc coach nói "lớ
 
 LỚP HYBRID / HYROX (groupFormat hyrox) — theo cách các training club đang chạy lớp
 - 8 TRẠM THI: SkiErg, Sled Push, Sled Pull, Burpee Broad Jump, Row, Farmers Carry, Sandbag Lunges, Wall Balls.
-  Chạy chiếm ~60% thời gian thi → trong buổi Compromised / Engine / Race Sim, TỔNG THỜI GIAN CHẠY PHẢI
-  NHIỀU HƠN TỔNG THỜI GIAN Ở TRẠM (server kiểm). Lớp trộn trình độ: chạy THEO THỜI GIAN ("4 × 3 phút"), không
+  Chạy chiếm ~60% thời gian thi → trong buổi Compromised / Engine / Race Sim, ở KHỐI CHẠY XEN TRẠM THỜI GIAN
+  CHẠY PHẢI NHIỀU HƠN THỜI GIAN Ở TRẠM (server kiểm; pha kỹ thuật và finisher không tính). Lớp trộn trình độ: chạy THEO THỜI GIAN ("4 × 3 phút"), không
   theo mét, để cả lớp bắt đầu và xong cùng lúc. Chạy LUÔN là một DÒNG BÀI riêng (name "Run", setsReps "5 × 3 phút")
   nằm cùng pha với trạm — VD pha "Khối chính — 5 vòng" gồm: Run 5 × 3 phút, SkiErg 5 × 2 phút.
 - LOẠI BUỔI — label mỗi buổi BẮT ĐẦU bằng đúng một loại: "Compromised — …", "Strength Endurance — …",
@@ -1078,6 +1078,13 @@ LỚP HYBRID / HYROX (groupFormat hyrox) — theo cách các training club đang
   · Foundation (người mới / quay lại): dạy 8 động tác thi dạng circuit, tải nhẹ, chạy ngắn.
   · Race Sim: chạy xen trạm như thi — nửa giải (4 lần chạy + 4 trạm) hoặc trọn giải ở đỉnh block.
   · Partner: hai người cùng chạy, chia rep trạm "You go, I go" — dùng khi dụng cụ thiếu hoặc lớp đông.
+- MẪU MỘT BUỔI COMPROMISED 60' (đúng tag pha — server kiểm cấu trúc này; ghi phút của khối trong tên pha):
+  · [warmup] "Khởi động (10')": Row nhẹ 1 × 4 phút · World's Greatest Stretch 1 × 5/bên · Air Squat + Reverse Lunge 2 × 10
+  · [strength] "Kỹ thuật — Sled Push (8')": Sled Push 4 × 1 phút (tải nhẹ, dạy tư thế; cue Dễ/Chuẩn/Khó)
+  · [circuit] "Khối chính — 5 vòng: chạy 3' → trạm 2' (30')": Run 5 × 3 phút · SkiErg 3 × 250m (vòng 1, 3, 5)
+    · Wall Ball 2 × 20 (vòng 2, 4) — chạy là DÒNG BÀI, trạm xoay vòng, ≥ 2 trạm trong khối
+  · [circuit] "Finisher — EMOM 7'": Burpee Broad Jump 7 × 6 · (giãn 5' ghi trong focus)
+  Buổi Compromised / Race Sim: ≥ 3 trạm thi khác nhau cả buổi, có pha chạy xen ≥ 2 trạm, tổng ≥ 75% thời lượng lớp.
 - CHỌN LOẠI BUỔI theo số buổi/tuần: 1 buổi → Compromised. 2 → Compromised + Strength Endurance (cặp các gym hay
   dùng). 3 → + Engine. 4 → + Foundation (hoặc Partner nếu lớp đông). 5 → + Partner. Coach nói khác thì theo coach.
 - BLOCK 12 TUẦN (coach ghi giai đoạn): tuần 1–4 NỀN (kỹ thuật, cường độ vừa, tăng dần quãng chạy) · tuần 5–8

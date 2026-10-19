@@ -13,8 +13,8 @@ const ex = (name, setsReps) => ({ name, setsReps });
 const COMPROMISED = { label: 'Compromised — chạy xen SkiErg / Wall Ball', focus: 'f', phases: [
   { name: 'Khởi động', tag: 'warmup', exercises: [ex('Row nhẹ', '1 × 5 phút'), ex('Lunge + Squat bodyweight', '2 × 10')] },
   { name: 'Kỹ thuật — Sled Push', tag: 'circuit', exercises: [ex('Sled Push', '4 × 1 phút')] },
-  { name: 'Khối chính — 5 vòng: chạy 3 phút → trạm 2 phút', tag: 'circuit', exercises: [ex('Run', '5 × 3 phút'), ex('SkiErg', '5 × 2 phút')] },
-  { name: 'Finisher', tag: 'circuit', exercises: [ex('Run', '2 × 2 phút'), ex('Wall Ball', '3 × 1 phút')] },
+  { name: "Khối chính — 5 vòng: chạy 3 phút → trạm 2 phút (30')", tag: 'circuit', exercises: [ex('Run', '5 × 3 phút'), ex('SkiErg', '3 × 2 phút'), ex('Wall Ball', '2 × 2 phút')] },
+  { name: "Finisher — EMOM 7'", tag: 'circuit', exercises: [ex('Run', '2 × 2 phút'), ex('Wall Ball', '3 × 1 phút')] },
 ] };
 
 test('phut cua bai: thoi gian, quang chay, mac dinh', () => {
@@ -28,7 +28,7 @@ test('buoi Compromised dung mau thi qua; tram nhieu hon chay thi bi chan', () =>
   assert.deepStrictEqual(ok.errors, [], JSON.stringify(ok.errors));
   assert.ok(ok.runSplit.SessionA.run > ok.runSplit.SessionA.station);
   const heavy = JSON.parse(JSON.stringify(COMPROMISED));
-  heavy.phases[2].exercises[1].setsReps = '5 × 5 phút';   // trạm 25 phút > chạy
+  heavy.phases[2].exercises[1].setsReps = '5 × 5 phút';   // trạm trong khối chính 29 phút > chạy 15
   const bad = C.checkProgram({ SessionA: heavy }, { isGroup: true, groupFormat: 'hyrox' });
   assert.ok(bad.errors.some((e) => e.k === 'run:SessionA'));
 });
@@ -76,7 +76,8 @@ test('form lop: giai doan + cho chay; prompt gan loai buoi theo so buoi/tuan', (
 test('chay ghi trong ten pha hoac trong set×rep van duoc dem (10 lan de xuat bi tu choi 2026-10-19)', () => {
   // Chạy trong tên pha, dòng bài chỉ có trạm.
   const inName = { label: 'Compromised — x', phases: [{ name: 'Khối chính — 5 vòng: chạy 3 phút → trạm', tag: 'circuit',
-    exercises: [{ name: 'SkiErg', setsReps: '5 × 1 phút' }, { name: 'Wall Ball', setsReps: '5 × 1 phút' }] }] };
+    exercises: [{ name: 'SkiErg', setsReps: '5 × 1 phút' }, { name: 'Wall Ball', setsReps: '5 × 1 phút' }] },
+    { name: 'Finisher', tag: 'circuit', exercises: [{ name: 'Burpee Broad Jump', setsReps: '3 × 1 phút' }] }] };
   const a = C.runStationMinutes(inName);
   assert.strictEqual(a.run, 15); assert.strictEqual(a.station, 10);
   assert.deepStrictEqual(C.hybridIssues({ SessionA: inName }).errors, []);
@@ -87,7 +88,32 @@ test('chay ghi trong ten pha hoac trong set×rep van duoc dem (10 lan de xuat bi
   assert.ok(b.run > b.station, JSON.stringify(b));
   // Không có chạy ở đâu cả → lỗi nói rõ server không thấy bài chạy + cách ghi đúng.
   const none = { label: 'Compromised — x', phases: [{ name: 'Main', tag: 'circuit', exercises: [{ name: 'SkiErg', setsReps: '3 × 1 phút' }] }] };
-  const e = C.hybridIssues({ SessionA: none }).errors[0].m;
+  const e = C.hybridIssues({ SessionA: none }).errors.find((x) => x.k === 'run:SessionA').m;
   assert.match(e, /KHÔNG thấy bài chạy/);
   assert.match(e, /DÒNG BÀI RIÊNG/);
+});
+
+// Buổi coach nhận được 2026-10-19 (ảnh): qua kiểm cũ nhưng sai mẫu — 2 trạm, chạy tách khỏi trạm, ~39'/60'.
+const SHOT = { label: 'Compromised — Treadmill & Station Intervals', focus: 'x', phases: [
+  { name: 'Warm-up', tag: 'warmup', exercises: [ex('Running (Treadmill)', '1 × 8 mins')] },
+  { name: 'Main', tag: 'strength', exercises: [ex('Med Ball Squat + Wall Throw', '1 × 6 mins')] },
+  { name: 'Accessory', tag: 'accessories', exercises: [ex('Running (Treadmill)', '4 × 5 mins'), ex("Farmer's Carry (Dumbbell)", '4 × 1 min')] },
+  { name: 'Circuit', tag: 'circuit', exercises: [ex('Med Ball Squat + Wall Throw', '1 × 3 mins')] }] };
+// Mẫu trong GROUP_METHOD.
+const GOLD = { label: 'Compromised — Run + SkiErg / Wall Ball / Sled', focus: 'x', phases: [
+  { name: "Khởi động (10')", tag: 'warmup', exercises: [ex('Row nhẹ', '1 × 4 phút'), ex("World's Greatest Stretch", '1 × 5/bên'), ex('Air Squat + Reverse Lunge', '2 × 10')] },
+  { name: "Kỹ thuật — Sled Push (8')", tag: 'strength', exercises: [ex('Sled Push', '4 × 1 phút')] },
+  { name: "Khối chính — 5 vòng: chạy 3' → trạm 2' (30')", tag: 'circuit', exercises: [ex('Run', '5 × 3 phút'), ex('SkiErg', '3 × 250m'), ex('Wall Ball', '2 × 20')] },
+  { name: "Finisher — EMOM 7'", tag: 'circuit', exercises: [ex('Burpee Broad Jump', '7 × 6')] }] };
+
+test('buoi trong anh coach gui bi chan dung 3 loi; buoi mau trong prompt qua het', () => {
+  const bad = C.checkProgram({ SessionA: SHOT }, { isGroup: true, groupFormat: 'hyrox', minutes: 60 });
+  const ks = bad.errors.map((e) => e.k.split(':')[0]).sort();
+  assert.deepStrictEqual(ks, ['mix', 'short', 'st']);
+  assert.ok(C.estimateMinutes(SHOT) >= 35 && C.estimateMinutes(SHOT) <= 45, 'bai theo phut trong pha strength/accessories tinh theo gio: ' + C.estimateMinutes(SHOT));
+  const good = C.checkProgram({ SessionA: GOLD }, { isGroup: true, groupFormat: 'hyrox', minutes: 60 });
+  assert.deepStrictEqual(good.errors, [], JSON.stringify(good.errors));
+  assert.ok(C.estimateMinutes(GOLD) >= 50);
+  assert.deepStrictEqual([...C.stationKeys(GOLD)].sort(), ['bbj', 'sledpush', 'ski', 'wallball'].sort());
+  assert.match(A.GROUP_METHOD, /MẪU MỘT BUỔI COMPROMISED 60'/);
 });

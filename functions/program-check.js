@@ -165,21 +165,39 @@ function circuitMinutes(setsReps) {
     const min = /^(s|sec|giây)$/.test(t[2]) ? v / 60 : v;
     return n * (min + (min < 2 ? 1 / 3 : 0));
   }
+  const d = raw.match(/(\d+(?:[.,]\d+)?)\s*(km|m)\b/);
+  if (d) return n * (parseFloat(d[1].replace(",", ".")) / (d[2] === "m" ? 1000 : 1)) * 5.5 + n * 0.33;
   return n * 1;
 }
+
+const TIMED = /\d\s*(km|m|s|sec|giây|min|mins|phút|')(?![a-zà-ỹ])/i;
 
 /** Phút ước tính một buổi: khởi động 5–10 phút; set làm việc ~2,5 phút (gồm nghỉ), superset ~1,75. */
 function estimateMinutes(day) {
   let total = 0;
   for (const ph of (day && day.phases) || []) {
-    const tag = normalizePhaseTag(ph);
-    const exs = (ph && ph.exercises) || [];
-    if (tag === "warmup") { total += Math.min(10, Math.max(5, exs.length * 2)); continue; }
-    if (tag === "circuit") { for (const x of exs) total += circuitMinutes(x && x.setsReps); continue; }
-    const paired = exs.length >= 2 && /superset|block|cặp|pair|\bss\b|giant|tri[\s-]?set/i.test(String(ph.name || ""));
-    for (const x of exs) total += parseSets(x && x.setsReps) * (paired ? 1.75 : 2.5);
+    const before = total;
+    phaseMinutes(ph);
+    // Khối chạy theo ĐỒNG HỒ ghi phút trong tên pha ("Khối chính — 5 vòng … (30')", "Finisher — EMOM 7'"):
+    // đồng hồ mới là thật — cộng từng dòng bài bỏ sót chuyển trạm. Lấy số phút lớn nhất trong tên (≤ 60).
+    const clock = Math.max(0, ...[...String((ph && ph.name) || "").matchAll(/(\d+)\s*(?:'|phút|min)/gi)].map((m) => +m[1]).filter((n) => n <= 60));
+    if (clock > total - before) total = before + clock;
   }
   return Math.round(total);
+
+  function phaseMinutes(ph) {
+    const tag = normalizePhaseTag(ph);
+    const exs = (ph && ph.exercises) || [];
+    if (tag === "warmup") { total += Math.min(10, Math.max(5, exs.length * 2)); return; }
+    if (tag === "circuit") { for (const x of exs) total += circuitMinutes(x && x.setsReps); return; }
+    const paired = exs.length >= 2 && /superset|block|cặp|pair|\bss\b|giant|tri[\s-]?set/i.test(String(ph.name || ""));
+    for (const x of exs) {
+      // Bài ghi theo GIỜ / QUÃNG ("4 × 5 phút", "3 × 250m") tính theo giờ dù nằm ở pha nào — đếm theo set thì
+      // "4 × 5 phút" chạy chỉ ra 10 phút (2026-10-19: buổi lớp 41 phút được ước tính như đủ).
+      if (TIMED.test(String((x && x.setsReps) || ""))) total += circuitMinutes(x && x.setsReps) || exerciseMinutes(x && x.setsReps);
+      else total += parseSets(x && x.setsReps) * (paired ? 1.75 : 2.5);
+    }
+  }
 }
 
 /** Mục 4. Dài quá 30% (+5 phút) → lỗi; ngắn hơn 60% → nhắc. Không có thời lượng đích thì bỏ qua. */
@@ -265,10 +283,20 @@ const ROUNDS = /(\d+)\s*(?:vòng|rounds?|lượt|x)\b/i;
  * và model sửa mãi không qua (2026-10-19: 10 lần đề xuất bị từ chối liền).
  */
 function runStationMinutes(day) {
-  let run = 0, station = 0;
+  // So chạy với trạm TRONG KHỐI chạy xen trạm (pha có chạy): mỗi vòng chạy 3–4' > trạm 2–3'. Pha kỹ thuật
+  // và finisher là trạm thuần theo đúng mẫu — tính cả buổi thì mẫu chuẩn cũng ra trạm nhiều hơn chạy.
+  // Không có pha nào có chạy → so với trạm cả buổi (lỗi "không thấy bài chạy").
+  let run = 0, station = 0, stationAll = 0;
   const how = [];
   for (const ph of (day && day.phases) || []) {
     if (normalizePhaseTag(ph) === "warmup") continue;
+    const r0 = run, s0 = station;
+    phase(ph);
+    if (run === r0) { stationAll += station - s0; station = s0; } else stationAll += station - s0;
+  }
+  return { run: Math.round(run), station: Math.round(run > 0 ? station : stationAll), how };
+
+  function phase(ph) {
     const exs = (ph && ph.exercises) || [];
     const rowRun = exs.some((x) => RUN.test(String((x && x.name) || "")));
     // Chạy ghi ở tên pha, không có dòng bài chạy: số vòng × lượng chạy mỗi vòng.
@@ -294,14 +322,33 @@ function runStationMinutes(day) {
       station += exerciseMinutes(x && x.setsReps);
     }
   }
-  return { run: Math.round(run), station: Math.round(station), how };
 }
 
 /**
  * Buổi Compromised / Engine / Race Sim của lớp hybrid: tổng phút chạy ≥ tổng phút ở trạm (chạy ~60% thời gian
  * thi). Label không bắt đầu bằng loại buổi → nhắc ghi loại để app và coach biết buổi đó là gì.
  */
-function hybridIssues(program) {
+/** 8 trạm thi (và bài thay tương đương) → một khoá, để đếm số trạm KHÁC nhau. */
+const STATIONS = [
+  ["ski", /ski ?erg|band pull[\s-]?down|kéo dây/i], ["sledpush", /sled push|prowler|plate push|đẩy đĩa|banded march|đẩy sled/i],
+  ["sledpull", /sled pull|rope pull|kéo sled|kéo dây có tải|heavy seated row/i], ["bbj", /burpee/i],
+  ["row", /^(?!.*thay chạy).*\b(row(er|ing)?( erg)?|concept ?2)\b(?!.*\b(dumbbell|cable|barbell|db|bent|seated|single|renegade)\b)/i],
+  ["farmer", /farmer|carry/i], ["lunge", /lunge/i], ["wallball", /wall ?ball|wall throw|med(icine)? ?ball/i],
+];
+function stationKeys(day) {
+  const keys = new Set();
+  for (const ph of (day && day.phases) || []) {
+    if (normalizePhaseTag(ph) === "warmup") continue;
+    for (const x of (ph && ph.exercises) || []) {
+      const n = String((x && x.name) || "");
+      if (RUN.test(n)) continue;   // chạy và bài thay chạy không phải trạm
+      for (const [k, re] of STATIONS) if (re.test(n)) keys.add(k);
+    }
+  }
+  return keys;
+}
+
+function hybridIssues(program, minutes) {
   const errors = [], warnings = [], split = {};
   for (const [k, d] of Object.entries(program || {})) {
     const label = String((d && d.label) || "");
@@ -309,6 +356,26 @@ function hybridIssues(program) {
     split[k] = rs;
     if (!SESSION_TYPES.some((t) => label.toLowerCase().startsWith(t.toLowerCase()))) {
       warnings.push(`${k}: label nên bắt đầu bằng loại buổi (${SESSION_TYPES.join(" / ")}).`);
+    }
+    const isCompromised = /^\s*(compromised|race ?sim)/i.test(label);
+    if (isCompromised) {
+      // Khối chính phải là VÒNG chạy xen trạm: một pha có dòng Run + ≥ 2 trạm. Chạy một pha, trạm một pha
+      // khác thì không còn là "chạy khi đã mỏi".
+      const mixed = ((d && d.phases) || []).some((ph) => {
+        const ns = ((ph && ph.exercises) || []).map((x) => String((x && x.name) || ""));
+        const hasRun = ns.some((n) => RUN.test(n)) || runInText(ph && ph.name) > 0;
+        return hasRun && ns.filter((n) => !RUN.test(n)).length >= 2;
+      });
+      if (!mixed) errors.push({ k: "mix:" + k, m: `${k}: thiếu khối chính chạy xen trạm — một pha (tag circuit) gồm dòng Run `
+        + "và ≥ 2 trạm khác nhau, VD \"Khối chính — 5 vòng: chạy 3' → trạm 2'\": Run 5 × 3 phút, SkiErg 3 × 1 phút, Wall Ball 2 × 20." });
+      const st = stationKeys(d);
+      if (st.size < 3) errors.push({ k: "st:" + k, m: `${k}: mới có ${st.size} trạm thi khác nhau (${[...st].join(", ") || "—"}), cần ≥ 3 trong 8 trạm `
+        + "(SkiErg, Sled Push, Sled Pull, Burpee Broad Jump, Row, Farmers Carry, Sandbag Lunges, Wall Balls — hoặc bài thay)." });
+    }
+    // Lớp chạy theo giờ cố định: buổi ngắn hơn 75% thời lượng là học viên đứng chơi cuối giờ.
+    const est = estimateMinutes(d), target = Number(minutes);
+    if (target > 0 && est < target * 0.75) {
+      errors.push({ k: "short:" + k, m: `${k}: ước tính ~${est} phút cho lớp ${target} phút — thiếu. Theo mẫu: khởi động 10' → kỹ thuật 8' → khối chính 30' → finisher 7' → giãn 5'.` });
     }
     if (RUN_FIRST.test(label) && rs.run < rs.station) {
       errors.push({ k: "run:" + k, m: `${k} (${label.split("—")[0].trim()}): chạy ~${rs.run} phút < trạm ~${rs.station} phút`
@@ -340,7 +407,7 @@ function checkProgram(program, o = {}) {
   // Lớp nhóm: trình độ trộn, dụng cụ có hạn, học viên đi 1 buổi — khung volume 1-1 không áp.
   if (o.isGroup) {
     const d = durationIssues(program, o.minutes);
-    const h = o.groupFormat === "hyrox" ? hybridIssues(program) : { errors: [], warnings: [], split: {} };
+    const h = o.groupFormat === "hyrox" ? hybridIssues(program, o.minutes) : { errors: [], warnings: [], split: {} };
     return { errors: [...d.errors, ...h.errors], warnings: [...d.warnings, ...h.warnings], volume: {}, est: d.est,
       waived: [], runSplit: h.split };
   }
@@ -364,4 +431,4 @@ function parseMinutes(v) {
 }
 
 module.exports = { canonMuscle, parseSets, muscleSets, volumeIssues, patternsCovered, coverageIssues, estimateMinutes,
-  durationIssues, pushPullWarning, checkProgram, newErrors, hybridIssues, runStationMinutes, exerciseMinutes, SESSION_TYPES, parseMinutes, VOLUME, PATTERN_KEYS, PER_SESSION_MAX };
+  durationIssues, pushPullWarning, checkProgram, newErrors, hybridIssues, stationKeys, runStationMinutes, exerciseMinutes, SESSION_TYPES, parseMinutes, VOLUME, PATTERN_KEYS, PER_SESSION_MAX };

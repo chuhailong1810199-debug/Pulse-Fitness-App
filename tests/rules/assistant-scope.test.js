@@ -133,8 +133,10 @@ const ok = (n, f) => cases.push([n, f]);
     assert(r.needsConfirm, JSON.stringify(r));
   });
   ok("tao lop: action mang isGroup + thong tin lop, ten co tien to, khong email", async () => {
+    // Ca này kiểm TRƯỜNG của lớp, không kiểm mẫu buổi: bỏ durationMin để giáo án 1 bài không bị luật
+    // "buổi ngắn quá" của lớp hybrid chặn (luật đó kiểm ở tests/hybrid-class.test.js).
     const r = await A.runTool("propose_new_client", { name: "HYROX sáng", isGroup: true, groupFormat: "hyrox", groupSize: 10,
-      durationMin: 60, equipment: "3 SkiErg", level: "Mixed", program: newProg("Lat Pulldown") }, RA);
+      equipment: "3 SkiErg", level: "Mixed", program: newProg("Lat Pulldown") }, RA);
     assert(r.needsConfirm, JSON.stringify(r));
     const x = r.action;
     assert.strictEqual(x.isGroup, true); assert.strictEqual(x.groupFormat, "hyrox"); assert.strictEqual(x.groupSize, 10);
