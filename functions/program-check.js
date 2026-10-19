@@ -213,6 +213,68 @@ function pushPullWarning(program) {
   return push > 0 && push > Math.max(pull, 1) * 1.5 ? [`Đẩy ${push} set : kéo ${pull} set — khung đòi ≈ 1 : 1.`] : [];
 }
 
+// ── Lớp Hybrid / HYROX: chạy nhiều hơn trạm ───────────────────────────────
+/** Phần chạy: chạy thật, hoặc bài thay chạy coach ghi "(thay chạy)" / "(run sub)". */
+const RUN = /\b(run|running|jog)\b|chạy|treadmill|máy chạy|thay chạy|run sub/i;
+/** Loại buổi phải chạy nhiều hơn trạm (Strength Endurance / Foundation / Partner thì không bắt). */
+const RUN_FIRST = /^\s*(compromised|engine|race ?sim)/i;
+const SESSION_TYPES = ["Compromised", "Strength Endurance", "Engine", "Foundation", "Race Sim", "Partner"];
+
+/**
+ * Phút LÀM (không tính nghỉ) của một bài: "4 × 3 phút" → 12; "4 × 400m" → ~8,8 (5,5 phút/km);
+ * "3 × 40s" → 2; không ghi giờ/quãng → 1 phút mỗi set. So chạy với trạm phải so giờ làm — cộng
+ * nghỉ vào trạm (như ước tính thời lượng buổi) làm buổi đúng mẫu thành hoà.
+ */
+function exerciseMinutes(setsReps) {
+  const raw = String(setsReps || "").toLowerCase().replace(/[×]/g, "x");
+  const n = parseSets(raw);
+  const d = raw.match(/(\d+(?:[.,]\d+)?)\s*(km|m)\b/);
+  if (d) {
+    const km = parseFloat(d[1].replace(",", ".")) / (d[2] === "m" ? 1000 : 1);
+    return n * km * 5.5;
+  }
+  const t = raw.match(/x\s*(\d+(?:[.,]\d+)?)\s*(s|sec|giây|min|mins|phút)\b/);
+  if (t) {
+    const v = parseFloat(t[1].replace(",", "."));
+    return n * (/^(s|sec|giây)$/.test(t[2]) ? v / 60 : v);
+  }
+  return n;
+}
+
+/** { run, station } phút của một buổi — bỏ khởi động. */
+function runStationMinutes(day) {
+  let run = 0, station = 0;
+  for (const ph of (day && day.phases) || []) {
+    if (normalizePhaseTag(ph) === "warmup") continue;
+    for (const x of (ph && ph.exercises) || []) {
+      const m = exerciseMinutes(x && x.setsReps);
+      if (RUN.test(String((x && x.name) || ""))) run += m; else station += m;
+    }
+  }
+  return { run: Math.round(run), station: Math.round(station) };
+}
+
+/**
+ * Buổi Compromised / Engine / Race Sim của lớp hybrid: tổng phút chạy ≥ tổng phút ở trạm (chạy ~60% thời gian
+ * thi). Label không bắt đầu bằng loại buổi → nhắc ghi loại để app và coach biết buổi đó là gì.
+ */
+function hybridIssues(program) {
+  const errors = [], warnings = [], split = {};
+  for (const [k, d] of Object.entries(program || {})) {
+    const label = String((d && d.label) || "");
+    const rs = runStationMinutes(d);
+    split[k] = rs;
+    if (!SESSION_TYPES.some((t) => label.toLowerCase().startsWith(t.toLowerCase()))) {
+      warnings.push(`${k}: label nên bắt đầu bằng loại buổi (${SESSION_TYPES.join(" / ")}).`);
+    }
+    if (RUN_FIRST.test(label) && rs.run < rs.station) {
+      errors.push({ k: "run:" + k, m: `${k} (${label.split("—")[0].trim()}): chạy ~${rs.run} phút < trạm ~${rs.station} phút. `
+        + "Buổi này chạy phải nhiều hơn trạm — tăng quãng/thời gian chạy hoặc bớt trạm (bài thay chạy ghi \"(thay chạy)\")." });
+    }
+  }
+  return { errors, warnings, split };
+}
+
 /**
  * Lỗi nào MỚI so với giáo án cũ. Sửa một buổi mà các buổi KHÔNG đụng tới đã vượt khung từ
  * trước thì không bắt model sửa buổi coach không nhờ — lỗi cũ thành lời nhắc.
@@ -233,7 +295,9 @@ function checkProgram(program, o = {}) {
   // Lớp nhóm: trình độ trộn, dụng cụ có hạn, học viên đi 1 buổi — khung volume 1-1 không áp.
   if (o.isGroup) {
     const d = durationIssues(program, o.minutes);
-    return { errors: d.errors, warnings: d.warnings, volume: {}, est: d.est, waived: [] };
+    const h = o.groupFormat === "hyrox" ? hybridIssues(program) : { errors: [], warnings: [], split: {} };
+    return { errors: [...d.errors, ...h.errors], warnings: [...d.warnings, ...h.warnings], volume: {}, est: d.est,
+      waived: [], runSplit: h.split };
   }
   const v = volumeIssues(program, o.level, o.volumeExceptions);
   const c = coverageIssues(program, o.coverageExceptions);
@@ -255,4 +319,4 @@ function parseMinutes(v) {
 }
 
 module.exports = { canonMuscle, parseSets, muscleSets, volumeIssues, patternsCovered, coverageIssues, estimateMinutes,
-  durationIssues, pushPullWarning, checkProgram, newErrors, parseMinutes, VOLUME, PATTERN_KEYS, PER_SESSION_MAX };
+  durationIssues, pushPullWarning, checkProgram, newErrors, hybridIssues, runStationMinutes, exerciseMinutes, SESSION_TYPES, parseMinutes, VOLUME, PATTERN_KEYS, PER_SESSION_MAX };

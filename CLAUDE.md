@@ -266,6 +266,13 @@ Key routing rules:
   `groupSize`, `durationMin`, `equipment`; `email: ''`, tên bắt đầu "Lớp ·". Tạo qua trợ lý (form "Soạn giáo án
   lớp nhóm" → `propose_new_client` isGroup → `coachApply`). Luật soạn ở `GROUP_METHOD` (assistant.js). Lớp không
   báo "chưa tập/InBody/gói" (`clientAlert`), không bật billing; `propose_program` cho lớp chỉ đòi `get_client`.
+- **Lớp Hybrid / HYROX** (`groupFormat: hyrox`, 2026-10-19): label mỗi buổi bắt đầu bằng loại buổi
+  (Compromised / Strength Endurance / Engine / Foundation / Race Sim / Partner); số buổi/tuần quyết định loại
+  (form tự gán). Buổi Compromised / Engine / Race Sim: phút CHẠY ≥ phút TRẠM — `hybridIssues()` trong
+  `functions/program-check.js` chặn. Bài thay chạy (không có chỗ chạy) ghi "(thay chạy)" trong tên.
+- **Khung 1-1 kiểm bằng code** (`program-check.js`): trần volume theo trình độ, ≤ ~10 set/nhóm cơ/buổi, đủ 8 mẫu
+  chuyển động, thời lượng buổi. Ngoại lệ có chủ ý → `volumeExceptions` / `coverageExceptions` kèm lý do. Sửa vài
+  buổi: lỗi có sẵn ở giáo án cũ chỉ thành lời nhắc (`newErrors`).
 - **Lý do chọn bài** (2026-10-15): mỗi buổi có `focus`, mỗi bài pha strength/accessories có `why` — lưu CÙNG
   giáo án. `checkRationale()` chặn đề xuất thiếu. App hiện `why` ở ô "i" và `focus` dưới tiêu đề buổi, cho MỌI người
   (coach + khách). Hỏi "vì sao tập bài X" → trợ lý trả lời từ `why` đã lưu; không có thì phải nói rõ là suy luận.

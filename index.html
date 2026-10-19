@@ -9875,6 +9875,8 @@ function _aiCheckRows(p, rows) {
   if (vol.length) rows.push(['Set/tuần', vol.slice(0, 8).map(([m, v]) => m + ' ' + v).join(' · ')]);
   const mins = Object.entries(p.minutes || {});
   if (mins.length) rows.push(['Thời lượng', mins.map(([d, m]) => d.replace('Session', '') + ' ~' + m + "'").join(' · ')]);
+  const rs = Object.entries(p.runSplit || {});
+  if (rs.length) rows.push(['Chạy / trạm', rs.map(([d, x]) => d.replace('Session', '') + ' ' + x.run + "'/" + x.station + "'").join(' · ')]);
   if ((p.waived || []).length) rows.push(['Ngoại lệ', p.waived.join(' | ')]);
   if ((p.warnings || []).length) rows.push(['Lưu ý', p.warnings.join(' | ')]);
 }
@@ -9983,7 +9985,12 @@ function _aiNewClientForm() {
 // ── Form "Soạn giáo án lớp nhóm" ──────────────────────────────────────
 // Lớp = một hồ sơ isGroup (functions/assistant.js GROUP_METHOD). Cùng nút gửi
 // với form khách (aiFormSend), phân biệt bằng ô ẩn kind=group.
-const _AI_GF_FORMATS = [['hyrox', 'HYROX / conditioning'], ['strength', 'Strength nhóm nhỏ'], ['circuit', 'Circuit giảm mỡ']];
+const _AI_GF_FORMATS = [['hyrox', 'Hybrid / HYROX'], ['strength', 'Strength nhóm nhỏ'], ['circuit', 'Circuit giảm mỡ']];
+// Lớp Hybrid: giai đoạn của block 12 tuần + chỗ chạy (functions/assistant.js GROUP_METHOD).
+const _AI_GF_PHASES = [['base', 'Nền — tuần 1–4 (kỹ thuật, tăng quãng chạy)'], ['build', 'Compromised — tuần 5–8'],
+  ['peak', 'Mô phỏng thi — tuần 9–10'], ['taper', 'Giảm tải trước giải — tuần 11–12'], ['none', 'Không có giải — duy trì']];
+const _AI_GF_RUN = [['outdoor', 'Chạy ngoài trời / sân'], ['treadmill', 'Máy chạy (ghi số máy ở dụng cụ)'],
+  ['none', 'Không có chỗ chạy — thay bằng Row / Bike / SkiErg']];
 function _aiGroupForm() {
   const f = (label, ctrl, wide) => '<label class="ai-nf-f' + (wide ? ' wide' : '') + '">'
     + '<span>' + label + '</span>' + ctrl + '</label>';
@@ -9999,6 +10006,8 @@ function _aiGroupForm() {
       + f('Mỗi buổi', '<select name="dur">' + opt(['45 phút', '60 phút', '75 phút'], '60 phút') + '</select>')
       + f('Buổi / tuần', '<select name="spw">' + opt(['1', '2', '3', '4', '5'], '2') + '</select>')
       + f('Trình độ', '<select name="level">' + opt(['Mixed', 'Beginner', 'Intermediate', 'Advanced'], 'Mixed') + '</select>')
+      + f('Giai đoạn (lớp Hybrid)', '<select name="phase">' + _AI_GF_PHASES.map(([v, t]) => '<option value="' + v + '"' + (v === 'none' ? ' selected' : '') + '>' + escHtml(t) + '</option>').join('') + '</select>', true)
+      + f('Chỗ chạy (lớp Hybrid)', '<select name="run">' + _AI_GF_RUN.map(([v, t]) => '<option value="' + v + '">' + escHtml(t) + '</option>').join('') + '</select>', true)
       + f('Dụng cụ có sẵn *', '<textarea name="equipment" rows="3" required placeholder="VD: 3 SkiErg, 2 Row, 1 sled, 10 cặp tạ đơn 5–20 kg, 8 wall ball 6/9 kg, 6 KB 12–24 kg"></textarea>', true)
       + f('Mục tiêu lớp', '<textarea name="goal" rows="2" placeholder="VD: chuẩn bị giải HYROX tháng 12, thể lực chung"></textarea>', true)
       + f('Ghi chú / hạn chế', '<textarea name="notes" rows="2" placeholder="VD: phòng không có chỗ chạy — dùng máy chạy; nhiều học viên đau gối"></textarea>', true)
@@ -10033,8 +10042,21 @@ function aiBuildGroupPrompt(d) {
     ['Mục tiêu', v('goal')],
     ['Ghi chú / hạn chế', v('notes')],
   ].filter(([, x]) => x).map(([k, x]) => '- ' + k + ': ' + x).join('\n');
+  const hybrid = fmt === 'hyrox';
+  const P = Object.fromEntries(_AI_GF_PHASES), RN = Object.fromEntries(_AI_GF_RUN);
+  // Loại buổi theo số buổi/tuần — đúng bảng "CHỌN LOẠI BUỔI" trong GROUP_METHOD.
+  const TYPES = ['Compromised', 'Strength Endurance', 'Engine', 'Foundation', 'Partner'].slice(0, spw);
+  if (hybrid && v('phase') === 'peak' && spw >= 2) TYPES[spw - 1] = 'Race Sim';
   const rules = [
     'Soạn giáo án LỚP NHÓM ' + spw + ' buổi/tuần theo mục LỚP NHÓM trong chỉ dẫn. Khoá buổi: ' + keys + '.',
+    ...(hybrid ? [
+      'Lớp HYBRID: theo mục LỚP HYBRID / HYROX. Loại buổi: ' + TYPES.map((t, i) => 'Session' + String.fromCharCode(65 + i) + ' = ' + t).join(', ')
+        + '. Label mỗi buổi BẮT ĐẦU bằng đúng loại đó ("' + TYPES[0] + ' — …").',
+      'Giai đoạn block: ' + (P[v('phase')] || P.none) + '. Chỗ chạy: ' + (RN[v('run')] || RN.outdoor)
+        + (v('run') === 'none' ? ' — bài thay chạy ghi kèm "(thay chạy)" trong tên.' : '.'),
+      'Buổi Compromised / Engine / Race Sim: tổng thời gian chạy NHIỀU HƠN tổng thời gian ở trạm (server kiểm). Chạy theo thời gian, không theo mét.',
+      'Trong tóm tắt nhắc bài test mỗi 4 tuần (1 km → 50 wall ball → 1 km) và cách thay dụng cụ đang thiếu.',
+    ] : []),
     'Chia trạm / theo cặp / theo lượt dựa đúng SỐ dụng cụ ở trên và số người; mỗi khối chạy bằng một đồng hồ.',
     'Mỗi bài chính có 3 mức Dễ / Chuẩn / Khó trong cue. Tổng thời gian khớp ' + dur + ' phút, tính cả chuyển trạm.',
     'Ghi một dòng Setup (dụng cụ chuẩn bị) cho mỗi buổi — không chép từng bài, thẻ duyệt tự vẽ bảng — rồi gọi propose_new_client MỘT lần với isGroup: true, '
@@ -10043,7 +10065,7 @@ function aiBuildGroupPrompt(d) {
   ];
   const prompt = 'Lớp nhóm mới:\n' + info + '\n\nYêu cầu:\n' + rules.map((r, i) => (i + 1) + '. ' + r).join('\n');
   const show = 'Soạn giáo án lớp nhóm: ' + name + ' · ' + F[fmt] + (size > 0 ? ' · ' + size + ' người' : '')
-    + ' · ' + spw + ' buổi/tuần';
+    + ' · ' + spw + ' buổi/tuần' + (hybrid && v('phase') && v('phase') !== 'none' ? ' · ' + (P[v('phase')] || '').split(' — ')[0] : '');
   return { prompt, show, email: '' };
 }
 
@@ -19238,6 +19260,12 @@ const I18N_FULL = {
   'Ghi đè giáo án của {0}? Bạn đang mở {1}.': 'Overwrite {0}\'s program? You have {1} open.',
   'Giữ nguyên': 'Unchanged', 'Xoá buổi': 'Sessions removed', 'Set/tuần': 'Sets/week', 'Thời lượng': 'Duration',
   'Ngoại lệ': 'Exceptions', 'Lưu ý': 'Notes', 'Kiểu buổi': 'Session style', 'Nối tạ cũ': 'Weights carried over',
+  'Chạy / trạm': 'Run / stations', 'Giai đoạn (lớp Hybrid)': 'Block stage (Hybrid class)', 'Chỗ chạy (lớp Hybrid)': 'Running space (Hybrid class)',
+  'Nền — tuần 1–4 (kỹ thuật, tăng quãng chạy)': 'Base — weeks 1–4 (technique, build running)', 'Compromised — tuần 5–8': 'Compromised — weeks 5–8',
+  'Mô phỏng thi — tuần 9–10': 'Race simulation — weeks 9–10', 'Giảm tải trước giải — tuần 11–12': 'Taper — weeks 11–12',
+  'Không có giải — duy trì': 'No race — maintain', 'Chạy ngoài trời / sân': 'Outdoor / track running',
+  'Máy chạy (ghi số máy ở dụng cụ)': 'Treadmills (list how many under equipment)',
+  'Không có chỗ chạy — thay bằng Row / Bike / SkiErg': 'No running space — use Row / Bike / SkiErg',
   'Truyền thống — bài chính, bài phụ, circuit cuối': 'Classic — main lifts, accessories, finisher circuit',
   'Mật độ — 3 block superset × 2 bài, giữ tim cao': 'Density — 3 superset blocks × 2 exercises, heart rate high',
   'Hôm nay chưa log ({0})': 'Not logged today ({0})', 'Chưa log buổi {0}': 'Session not logged: {0}',

@@ -664,7 +664,7 @@ async function execTool(db, name, a, role, ctx) {
     const dropped = Object.keys(old).filter((k) => drop.has(k) && !(k in r.program)).sort();
     // Kiểm theo khung (volume, mẫu chuyển động, thời lượng) trên CẢ TUẦN sau khi ghép.
     const cd = c.data() || {};
-    const opts = { level: cd.level, isGroup: cd.isGroup === true,
+    const opts = { level: cd.level, isGroup: cd.isGroup === true, groupFormat: cd.groupFormat || null,
       minutes: Number(a.sessionMinutes) || Number(cd.durationMin) || null,
       volumeExceptions: a.volumeExceptions, coverageExceptions: a.coverageExceptions };
     const chk = PC.checkProgram(program, opts);
@@ -693,6 +693,7 @@ async function execTool(db, name, a, role, ctx) {
         dropped,
         volume: chk.volume,
         minutes: chk.est,
+        runSplit: chk.runSplit || null,
         waived: chk.waived,
         warnings: [...chk.warnings, ...inherited.map((m) => "Có sẵn từ giáo án cũ: " + m)].slice(0, 12),
         table: compactProgram(program),
@@ -731,7 +732,7 @@ async function execTool(db, name, a, role, ctx) {
           note: "Đổi HẾT các bài trên sang tên ĐÚNG Y trong thư viện (search_exercises với queries), rồi đề xuất lại." };
       }
       const why = checkRationale(r.program);
-      chk = PC.checkProgram(r.program, { level: a.level || "Beginner", isGroup: a.isGroup === true,
+      chk = PC.checkProgram(r.program, { level: a.level || "Beginner", isGroup: a.isGroup === true, groupFormat: a.groupFormat || null,
         minutes: Number(a.sessionMinutes) || Number(a.durationMin) || null,
         volumeExceptions: a.volumeExceptions, coverageExceptions: a.coverageExceptions });
       if (why.length || chk.errors.length) {
@@ -781,6 +782,7 @@ async function execTool(db, name, a, role, ctx) {
         login: isGroup ? "lớp nhóm — không đăng nhập" : (em || "chưa có email — khách này coach tự quản"),
         volume: chk ? chk.volume : {},
         minutes: chk ? chk.est : {},
+        runSplit: chk ? chk.runSplit || null : null,
         waived: chk ? chk.waived : [],
         warnings: chk ? chk.warnings.slice(0, 12) : [],
       },
@@ -799,7 +801,7 @@ async function execTool(db, name, a, role, ctx) {
 const LEVELS = ["Beginner", "Intermediate", "Advanced"];
 /** Lớp nhóm: trình độ trộn lẫn là chuyện thường. */
 const GROUP_LEVELS = [...LEVELS, "Mixed"];
-const GROUP_FORMAT_VI = { hyrox: "HYROX / conditioning", strength: "Strength nhóm nhỏ", circuit: "Circuit giảm mỡ" };
+const GROUP_FORMAT_VI = { hyrox: "Hybrid / HYROX", strength: "Strength nhóm nhỏ", circuit: "Circuit giảm mỡ" };
 /** Tên lớp luôn bắt đầu bằng "Lớp · " để nhìn danh sách khách là phân biệt được. */
 function groupName(name) {
   const n = String(name || "").trim();
@@ -1045,30 +1047,52 @@ const GROUP_METHOD = `LỚP NHÓM (hồ sơ có isGroup, hoặc coach nói "lớ
 - Tạo lớp mới: propose_new_client với isGroup:true, groupFormat, groupSize, durationMin, equipment,
   level "Mixed" nếu trình độ trộn. KHÔNG email. Sửa giáo án lớp: propose_program như khách (chỉ cần
   get_client + get_program trước — lớp không có mức tạ chung).
-- MỘT giáo án cho cả lớp, trình độ trộn: mỗi bài chính ghi trong cue 3 mức "Dễ / Chuẩn / Khó"
-  (bài thay thế, biên độ, tạ, tốc độ). Không ghi tạ cố định — ghi RPE hoặc "tạ để dư 2–3 rep".
-- DỤNG CỤ THEO SỐ NGƯỜI: dụng cụ ít hơn số người thì chia TRẠM xoay vòng, làm THEO CẶP (một người làm
-  một người nghỉ/làm bài phụ), hoặc chia LƯỢT. Ghi rõ cách chia ở tên pha, ví dụ
-  "Trạm — 4 trạm × 3 người · đổi trạm mỗi 4 phút". Không xếp hai trạm dùng cùng dụng cụ khan hiếm.
-- ĐỒNG HỒ: mỗi khối chạy được bằng MỘT đồng hồ — EMOM, AMRAP, interval làm/nghỉ (40/20, 45/15),
-  vòng có giới hạn thời gian. Ghi setsReps theo dạng app đọc được: "1 × 12 phút EMOM", "1 × 10 phút AMRAP",
-  "8 vòng · 40s làm / 20s nghỉ", "4 vòng × 12", "3 × 250m". Ghi đồng hồ của khối trong tên pha.
-- THỜI LƯỢNG: warmup chung 8–10 phút → khối chính → finisher → giãn cơ 3–5 phút. Cộng đúng thời lượng
-  lớp, tính cả chuyển trạm (~1 phút mỗi lần đổi) và giải thích ngắn.
-- AN TOÀN: lớp đông (> 8 người một coach) không dùng bài kỹ thuật cao tải nặng (cử Olympic, test 1RM,
-  box jump cao); ưu tiên bài dễ hướng dẫn, dễ quan sát cả phòng.
-- THEO KIỂU LỚP:
-  · hyrox — chạy xen trạm (SkiErg, Row, Sled push/pull, Burpee Broad Jump, Farmer Carry, Sandbag Lunge,
-    Wall Ball): luyện "chạy khi đã mỏi" + một khối sức bền cơ ngắn (lunge/squat/hinge). Một buổi trong tuần
-    thiên aerobic nền (nói được câu ngắn), một buổi thiên tốc độ/ngưỡng.
-  · strength — nhóm nhỏ 3–6 người, cùng bài nhưng mỗi người tạ riêng: 1–2 bài chính nhiều khớp 3–5 × 3–8
-    (nghỉ 2–3 phút, dùng thời gian nghỉ cho bài phụ/mobility nhẹ), rồi superset phụ trợ. Theo khung PHƯƠNG
-    PHÁP ở trên cho rep và tăng tạ. Nhắc coach: muốn theo dõi tạ từng người thì mỗi người cần hồ sơ riêng.
-  · circuit — 6–10 trạm toàn thân, xen thân trên / thân dưới / core / cardio, 30–45s làm / 15–30s nghỉ,
-    2–4 vòng, RPE 7–8; không để hai trạm cùng nhóm cơ đứng liền nhau.
-- NHIỀU BUỔI/TUẦN: mỗi buổi một trọng tâm khác (chân / đẩy-kéo / engine…), không lặp y nguyên — nhưng
-  buổi nào cũng đủ toàn thân, vì học viên chỉ đi 1 buổi/tuần vẫn phải được tập trọn.
-- Khi in giáo án lớp: thêm dòng "Setup" (dụng cụ chuẩn bị theo số người) cho mỗi buổi.`;
+- MỘT giáo án cho cả lớp, trình độ trộn: CÙNG động tác cho mọi người, chỉ khác tải/quãng — mỗi bài chính
+  ghi trong cue 3 mức "Dễ / Chuẩn / Khó" (tạ, biên độ, tốc độ, bài thay). Không ghi tạ cố định.
+- DỤNG CỤ THEO SỐ NGƯỜI: trạm có ÍT dụng cụ nhất quyết định số người làm cùng lúc. Dụng cụ ít hơn số người
+  → chia TRẠM xoay vòng theo đợt, làm THEO CẶP "You go, I go" (một người làm, một người chạy/nghỉ, hoặc chia
+  đôi rep), hoặc chia LƯỢT. Ghi rõ cách chia ở tên pha, VD "Trạm — 4 trạm × 3 người · đổi mỗi 4 phút".
+  Không xếp hai trạm dùng cùng dụng cụ khan hiếm.
+- ĐỒNG HỒ: mỗi khối chạy bằng MỘT đồng hồ — EMOM, E2MOM, AMRAP, làm/nghỉ (40/20), vòng giới hạn giờ.
+  setsReps app đọc được: "1 × 12 phút EMOM", "1 × 10 phút AMRAP", "8 vòng · 40s làm / 20s nghỉ",
+  "4 vòng × 12", "4 × 3 phút", "3 × 250m". Ghi đồng hồ của khối trong tên pha.
+- THỜI LƯỢNG: cộng đúng thời lượng lớp, tính cả chuyển trạm (~1 phút mỗi lần đổi).
+- AN TOÀN: lớp đông (> 8 người một coach) không dùng bài kỹ thuật cao tải nặng (cử Olympic, test 1RM, box
+  jump cao); ưu tiên bài dễ hướng dẫn, dễ quan sát cả phòng.
+- Khi in giáo án lớp: thêm dòng "Setup" (dụng cụ chuẩn bị theo số người) cho mỗi buổi.
+
+LỚP HYBRID / HYROX (groupFormat hyrox) — theo cách các training club đang chạy lớp
+- 8 TRẠM THI: SkiErg, Sled Push, Sled Pull, Burpee Broad Jump, Row, Farmers Carry, Sandbag Lunges, Wall Balls.
+  Chạy chiếm ~60% thời gian thi → trong buổi Compromised / Engine / Race Sim, TỔNG THỜI GIAN CHẠY PHẢI
+  NHIỀU HƠN TỔNG THỜI GIAN Ở TRẠM (server kiểm). Lớp trộn trình độ: chạy THEO THỜI GIAN ("4 × 3 phút"), không
+  theo mét, để cả lớp bắt đầu và xong cùng lúc.
+- LOẠI BUỔI — label mỗi buổi BẮT ĐẦU bằng đúng một loại: "Compromised — …", "Strength Endurance — …",
+  "Engine — …", "Foundation — …", "Race Sim — …", "Partner — …". Mẫu cho 60 phút (45 phút thì co khối chính):
+  · Compromised (buổi chủ lực): warmup 10' (row/ski nhẹ + động tác của buổi) → kỹ thuật 1 trạm 8' (lúc còn
+    khoẻ, mỗi tuần đổi trạm) → khối chính 30': 4–6 vòng [chạy 3–4' → trạm 2–3'] chạy NGAY sau trạm → finisher
+    7' (wall ball hoặc burpee broad jump) → giãn 5'.
+  · Strength Endurance: giữ chất lượng động tác ở trạm khi mỏi — sled, lunge, carry, thrust/squat tải vừa;
+    khối EMOM/E2MOM 2–3 bài, vẫn có 1 khối chạy ngắn. Đây là buổi được phép trạm nhiều hơn chạy.
+  · Engine: aerobic dài, nói được câu ngắn (RPE 5–6): interval chạy/máy 4–8' và chuyển trạm nhẹ; ít tạ.
+  · Foundation (người mới / quay lại): dạy 8 động tác thi dạng circuit, tải nhẹ, chạy ngắn.
+  · Race Sim: chạy xen trạm như thi — nửa giải (4 lần chạy + 4 trạm) hoặc trọn giải ở đỉnh block.
+  · Partner: hai người cùng chạy, chia rep trạm "You go, I go" — dùng khi dụng cụ thiếu hoặc lớp đông.
+- CHỌN LOẠI BUỔI theo số buổi/tuần: 1 buổi → Compromised. 2 → Compromised + Strength Endurance (cặp các gym hay
+  dùng). 3 → + Engine. 4 → + Foundation (hoặc Partner nếu lớp đông). 5 → + Partner. Coach nói khác thì theo coach.
+- BLOCK 12 TUẦN (coach ghi giai đoạn): tuần 1–4 NỀN (kỹ thuật, cường độ vừa, tăng dần quãng chạy) · tuần 5–8
+  COMPROMISED (cặp chạy–trạm dài hơn, nghỉ ít hơn) · tuần 9 nửa giải, tuần 10 trọn giải (một buổi đổi thành Race
+  Sim) · tuần 11–12 TAPER (giảm khối lượng ~40%, giữ cường độ). Không có giải: xoay vòng nền ↔ compromised.
+- BÀI TEST mỗi 4 tuần (nhắc trong tóm tắt, không tạo buổi riêng): chạy 1 km → 50 wall ball → chạy 1 km; theo dõi
+  chênh lệch thời gian hai lần chạy.
+- THIẾU DỤNG CỤ / CHỖ CHẠY — thay: SkiErg → Row damper cao hoặc kéo dây kháng lực; Sled push → đẩy đĩa tạ trên
+  thảm, banded march; Sled pull → kéo dây có tải hoặc seated row nặng; Wall ball → vạch trên tường hoặc ném bóng
+  cho bạn tập; Sandbag lunge → barbell trước ngực hoặc áo tạ. Không có chỗ chạy → Row / Bike / SkiErg / máy chạy,
+  TÊN BÀI ghi kèm "(thay chạy)" để server tính là phần chạy.
+- KHÁC: strength — nhóm nhỏ 3–6 người, mỗi người tạ riêng: 1–2 bài chính 3–5 × 3–8 (nghỉ dùng cho bài phụ/
+  mobility), rồi superset phụ trợ; muốn theo dõi tạ từng người thì mỗi người cần hồ sơ riêng. circuit — 6–10 trạm
+  toàn thân, xen thân trên / dưới / core / cardio, 30–45s làm / 15–30s nghỉ, 2–4 vòng, RPE 7–8.
+- NHIỀU BUỔI/TUẦN: mỗi buổi một trọng tâm, nhưng buổi nào cũng đủ toàn thân — học viên chỉ đi 1 buổi vẫn được
+  tập trọn.`;
 
 // ── Giải thích + chỉnh buổi theo thể trạng ──────────────────────────────
 const EXPLAIN_METHOD = `GIẢI THÍCH LÝ DO CHỌN BÀI
