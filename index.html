@@ -9727,6 +9727,7 @@ function aiPaint() {
   const log = document.getElementById('ai-log');
   if (!log) return;
   if (_aiForm === 'ready') { log.innerHTML = _aiReadyForm(); log.scrollTop = 0; return; }
+  if (_aiForm === 'edit') { log.innerHTML = _aiEditForm(); log.scrollTop = 0; return; }
   if (_aiForm && !_aiMsgs.length) {
     log.innerHTML = _aiForm === 'group' ? _aiGroupForm() : _aiNewClientForm(); log.scrollTop = 0; return;
   }
@@ -9752,6 +9753,9 @@ function aiPaint() {
       + '<button type="button" class="ai-eg ai-eg-main" onclick="aiFormOpen(\'ready\')">'
         + '<span class="ai-eg-t">Hôm nay khách không khoẻ — chỉnh buổi</span>'
         + '<span class="ai-eg-s">Ngủ kém, mệt, ốm, đau ở đâu… → bảng chỉnh buổi hôm nay</span></button>'
+      + '<button type="button" class="ai-eg ai-eg-main" onclick="aiFormOpen(\'edit\')">'
+        + '<span class="ai-eg-t">Sửa giáo án — chấn thương, đổi số buổi, đổi mục tiêu</span>'
+        + '<span class="ai-eg-s">Giữ bài cũ + tạ cũ, chỉ thay bài buộc phải thay, thêm rehab</span></button>'
       + ['Vì sao chọn từng bài trong buổi ' + (activeDay || 'đang mở') + '?',
          'Viết đoạn ngắn giải thích giáo án hiện tại để gửi khách',
          'Khách tiến bộ thế nào 4 tuần qua? Có nên tăng tạ không?']
@@ -9806,6 +9810,12 @@ function _aiCard(m, i) {
     if ((p.kept || []).length) rows.push(['Giữ nguyên', p.kept.join(', ')]);
     // Bài viết tên thư viện được đổi về tên cũ để nối tạ — coach biết tạ cũ vẫn còn.
     if ((p.reused || []).length) rows.push(['Nối tạ cũ', p.reused.map((x) => x[1]).join(', ')]);
+    // Sửa giáo án: coach thấy ngay đổi gì so với bản đang có (theo tên bài, bỏ khởi động/rehab).
+    if (p.diff) {
+      if ((p.diff.removed || []).length) rows.push(['Bỏ', p.diff.removed.join(', ')]);
+      if ((p.diff.added || []).length) rows.push(['Thêm', p.diff.added.join(', ')]);
+      rows.push(['Giữ', p.diff.kept + ' bài (đúng tên cũ)']);
+    }
     if ((p.dropped || []).length) rows.push(['Xoá buổi', p.dropped.join(', ')]);
     _aiCheckRows(p, rows);
   } else if (a.kind === 'create_client') {
@@ -10117,9 +10127,73 @@ function aiBuildReadyPrompt(d, clientName) {
   return { prompt, show, email: '' };
 }
 
+// ── Form "Sửa giáo án" (2026-10-20) ─────────────────────────────────────
+// Sửa giáo án ĐANG CÓ theo EDIT_METHOD (functions/assistant.js): đổi ít nhất, giữ tên + tạ cũ, rehab theo loại.
+const _AI_EF_REASONS = ['Chấn thương / đau', 'Đổi số buổi / tuần', 'Đổi mục tiêu', 'Khác'];
+const _AI_EF_INJURY = ['Bầm / dập cơ (va chạm)', 'Căng / rách cơ', 'Đau gân', 'Đau khớp', 'Sau mổ / bác sĩ đã chỉ định', 'Chưa rõ'];
+function _aiEditForm() {
+  const nm = escHtml((activeClient && (activeClient.name || activeClient.id)) || '');
+  const nDays = Object.keys(getProgram() || {}).length;
+  const opt = (arr, sel) => arr.map((v) => '<option' + (v === sel ? ' selected' : '') + '>' + escHtml(v) + '</option>').join('');
+  const f = (label, ctrl, wide) => '<label class="ai-nf-f' + (wide ? ' wide' : '') + '"><span>' + label + '</span>' + ctrl + '</label>';
+  return '<form class="ai-nf" id="ai-nf" onsubmit="aiFormSend(event)" novalidate>'
+    + '<input type="hidden" name="kind" value="edit">'
+    + '<div class="ai-nf-h">Sửa giáo án của ' + nm + '</div>'
+    + '<p class="ai-nf-sub">Giữ bài cũ và tạ cũ, chỉ thay bài buộc phải thay. Thẻ duyệt hiện rõ bỏ / thêm / giữ.</p>'
+    + '<div class="ai-nf-g">'
+      + f('Lý do sửa', '<select name="reason">' + opt(_AI_EF_REASONS, _AI_EF_REASONS[0]) + '</select>', true)
+      + f('Vùng đau', '<input name="area" autocomplete="off" placeholder="VD: đùi sau trái">')
+      + f('Loại chấn thương', '<select name="injury">' + opt(_AI_EF_INJURY, 'Chưa rõ') + '</select>')
+      + f('Mức đau (0–10)', '<input name="pain" type="number" inputmode="numeric" min="0" max="10" placeholder="—">')
+      + f('Buổi / tuần', '<select name="spw"><option value="">Giữ nguyên (' + nDays + ')</option>' + opt(['1', '2', '3', '4', '5', '6'], '') + '</select>')
+      + f('Bài đang đau / không tập được', '<input name="hurts" autocomplete="off" placeholder="VD: RDL, leg curl, chạy nhanh">', true)
+      + f('Yêu cầu thêm', '<textarea name="notes" rows="2" placeholder="VD: thêm bài rehab đùi sau; vẫn giữ tập ngực nặng"></textarea>', true)
+    + '</div>'
+    + '<div class="ai-nf-err" id="ai-nf-err" role="alert"></div>'
+    + '<div class="ai-nf-btns">'
+      + '<button type="button" class="ai-cf-cancel" onclick="aiFormClose()">Huỷ</button>'
+      + '<button type="submit" class="ai-cf-yes">Sửa giáo án</button>'
+    + '</div></form>';
+}
+/** Dữ liệu form sửa giáo án -> { prompt, show } hoặc { error }. Không đụng DOM. */
+function aiBuildEditPrompt(d, clientName, nDays) {
+  const v = (k) => String(d[k] == null ? '' : d[k]).trim();
+  const reason = v('reason') || 'Khác';
+  const injury = /chấn thương/i.test(reason);
+  if (injury && !v('area')) return { error: 'Ghi vùng đau để Pulse biết bài nào phải bỏ.' };
+  if (!injury && !v('notes') && !v('spw')) return { error: 'Ghi yêu cầu sửa (hoặc chọn số buổi mới).' };
+  const pain = v('pain') === '' ? null : Math.max(0, Math.min(10, parseInt(v('pain'), 10) || 0));
+  const spw = parseInt(v('spw'), 10) || null;
+  const info = [
+    ['Lý do', reason],
+    ['Vùng đau', v('area')],
+    ['Loại chấn thương', injury ? v('injury') : ''],
+    ['Mức đau', pain == null ? '' : pain + '/10'],
+    ['Bài đang đau / không tập được', v('hurts')],
+    ['Số buổi/tuần', spw ? spw + ' (hiện ' + nDays + ')' : 'giữ nguyên ' + nDays],
+    ['Yêu cầu thêm', v('notes')],
+  ].filter(([, x]) => x).map(([k, x]) => '- ' + k + ': ' + x).join('\n');
+  const keys = Array.from({ length: spw || nDays || 1 }, (_, i) => 'Session' + String.fromCharCode(65 + i)).join(', ');
+  const rules = [
+    'Sửa giáo án ĐANG CÓ của ' + clientName + ' theo mục SỬA GIÁO ÁN ĐANG CÓ — không soạn mới từ đầu. Khoá buổi: ' + keys + '.',
+    'Đọc hết trước (get_client, get_program, get_exercise_loads, get_training_history). Giữ cấu trúc buổi và MỌI bài không xung đột — đúng TÊN CŨ, cue ghi Last load.',
+    ...(injury ? [
+      'Xếp từng bài cũ vào BỎ / GIỮ + LƯU Ý / GIỮ NGUYÊN theo vùng ' + v('area') + '. Bài bỏ thay bằng bài cùng mục đích không đụng vùng đau.',
+      'Thêm pha rehab "🩹 Rehab ' + v('area') + ' — không đau (≤ 3/10)" (tag warmup) ở đầu MỖI buổi, theo loại: ' + (v('injury') || 'Chưa rõ') + '. Ghi mốc quay lại trong focus.',
+      'Bỏ hẳn một mẫu chuyển động → coverageExceptions kèm lý do chấn thương.',
+    ] : []),
+    ...(spw && spw !== nDays ? ['Đổi ' + nDays + ' → ' + spw + ' buổi: gộp/tách từ bài cũ' + (spw < nDays ? ', buổi bỏ ghi vào dropSessions' : '') + '.'] : []),
+    'Gửi ĐỦ mọi buổi đổi trong MỘT lần propose_program. Tóm tắt: BỎ gì (vì sao) · GIỮ + LƯU Ý gì · THÊM gì · nối tạ mấy bài · mốc quay lại.',
+  ];
+  const prompt = 'Sửa giáo án:\n' + info + '\n\nYêu cầu:\n' + rules.map((r, i) => (i + 1) + '. ' + r).join('\n');
+  const show = 'Sửa giáo án ' + clientName + ': ' + (injury ? (v('area') + ' · ' + (v('injury') || '') + (pain != null ? ' · đau ' + pain + '/10' : '')) : reason)
+    + (spw ? ' · ' + spw + ' buổi/tuần' : '');
+  return { prompt, show, email: '' };
+}
+
 function aiFormOpen(kind) {
-  if (kind === 'ready' && _aiMode !== 'client' && _aiMode !== 'self') { _aiMode = 'client'; _aiPoint(); _aiTabs(); }
-  _aiForm = kind === 'group' ? 'group' : kind === 'ready' ? 'ready' : 'client'; aiPaint();
+  if ((kind === 'ready' || kind === 'edit') && _aiMode !== 'client' && _aiMode !== 'self') { _aiMode = 'client'; _aiPoint(); _aiTabs(); }
+  _aiForm = kind === 'group' ? 'group' : kind === 'ready' ? 'ready' : kind === 'edit' ? 'edit' : 'client'; aiPaint();
   setTimeout(() => { const i = document.querySelector('#ai-nf [name="name"]'); if (i) i.focus(); }, 60);
 }
 function aiFormClose() { _aiForm = false; aiPaint(); }
@@ -10189,6 +10263,7 @@ function aiFormSend(ev) {
   const data = Object.fromEntries(new FormData(form).entries());
   const r = data.kind === 'group' ? aiBuildGroupPrompt(data)
     : data.kind === 'ready' ? aiBuildReadyPrompt(data, _aiMode === 'self' ? 'mình' : ((activeClient && (activeClient.name || activeClient.id)) || 'khách'))
+    : data.kind === 'edit' ? aiBuildEditPrompt(data, (activeClient && (activeClient.name || activeClient.id)) || 'khách', Object.keys(getProgram() || {}).length)
     : aiBuildProgramPrompt(data);
   if (r.error) {
     const e = document.getElementById('ai-nf-err');
@@ -19260,7 +19335,15 @@ const I18N_FULL = {
   'Ghi đè giáo án của {0}? Bạn đang mở {1}.': 'Overwrite {0}\'s program? You have {1} open.',
   'Giữ nguyên': 'Unchanged', 'Xoá buổi': 'Sessions removed', 'Set/tuần': 'Sets/week', 'Thời lượng': 'Duration',
   'Ngoại lệ': 'Exceptions', 'Lưu ý': 'Notes', 'Kiểu buổi': 'Session style', 'Nối tạ cũ': 'Weights carried over',
-  'Chạy / trạm': 'Run / stations', 'Giai đoạn (lớp Hybrid)': 'Block stage (Hybrid class)', 'Chỗ chạy (lớp Hybrid)': 'Running space (Hybrid class)',
+  'Chạy / trạm': 'Run / stations', 'Bỏ': 'Removed', 'Thêm': 'Added', 'Giữ': 'Kept', '{0#} bài (đúng tên cũ)': '{0} exercises (same names)',
+  'Sửa giáo án — chấn thương, đổi số buổi, đổi mục tiêu': 'Edit program — injury, sessions/week, goal',
+  'Giữ bài cũ + tạ cũ, chỉ thay bài buộc phải thay, thêm rehab': 'Keeps exercises + weights, swaps only what must change, adds rehab',
+  'Sửa giáo án của {0}': 'Edit {0}\'s program', 'Sửa giáo án': 'Edit program', 'Lý do sửa': 'Reason', 'Vùng đau': 'Painful area',
+  'Loại chấn thương': 'Injury type', 'Bài đang đau / không tập được': 'Exercises that hurt / can\'t do', 'Yêu cầu thêm': 'Extra requests',
+  'Giữ bài cũ và tạ cũ, chỉ thay bài buộc phải thay. Thẻ duyệt hiện rõ bỏ / thêm / giữ.': 'Keeps current exercises and weights, swaps only what must change. The card shows removed / added / kept.',
+  'Chấn thương / đau': 'Injury / pain', 'Đổi số buổi / tuần': 'Change sessions / week', 'Đổi mục tiêu': 'Change goal',
+  'Bầm / dập cơ (va chạm)': 'Bruise / contusion', 'Căng / rách cơ': 'Muscle strain / tear', 'Đau gân': 'Tendon pain', 'Đau khớp': 'Joint pain',
+  'Sau mổ / bác sĩ đã chỉ định': 'Post-surgery / doctor\'s protocol', 'Chưa rõ': 'Not sure', 'Giữ nguyên ({0#})': 'Keep ({0})', 'Giai đoạn (lớp Hybrid)': 'Block stage (Hybrid class)', 'Chỗ chạy (lớp Hybrid)': 'Running space (Hybrid class)',
   'Nền — tuần 1–4 (kỹ thuật, tăng quãng chạy)': 'Base — weeks 1–4 (technique, build running)', 'Compromised — tuần 5–8': 'Compromised — weeks 5–8',
   'Mô phỏng thi — tuần 9–10': 'Race simulation — weeks 9–10', 'Giảm tải trước giải — tuần 11–12': 'Taper — weeks 11–12',
   'Không có giải — duy trì': 'No race — maintain', 'Chạy ngoài trời / sân': 'Outdoor / track running',

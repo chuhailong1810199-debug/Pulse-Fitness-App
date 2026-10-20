@@ -273,6 +273,10 @@ Key routing rules:
 - **Khung 1-1 kiểm bằng code** (`program-check.js`): trần volume theo trình độ, ≤ ~10 set/nhóm cơ/buổi, đủ 8 mẫu
   chuyển động, thời lượng buổi. Ngoại lệ có chủ ý → `volumeExceptions` / `coverageExceptions` kèm lý do. Sửa vài
   buổi: lỗi có sẵn ở giáo án cũ chỉ thành lời nhắc (`newErrors`).
+- **Sửa giáo án đang có** (2026-10-20): `EDIT_METHOD` (assistant.js) — đổi ít nhất, giữ tên + tạ cũ, xếp bài cũ vào
+  bỏ / giữ + lưu ý / giữ nguyên, pha "🩹 Rehab" (tag warmup) theo LOẠI chấn thương, mốc quay lại. Form "Sửa giáo án"
+  trong tab khách. Server: `fillMuscles()` gắn nhóm cơ cho tên cũ không có trong thư viện (so từ động tác, bỏ dụng cụ);
+  thẻ duyệt hiện Bỏ / Thêm / Giữ (`programDiff`).
 - **Lý do chọn bài** (2026-10-15): mỗi buổi có `focus`, mỗi bài pha strength/accessories có `why` — lưu CÙNG
   giáo án. `checkRationale()` chặn đề xuất thiếu. App hiện `why` ở ô "i" và `focus` dưới tiêu đề buổi, cho MỌI người
   (coach + khách). Hỏi "vì sao tập bài X" → trợ lý trả lời từ `why` đã lưu; không có thì phải nói rõ là suy luận.

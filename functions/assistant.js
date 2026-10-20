@@ -43,6 +43,66 @@ const MAX_STEPS_DESIGN = 14;
 const TIME_BUDGET_MS = 230 * 1000;
 const HARD_STOP_MS = 50 * 1000;
 
+/**
+ * Bài pha chính/phụ chưa có nhóm cơ (tên cũ không có trong thư viện: "Leg Press", "Shoulder Press") → không
+ * được đếm volume, không tô hình cơ thể, kiểm khung bị sai. Lấy từ: (1) chính bài đó trong giáo án cũ, (2) bài
+ * thư viện gần nhất nếu giống ≥ 50% số từ. Trả danh sách bài đã gắn để hiện trên thẻ.
+ */
+function fillMuscles(program, oldProgram, idx) {
+  const { matchExercise: mx } = require("./program-lib.js");
+  const oldM = {};
+  for (const d of Object.values(oldProgram || {})) for (const ph of (d && d.phases) || []) for (const x of (ph && ph.exercises) || []) {
+    if (x && x.name && x.muscles && Object.keys(x.muscles).length) oldM[x.name] = x.muscles;
+  }
+  // Chỉ so TỪ ĐỘNG TÁC: bỏ dụng cụ ("Barbell Bench Press" không được khớp "Barbell Overhead Press" chỉ vì chung
+  // "barbell press"), bỏ phần trong ngoặc, gộp số ít/số nhiều ("Bicep Curl" ↔ "Biceps Curl").
+  const EQUIP = new Set(["barbell", "dumbbell", "db", "bb", "kettlebell", "kb", "cable", "band", "banded", "machine", "bodyweight",
+    "bw", "smith", "ez", "bar", "weighted", "plate", "hoặc", "or", "nhẹ", "light"]);
+  const stem = (w) => (w.length > 3 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w);
+  const words = (t) => [...new Set(String(t || "").toLowerCase().replace(/\(.*?\)/g, " ").replace(/\bpull[\s-]?ups?\b/g, "pullup")
+    .replace(/\bpush[\s-]?ups?\b/g, "pushup").split(/[^a-z0-9à-ỹđ]+/).filter((w) => w.length > 1 && !EQUIP.has(w)).map(stem))];
+  const lib = (idx && idx.lib) || [];
+  const libWords = lib.map((e) => [e, words(e.name)]);
+  const filled = [];
+  for (const d of Object.values(program || {})) for (const ph of (d && d.phases) || []) {
+    const tag = normalizePhaseTag(ph);
+    if (tag !== "strength" && tag !== "accessories") continue;
+    for (const x of (ph && ph.exercises) || []) {
+      if (!x || !x.name || (x.muscles && Object.keys(x.muscles).length)) continue;
+      if (oldM[x.name]) { x.muscles = oldM[x.name]; continue; }
+      const a = words(x.name);
+      if (!a.length) continue;
+      let best = null, bestS = 0;
+      for (const [e, b] of libWords) {
+        if (!b.length || !(e.muscles && Object.keys(e.muscles).length)) continue;
+        const hit = b.filter((w) => a.includes(w)).length;
+        const sc = hit / (a.length + b.length - hit);
+        if (sc > bestS) { bestS = sc; best = e; }
+      }
+      if (!best || bestS < 0.5) continue;
+      const r = mx(best.name, idx);
+      x.muscles = (r.ex && r.ex.muscles) || best.muscles;
+      filled.push(`${x.name} ≈ ${best.name}`);
+    }
+  }
+  return filled;
+}
+
+/** Đổi gì so với giáo án cũ (theo TÊN bài, cả tuần): bỏ / thêm / giữ — hiện trên thẻ duyệt. */
+function programDiff(oldProgram, newProgram) {
+  // Mảng rồi mới thành Set (không gọi .add — test chặn mọi chuỗi trông như lệnh ghi Firestore trong file này).
+  const names = (p) => {
+    const out = [];
+    for (const d of Object.values(p || {})) for (const ph of (d && d.phases) || []) {
+      if (normalizePhaseTag(ph) === "warmup") continue;
+      for (const x of (ph && ph.exercises) || []) if (x && x.name) out.push(String(x.name).trim());
+    }
+    return new Set(out);
+  };
+  const o = names(oldProgram), n = names(newProgram);
+  return { removed: [...o].filter((x) => !n.has(x)), added: [...n].filter((x) => !o.has(x)), kept: [...n].filter((x) => o.has(x)).length };
+}
+
 /** Ghép buổi đổi lên giáo án: buổi không gửi thì giữ, buổi trong drop thì bỏ. Khoá xếp A→Z. */
 function mergeProgram(current, changed, drop) {
   const d = new Set((Array.isArray(drop) ? drop : []).map(String));
@@ -308,7 +368,7 @@ async function libFor(db, oldProgram) {
   }
   const keep = new Set(names);
   const idx = buildLibIndex(lib);
-  return { errors: [], resolve: (p) => resolveProgram(p, idx, { keepNames: keep }) };
+  return { errors: [], idx, resolve: (p) => resolveProgram(p, idx, { keepNames: keep }) };
 }
 
 /**
@@ -647,6 +707,7 @@ async function execTool(db, name, a, role, ctx) {
     // Báo MỌI lỗi trong một lần — tên bài lẫn thiếu why/focus. Báo từng đợt (12 lỗi
     // tên, sửa xong mới tới lỗi why) thì giáo án 30 bài cần 4–5 vòng và chạm trần.
     const r = lib.resolve(a.program);
+    const inferred = fillMuscles(r.program, old, lib.idx);
     const why = checkRationale(r.program);
     if (r.errors.length || why.length) {
       const all = [...r.errors, ...why];
@@ -688,6 +749,8 @@ async function execTool(db, name, a, role, ctx) {
         exercises: v.stats.exercises,
         renamed: r.renamed.slice(0, 20),
         reused: (r.reused || []).slice(0, 20),
+        inferredMuscles: inferred.slice(0, 20),
+        diff: programDiff(old, program),
         changed: Object.keys(r.program).sort(),
         kept,
         dropped,
@@ -1040,6 +1103,40 @@ SessionB "Pull & Hinge Density (3 Blocks)"
    why: chest support takes the lower back out so he can row hard right after hip thrusts)
  Block 3 — Posture & Arms Finisher [accessories]: Face Pull 3 × 15 + DB Hammer Curl 3 × 12`;
 
+// ── Sửa giáo án đang có (2026-10-20) ─────────────────────────────────────
+// Chép từ cách giáo án Lee được sửa khi bầm đùi sau (coach duyệt, đẩy lên): đổi ít nhất có thể,
+// xếp từng bài vào bỏ / giữ + lưu ý / giữ nguyên, rehab theo LOẠI chấn thương, mốc quay lại.
+const EDIT_METHOD = `SỬA GIÁO ÁN ĐANG CÓ (chấn thương, đổi số buổi, đổi mục tiêu) — KHÁC soạn mới
+1. ĐỌC HẾT trước: get_client, get_program (đầy đủ), get_exercise_loads (current), get_training_history.
+2. ĐỔI ÍT NHẤT CÓ THỂ: giữ cấu trúc buổi (block/superset, thứ tự, kiểu label cũ), giữ MỌI bài không xung đột
+   với yêu cầu — ĐÚNG TÊN CŨ, giữ setsReps, cue ghi "Last load" từ current. Chỉ thay bài BUỘC phải thay. Đổi số
+   buổi: gộp/tách từ bài cũ, không viết lại từ đầu. Coach phải nhận ra giáo án của khách mình.
+3. CHẤN THƯƠNG — xếp TỪNG bài cũ vào một trong ba nhóm:
+   · BỎ: bài tải trực tiếp hoặc kéo giãn có tải vùng đau. VD đùi sau: RDL, deadlift, leg curl, nordic, KB swing,
+     good morning, back extension, chạy nước rút. Vai: overhead press, dips, bench tay rộng, kipping. Gối: nhảy,
+     lunge sâu, leg extension tạ nặng (tuỳ loại). Lưng dưới: deadlift, bent-over row, squat tạ đòn sau lưng.
+     Thay bằng bài CÙNG MỤC ĐÍCH không đụng vùng đau (thiếu hinge → thêm đùi trước / mông bằng máy / core).
+   · GIỮ + LƯU Ý: bài dùng gián tiếp vùng đau → thêm lưu ý vào cue. VD đùi sau: bench "không dùng lực đạp chân",
+     pull-up "không đá chân", row ngồi "gối hơi co", leg press "bớt biên độ nếu kéo đùi sau", khởi động Row Erg → Bike.
+   · GIỮ NGUYÊN.
+   Bỏ hẳn một mẫu chuyển động → coverageExceptions kèm lý do chấn thương. Nhóm cơ đang đau volume = 0 là đúng.
+4. REHAB: pha tag warmup tên "🩹 Rehab <vùng> — không đau (≤ 3/10)" ở ĐẦU MỖI buổi, 2–3 bài, 5–8 phút. Luật chung:
+   đau ≤ 3/10 khi tập và sáng hôm sau không tăng. Theo LOẠI chấn thương:
+   · Bầm / dập cơ (va chạm trực tiếp): đẳng trường không đau 30–50% lực (giữ 30s × 3–4), gập/duỗi CHỦ ĐỘNG trong
+     tầm không đau, bài cầu/giữ nhẹ. KHÔNG kéo giãn mạnh, KHÔNG xoa bóp hay chườm nóng chỗ bầm 1–2 tuần đầu (nguy
+     cơ cốt hoá cơ). VD đùi sau: heel dig đẳng trường (gối 30° buổi đầu → 90° buổi sau), glute bridge hold, co gối đứng.
+   · Căng / rách cơ: đẳng trường → đồng tâm nhẹ → ly tâm có kiểm soát (đùi sau: bridge → slider curl → RDL nhẹ →
+     nordic). Không kéo giãn tới đau.
+   · Đau gân: đẳng trường nặng 5 × 45s (giảm đau) rồi tải chậm nặng tempo 3-0-3; không bỏ hẳn tải.
+   · Đau khớp / chưa rõ: giữ trong tầm không đau, đổi góc / biên độ / dụng cụ / một bên; khuyên đi khám nếu kéo dài.
+   · Sau mổ / bác sĩ đã chỉ định: KHÔNG tự đặt bài rehab — hỏi coach phác đồ của bác sĩ.
+   Mỗi buổi tăng một bậc khi buổi trước không đau.
+5. MỐC QUAY LẠI — ghi trong focus: điều kiện đo được (VD gập gối không đau, bridge một chân 3 × 12 không đau, biên độ
+   bằng bên lành) rồi mới thêm lại bài đã bỏ, tải nhẹ ~50%, tăng dần.
+6. CỜ ĐỎ: sưng tăng, bầm lan rộng, tê / yếu, đau đêm, không chịu được sức nặng → khuyên đi khám, không chẩn đoán.
+7. TÓM TẮT cho coach: BỎ gì (vì sao) · GIỮ + LƯU Ý gì · THÊM rehab gì · nối tạ được mấy bài · mốc quay lại.
+   Hồ sơ ghi số buổi/tuần khác số buổi mới → nhắc coach.`;
+
 // ── Lớp nhóm ────────────────────────────────────────────────────────────
 // Một hồ sơ clients có isGroup:true = MỘT LỚP. Giáo án dùng chung cho mọi
 // học viên có mặt, trình độ trộn lẫn, dụng cụ có hạn — khác hẳn soạn 1-1.
@@ -1175,6 +1272,8 @@ GIÁO ÁN
 ${METHOD}
 
 ${PLAYBOOK}
+
+${EDIT_METHOD}
 
 ${GROUP_METHOD}
 
@@ -1523,4 +1622,4 @@ function buildMorningPush({ bookings, rec }) {
 }
 
 module.exports = { CLIENT_TOOLS, CLIENT_TOOL_NAMES, CLIENT_SYSTEM, runClientTool, TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, METHOD, GROUP_METHOD, EXPLAIN_METHOD, FORMAT_RULES, compactProgram, checkRationale, GROUP_FORMATS, groupName, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, THINK_DESIGN, designIntent, runTool, runAssistant, progSummary, shapeReply,
-  validateProgram, validateNewClient, makeClientId, LEVELS, CHECK_PARAMS, PLAYBOOK, MAX_STEPS_DESIGN, TIME_BUDGET_MS, HARD_STOP_MS, mergeProgram, exerciseHit, targetMismatch, nameInText };
+  validateProgram, validateNewClient, makeClientId, LEVELS, CHECK_PARAMS, PLAYBOOK, EDIT_METHOD, fillMuscles, programDiff, MAX_STEPS_DESIGN, TIME_BUDGET_MS, HARD_STOP_MS, mergeProgram, exerciseHit, targetMismatch, nameInText };
