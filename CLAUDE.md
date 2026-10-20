@@ -277,6 +277,9 @@ Key routing rules:
   bỏ / giữ + lưu ý / giữ nguyên, pha "🩹 Rehab" (tag warmup) theo LOẠI chấn thương, mốc quay lại. Form "Sửa giáo án"
   trong tab khách. Server: `fillMuscles()` gắn nhóm cơ cho tên cũ không có trong thư viện (so từ động tác, bỏ dụng cụ);
   thẻ duyệt hiện Bỏ / Thêm / Giữ (`programDiff`).
+- **Cấu trúc một buổi 1-1** (2026-10-20, `structureIssues`): khởi động ≥ 2 bài; buổi 45/60/75/90' cần ≥ 5/6/7/8 bài
+  chính/phụ và ≥ 12/15/18/20 set (thời lượng không rõ → coi 60'). Khối circuit ≥ 10' thì bài trong đó được tính và
+  ngưỡng set × 0,6; buổi chỉ conditioning chỉ cần khởi động. Sửa buổi nào thì buổi đó phải đạt (`newErrors` changedDays).
 - **Lý do chọn bài** (2026-10-15): mỗi buổi có `focus`, mỗi bài pha strength/accessories có `why` — lưu CÙNG
   giáo án. `checkRationale()` chặn đề xuất thiếu. App hiện `why` ở ô "i" và `focus` dưới tiêu đề buổi, cho MỌI người
   (coach + khách). Hỏi "vì sao tập bài X" → trợ lý trả lời từ `why` đã lưu; không có thì phải nói rõ là suy luận.

@@ -103,3 +103,30 @@ test('3 + 5. form: nhac focus/why, truyen sessionMinutes, co kieu buoi mat do; k
   assert.match(A.METHOD, /MẬT ĐỘ/);
   assert.match(A.METHOD, /SERVER TỰ KIỂM/);
 });
+
+test('cau truc buoi: thieu khoi dong / buoi mong bi chan, nguong theo thoi luong; buoi bai nang + WOD dai hop le', () => {
+  const ex = (n, s) => ({ name: n, setsReps: s });
+  const warm = { name: 'Warm-up', tag: 'warmup', exercises: [ex('Bike', '1 × 5 min'), ex('Band Pull-apart', '2 × 15')] };
+  // Buổi Pulse trả coach thấy "ngắn": không khởi động, 4 bài.
+  const thin = { SessionA: day([ph('strength', [ex('A', '3 × 8'), ex('B', '3 × 8')]), ph('accessories', [ex('C', '3 × 12'), ex('D', '3 × 12')])]) };
+  const ks = C.structureIssues(thin).errors.map((e) => e.k);
+  assert.ok(ks.includes('warm:SessionA') && ks.includes('struct:SessionA'), ks.join(','));
+  // Buổi mẫu Lee: khởi động 3 + 4 block × 2 bài.
+  const lee = { SessionA: day([warm, ...[1, 2, 3, 4].map((i) => ph(i < 3 ? 'strength' : 'accessories', [ex('X' + i, '3 × 8'), ex('Y' + i, '3 × 10')], 'Block ' + i))]) };
+  assert.deepStrictEqual(C.structureIssues(lee).errors, []);
+  // Buổi 45' chỉ cần 5 bài / 12 set; buổi 90' cần 8 bài.
+  const five = { SessionA: day([warm, ph('strength', ['A', 'B', 'C', 'D', 'E'].map((n) => ex(n, '3 × 8')))]) };
+  assert.deepStrictEqual(C.structureIssues(five, 45).errors, []);
+  assert.ok(C.structureIssues(lee, 90).errors.length === 0);
+  assert.ok(C.structureIssues(five, 90).errors.some((e) => e.k === 'struct:SessionA'));
+  // Bài nặng + WOD dài (buổi "Lower nặng + WOD" của coach) và buổi chỉ conditioning: hợp lệ.
+  const wod = { SessionA: day([warm, ph('strength', [ex('Squat', '4 × 5'), ex('Bench', '4 × 5'), ex('Row', '3 × 8')]),
+    ph('circuit', ['Thruster', 'Pull Up', 'Box Jump', 'Burpee'].map((n) => ex(n, '8 vòng × 10')), "WOD — 8 ROUNDS (20')")]) };
+  assert.deepStrictEqual(C.structureIssues(wod).errors, []);
+  const box = { SessionA: day([warm, ph('circuit', [ex('Shadow Boxing', '6 × 3 phút'), ex('Bag Work', '6 × 3 phút')])]) };
+  assert.deepStrictEqual(C.structureIssues(box).errors, []);
+  // Sửa đúng buổi mỏng thì không được núp sau "giáo án cũ cũng mỏng".
+  const r = C.newErrors([{ k: 'struct:SessionA', m: 'x' }, { k: 'struct:SessionB', m: 'y' }], [{ k: 'struct:SessionA' }, { k: 'struct:SessionB' }], ['SessionA']);
+  assert.deepStrictEqual(r.errors.map((e) => e.k), ['struct:SessionA']);
+  assert.deepStrictEqual(r.inherited, ['y']);
+});

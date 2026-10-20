@@ -214,6 +214,52 @@ function durationIssues(program, minutes) {
   return { errors, warnings, est };
 }
 
+// ── Cấu trúc MỘT buổi 1-1 (2026-10-20) ──────────────────────────────────
+/**
+ * Buổi coach soạn có 3–4 bài khởi động, 6–10 bài chính/phụ, 18–30 set, 50–75 phút. Pulse hay trả buổi 4–6 bài, thiếu
+ * khởi động, ~30 phút — kiểm volume theo TUẦN không bắt được. Ngưỡng theo thời lượng buổi (không biết thì coi 60').
+ */
+const STRUCT = [[45, 5, 12], [60, 6, 15], [75, 7, 18], [90, 8, 20]];
+function structureIssues(program, minutes, explicit) {
+  const target = Number(minutes) > 0 ? Number(minutes) : 60;
+  const [, minEx, minSets] = STRUCT.find(([m]) => target <= m) || STRUCT[STRUCT.length - 1];
+  const errors = [], warnings = [];
+  for (const [k, d] of Object.entries(program || {})) {
+    const phases = (d && d.phases) || [];
+    let warm = 0, ex = 0, sets = 0, work = 0, circuit = 0, circEx = 0, circMin = 0;
+    for (const ph of phases) {
+      const t = normalizePhaseTag(ph), n = ((ph && ph.exercises) || []).length;
+      if (t === "warmup") { warm += n; continue; }
+      if (t === "circuit") {
+        circuit++; circEx += n;
+        circMin += estimateMinutes({ phases: [ph] });
+        continue;
+      }
+      work++;
+      for (const x of (ph && ph.exercises) || []) { ex++; sets += parseSets(x && x.setsReps); }
+    }
+    if (warm < 2) errors.push({ k: "warm:" + k, m: `${k}: thiếu khởi động (${warm} bài) — cần pha warmup ≥ 2 bài, 5–10 phút (cardio nhẹ + mobility + kích hoạt).` });
+    // Buổi chỉ có conditioning (WOD, boxing, interval) không đếm bài chính — chỉ cần khởi động + đủ giờ.
+    const conditioning = work === 0 && circuit > 0;
+    if (!conditioning) {
+      // Bài nặng + khối WOD/circuit dài (buổi "Lower nặng + WOD" của coach): bài trong circuit cũng là bài của
+      // buổi, và khối dài đó thay một phần set làm việc.
+      const longCircuit = circMin >= 10;
+      const exN = ex + (longCircuit ? circEx : 0), setMin = longCircuit ? Math.ceil(minSets * 0.6) : minSets;
+      if (exN < minEx || sets < setMin) {
+        errors.push({ k: "struct:" + k, m: `${k}: buổi mỏng — ${exN} bài, ${sets} set làm việc; buổi ${target}' cần ≥ ${minEx} bài và ≥ ${setMin} set `
+          + "(VD 3–4 block, mỗi block 2 bài × 3–4 set). Thêm bài, đừng chỉ tăng set." });
+      }
+    }
+    const est = estimateMinutes(d);
+    if (est < target * 0.75) {
+      const m = `${k}: ước tính ~${est} phút cho buổi ${target}' — ngắn. Thêm block hoặc finisher/core cho đủ giờ.`;
+      if (explicit) errors.push({ k: "short:" + k, m }); else warnings.push(m);
+    }
+  }
+  return { errors, warnings };
+}
+
 /** Đẩy : kéo (set) — chỉ nhắc khi đẩy nhiều hơn kéo quá 1,5 lần. */
 function pushPullWarning(program) {
   let push = 0, pull = 0;
@@ -392,9 +438,14 @@ function hybridIssues(program, minutes) {
  * trước thì không bắt model sửa buổi coach không nhờ — lỗi cũ thành lời nhắc.
  * @returns {{errors:{k,m}[], inherited:string[]}}
  */
-function newErrors(next, before) {
+function newErrors(next, before, changedDays) {
   const had = new Set((before || []).map((e) => e.k));
-  return { errors: next.filter((e) => !had.has(e.k)), inherited: next.filter((e) => had.has(e.k)).map((e) => e.m) };
+  // Lỗi gắn với MỘT buổi ("struct:SessionA") mà buổi đó vừa được sửa → luôn là lỗi mới: sửa buổi nào thì buổi đó
+  // phải đạt chuẩn, không được núp sau "giáo án cũ cũng vậy".
+  const changed = new Set(changedDays || []);
+  const own = (e) => { const day = (String(e.k).match(/(Session[A-G])/) || [])[1]; return day && changed.has(day); };
+  const isNew = (e) => own(e) || !had.has(e.k);
+  return { errors: next.filter(isNew), inherited: next.filter((e) => !isNew(e)).map((e) => e.m) };
 }
 
 /**
@@ -414,9 +465,10 @@ function checkProgram(program, o = {}) {
   const v = volumeIssues(program, o.level, o.volumeExceptions);
   const c = coverageIssues(program, o.coverageExceptions);
   const d = durationIssues(program, o.minutes);
+  const st = structureIssues(program, o.minutes, Number(o.minutes) > 0);
   return {
-    errors: [...v.errors, ...c.errors, ...d.errors],
-    warnings: [...v.warnings, ...d.warnings, ...pushPullWarning(program)],
+    errors: [...v.errors, ...c.errors, ...d.errors, ...st.errors],
+    warnings: [...v.warnings, ...d.warnings, ...st.warnings, ...pushPullWarning(program)],
     volume: v.totals, est: d.est, waived: [...v.waived, ...c.waived],
   };
 }
@@ -431,4 +483,4 @@ function parseMinutes(v) {
 }
 
 module.exports = { canonMuscle, parseSets, muscleSets, volumeIssues, patternsCovered, coverageIssues, estimateMinutes,
-  durationIssues, pushPullWarning, checkProgram, newErrors, hybridIssues, stationKeys, runStationMinutes, exerciseMinutes, SESSION_TYPES, parseMinutes, VOLUME, PATTERN_KEYS, PER_SESSION_MAX };
+  durationIssues, pushPullWarning, checkProgram, newErrors, structureIssues, hybridIssues, stationKeys, runStationMinutes, exerciseMinutes, SESSION_TYPES, parseMinutes, VOLUME, PATTERN_KEYS, PER_SESSION_MAX };

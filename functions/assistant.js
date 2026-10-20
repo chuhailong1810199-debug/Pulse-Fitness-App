@@ -731,7 +731,7 @@ async function execTool(db, name, a, role, ctx) {
     const chk = PC.checkProgram(program, opts);
     // Sửa vài buổi: lỗi đã có sẵn ở giáo án cũ không chặn — chỉ chặn lỗi đề xuất này gây ra.
     const base = kept.length ? PC.checkProgram(mergeProgram(old, {}, dropList), opts).errors : [];
-    const { errors: fresh, inherited } = PC.newErrors(chk.errors, base);
+    const { errors: fresh, inherited } = PC.newErrors(chk.errors, base, Object.keys(r.program));
     if (fresh.length) {
       return { rejected: true, errors: fresh.map((e) => e.m),
         note: "Giáo án vượt khung phương pháp. Sửa HẾT các lỗi trên trong một lần rồi đề xuất lại "
@@ -1060,7 +1060,8 @@ const METHOD = `PHƯƠNG PHÁP SOẠN GIÁO ÁN (khung của studio — coach n�
 Chấn thương: tránh hoặc thay bài gây đau, giữ tải trong khoảng không đau, ghi rõ bài thay và vì sao.
 Dưới 18 tuổi: ưu tiên kỹ thuật, RIR 2–3, không test 1RM, không tập tới thất bại.
 Khi in giáo án: kèm một dòng tổng số set làm việc mỗi nhóm cơ chính trong tuần, để coach đối chiếu mục 1.
-SERVER TỰ KIỂM khi đề xuất (sai là bị trả lỗi): volume mỗi nhóm cơ/tuần không vượt trần trình độ, mỗi buổi
+SERVER TỰ KIỂM khi đề xuất (sai là bị trả lỗi): cấu trúc buổi (khởi động ≥ 2 bài; buổi 60' ≥ 6 bài chính/phụ và
+≥ 15 set — xem QUY TRÌNH mục 7), volume mỗi nhóm cơ/tuần không vượt trần trình độ, mỗi buổi
 một nhóm cơ ≤ ~10 set, cả tuần đủ 8 mẫu chuyển động (squat, hinge, hpush, vpush, hpull, vpull, core, single),
 và buổi không dài quá thời lượng (sessionMinutes; ~2,5 phút/set, superset ~1,75). Coach CHỦ Ý dồn volume một
 nhóm cơ hoặc bỏ một mẫu vì chấn thương → ghi volumeExceptions / coverageExceptions kèm lý do, đừng lách.`;
@@ -1085,8 +1086,14 @@ const PLAYBOOK = `QUY TRÌNH SOẠN GIÁO ÁN (cách coach Long Chu soạn — l
    còn dư 2–3 rep". Nghỉ ghi trong cue, không tạo bài "Rest".
 6. WHY gắn với CHÍNH khách: nhắc mục tiêu, số liệu, chấn thương, hoặc vì sao bài này đi cặp với bài kia — không
    viết "bài tốt cho chân". FOCUS của buổi: 1–2 câu nói buổi này phục vụ mục tiêu thế nào.
-7. ĐỀ XUẤT một lần đủ mọi buổi coach nhờ (propose_program). Bị trả lỗi thì sửa hết trong một lần.
-8. TÓM TẮT cho coach (không chép lại bảng — thẻ duyệt đã vẽ): chia buổi thế nào; mang tạ cũ được bài nào; set/tuần
+7. CẤU TRÚC MỘT BUỔI (buổi 60'; server kiểm theo thời lượng): khởi động 3–4 bài (5–8': cardio nhẹ + mobility +
+   kích hoạt) → [rehab nếu có chấn thương] → 3–4 BLOCK, mỗi block 2 bài (superset) hoặc 1 bài chính nặng + 1 bài phụ
+   → [finisher / core 5–8' nếu mục tiêu cần]. Tổng 6–8 bài chính/phụ, 16–24 set làm việc, 55–65 phút. Buổi 45': ≥ 5
+   bài, ≥ 12 set. Buổi 75–90': 7–10 bài. Buổi chỉ conditioning (WOD, boxing) thì khởi động + đủ giờ.
+   Buổi mẫu Lee (bầm đùi sau, đã duyệt): Warm-up 3 bài · Rehab 3 bài · Block 1 Bench + Leg Press · Block 2 Shoulder
+   Press + Cable Row · Block 3 Leg Extension + Chest Fly · Block 4 Lateral Raise + Bicep Curl = 8 bài, 25 set, ~56'.
+8. ĐỀ XUẤT một lần đủ mọi buổi coach nhờ (propose_program). Bị trả lỗi thì sửa hết trong một lần.
+9. TÓM TẮT cho coach (không chép lại bảng — thẻ duyệt đã vẽ): chia buổi thế nào; mang tạ cũ được bài nào; set/tuần
    các nhóm cơ chính; điều coach cần quyết (hồ sơ lệch số buổi, bài chưa có tạ, ngoại lệ đã ghi).
 
 VÍ DỤ MỘT BUỔI ĐÃ ĐƯỢC COACH DUYỆT (khách giảm mỡ, Beginner, 99,9 kg, 40,8% mỡ; kiểu mật độ):

@@ -15,9 +15,27 @@ const A = require(path.join(__dirname, "..", "..", "functions", "assistant.js"))
 // động) kiểm riêng ở tests/program-check.test.js — ở đây miễn mẫu chuyển động để giáo án 1 bài qua.
 const ALL_PATTERNS = Object.fromEntries(require(path.join(__dirname, "..", "..", "functions", "program-check.js"))
   .PATTERN_KEYS.map((k) => [k, "test quyền"]));
+// Cũng vậy với luật cấu trúc buổi (khởi động, đủ bài): bù vào CUỐI mỗi buổi — khởi động, 2 bản sao bài chính,
+// finisher dài — để vị trí bài mà các ca dưới kiểm (phases[0].exercises[0]) không đổi.
+function fillProgram(prog) {
+  if (!prog || typeof prog !== "object") return prog;
+  const out = {};
+  for (const [k, d] of Object.entries(prog)) {
+    const { normalizePhaseTag } = require(path.join(__dirname, "..", "..", "functions", "program-lib.js"));
+    const main = ((d && d.phases) || []).find((ph) => ph && /^(strength|accessories)$/.test(normalizePhaseTag(ph))) || {};
+    const first = main.exercises || [];
+    const copy = first[0] ? [{ ...first[0], setsReps: "3 × 10" }, { ...first[0], setsReps: "3 × 10" }] : [];
+    out[k] = { ...d, phases: [...((d && d.phases) || []),
+      ...(copy.length ? [{ name: "Pad", tag: "accessories", exercises: copy }] : []),
+      { name: "Warm-up", tag: "warmup", exercises: [{ name: "Bike nhẹ", setsReps: "1 × 5 phút" }, { name: "Band Pull-apart", setsReps: "2 × 15" }] },
+      { name: "Finisher (12')", tag: "circuit", exercises: ["Assault Bike Sprint", "Jump Rope", "Battle Rope Waves", "Shadow Boxing"]
+        .map((n) => ({ name: n, setsReps: "4 × 1 phút" })) }] };
+  }
+  return out;
+}
 const _runTool = A.runTool;
 A.runTool = (name, args, ...rest) => _runTool(name,
-  /^propose_/.test(name) ? { coverageExceptions: ALL_PATTERNS, ...(args || {}) } : args, ...rest);
+  /^propose_/.test(name) ? { coverageExceptions: ALL_PATTERNS, ...(args || {}), program: fillProgram(args && args.program) } : args, ...rest);
 
 const RA = { coach: true, admin: false, uid: "coachA" };
 const RB = { coach: true, admin: false, uid: "coachB" };
@@ -98,10 +116,11 @@ const ok = (n, f) => cases.push([n, f]);
     const r = await A.runTool("propose_program", { clientId: "cindy", program: newProg("Lat pull down") }, RA, READ);
     assert(r.needsConfirm, JSON.stringify(r));
     const ph = r.action.program.SessionA.phases;
-    assert.deepStrictEqual(ph.map((p) => p.tag), ["warmup", "strength"]);
+    // Hai pha đầu là giáo án của ca test; phía sau là phần fillProgram bù cho đủ cấu trúc buổi.
+    assert.deepStrictEqual(ph.slice(0, 2).map((p) => p.tag), ["warmup", "strength"]);
     assert.strictEqual(ph[1].exercises[0].name, "Lat Pulldown");
     assert.deepStrictEqual(ph[1].exercises[0].muscles, { LATS: "P", BICEPS: "S" });
-    assert.deepStrictEqual(r.preview.renamed, [["Lat pull down", "Lat Pulldown"]]);
+    assert.deepStrictEqual(r.preview.renamed[0], ["Lat pull down", "Lat Pulldown"]);
     assert.strictEqual(ph[0].exercises[0].name, "Cat-cow", "warmup duoc dung bai ngoai thu vien");
   });
   ok("bai mo ho (Goblet Squat: Dumbbell/Kettlebell) -> tu choi, liet ke lua chon", async () => {

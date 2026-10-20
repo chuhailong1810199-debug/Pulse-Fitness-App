@@ -10183,6 +10183,7 @@ function aiBuildEditPrompt(d, clientName, nDays) {
       'Bỏ hẳn một mẫu chuyển động → coverageExceptions kèm lý do chấn thương.',
     ] : []),
     ...(spw && spw !== nDays ? ['Đổi ' + nDays + ' → ' + spw + ' buổi: gộp/tách từ bài cũ' + (spw < nDays ? ', buổi bỏ ghi vào dropSessions' : '') + '.'] : []),
+    'Buổi sau khi sửa vẫn đủ CẤU TRÚC MỘT BUỔI (QUY TRÌNH mục 7): khởi động 3–4 bài, 3–4 block, ≥ 6 bài chính/phụ — bài bỏ phải được THAY, không để buổi mỏng đi.',
     'Gửi ĐỦ mọi buổi đổi trong MỘT lần propose_program. Tóm tắt: BỎ gì (vì sao) · GIỮ + LƯU Ý gì · THÊM gì · nối tạ mấy bài · mốc quay lại.',
   ];
   const prompt = 'Sửa giáo án:\n' + info + '\n\nYêu cầu:\n' + rules.map((r, i) => (i + 1) + '. ' + r).join('\n');
@@ -10242,6 +10243,7 @@ function aiBuildProgramPrompt(d) {
     'Chọn bài theo đúng dụng cụ ở nơi tập, và tránh/thay bài động vào chỗ chấn thương nếu có.',
     'Không chép từng bài ra chữ — thẻ duyệt tự vẽ bảng. Chỉ 2–4 câu giải thích vì sao chia như vậy.',
     'Làm theo QUY TRÌNH SOẠN GIÁO ÁN (cặp bài không tranh cơ, cue ghi nghỉ + kỹ thuật, why gắn số liệu của khách này).',
+    'Mỗi buổi đúng CẤU TRÚC MỘT BUỔI (QUY TRÌNH mục 7): khởi động 3–4 bài → 3–4 block × 2 bài → finisher/core nếu cần; buổi ' + (v('dur') || '60 phút') + ' đủ số bài và số set — server kiểm, buổi mỏng bị trả về.',
     'Rồi gọi propose_new_client MỘT lần, kèm luôn giáo án vừa soạn' + (email ? ' và Gmail ' + email : '') + ', để tao duyệt.',
     'Tóm tắt cho tao: chia buổi thế nào, set/tuần các nhóm cơ chính, điều tao cần quyết.',
   ];

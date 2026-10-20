@@ -37,6 +37,20 @@ const db = { collection: (n) => ({
 }) };
 const ROLE = { coach: true, admin: true, uid: 'u' };
 
+/**
+ * Bù cho một buổi test đủ CẤU TRÚC (khởi động 2 bài + finisher dài; buổi 1 bài thì thêm 2 bài phụ) — để ca test
+ * chỉ kiểm đúng thứ nó muốn (khách đích, ghép buổi, volume), không vấp luật buổi mỏng (kiểm ở program-check.test).
+ */
+function fill(day, thin) {
+  const free = (name, setsReps) => ({ name, setsReps });
+  const phases = [{ name: 'Warm-up', tag: 'warmup', exercises: [free('Bike nhẹ', '1 × 5 phút'), free('Band Pull-apart', '2 × 15')] },
+    ...day.phases,
+    ...(thin ? [{ name: 'Accessories', tag: 'accessories', exercises: [
+      { name: 'Narrow Push Up (BW)', setsReps: '3 × 8', why: 'pad' }, { name: 'Walking Lunge (Dumbbell)', setsReps: '3 × 10', why: 'pad' }] }] : []),
+    { name: "Finisher (12')", tag: 'circuit', exercises: ['Assault Bike Sprint', 'Jump Rope', 'Battle Rope Waves', 'Shadow Boxing'].map((n) => free(n, '4 × 1 phút')) }];
+  return { ...day, phases };
+}
+
 test('tra thu vien khop theo tu: thu tu dao, viet tat, so nhieu; khong khop nham giua chuoi', () => {
   const f = (q) => LIB.filter((v) => A.exerciseHit(v, q)).map((v) => v.name);
   assert.deepStrictEqual(f('kettlebell swing'), ['Swing (Kettlebell)']);
@@ -100,8 +114,8 @@ test('propose_program tu choi de xuat vao khach khong duoc hoi toi', async () =>
     doc: (id) => ({ get: async () => ({ exists: n === 'clients' && !!people[id], id, data: () => people[id] }) }),
     get: async () => ({ empty: false, docs: (n === 'exercises' ? LIB : []).map((x) => ({ id: x.id, data: () => x })) }),
   }) };
-  const prog = { SessionA: { label: 'A', focus: 'x', phases: [{ name: 'Main', tag: 'strength',
-    exercises: [{ name: 'Goblet Squat (Dumbbell)', setsReps: '3 × 10', why: 'y' }] }] } };
+  const prog = { SessionA: fill({ label: 'A', focus: 'x', phases: [{ name: 'Main', tag: 'strength',
+    exercises: [{ name: 'Goblet Squat (Dumbbell)', setsReps: '3 × 10', why: 'y' }] }] }, true) };
   const read = { 'get_client:longchu': true, 'get_exercise_loads:longchu': true, 'get_client:dao': true, 'get_exercise_loads:dao': true };
   const ask = 'tao muốn design lại giáo án của anh đạo, gồm 3 block mỗi session';
   const bad = await A.execTool(db2, 'propose_program', { clientId: 'longchu', program: prog }, ROLE,
@@ -134,8 +148,8 @@ test('de xuat vai buoi thi giu cac buoi con lai; bo buoi phai noi ro', async () 
     doc: (id) => ({ get: async () => ({ exists: n === 'clients' && !!people[id], id, data: () => people[id] }) }),
     get: async () => ({ empty: false, docs: (n === 'exercises' ? LIB : []).map((x) => ({ id: x.id, data: () => x })) }),
   }) };
-  const newA = { SessionA: { label: 'A2', focus: 'f', phases: [{ name: 'Block 1', tag: 'strength',
-    exercises: [{ name: 'Goblet Squat (Dumbbell)', setsReps: '3 × 8', why: 'w' }] }] } };
+  const newA = { SessionA: fill({ label: 'A2', focus: 'f', phases: [{ name: 'Block 1', tag: 'strength',
+    exercises: [{ name: 'Goblet Squat (Dumbbell)', setsReps: '3 × 8', why: 'w' }] }] }, true) };
   const ctx = { read: { 'get_client:dao': true, 'get_exercise_loads:dao': true }, openClientId: 'dao', userText: 'sửa buổi A của anh đạo' };
   const r = await A.execTool(db2, 'propose_program', { clientId: 'dao', program: newA }, ROLE, ctx);
   // Hành động chỉ mang buổi đổi + merge; coachApply ghép lên giáo án lúc bấm duyệt.
@@ -180,10 +194,10 @@ test('propose_program chan giao an vuot khung; sua 1 buoi thi loi cu khong chan,
     ['Narrow Push Up (BW)', { Chest: 'P' }], ['Shoulder Press (Dumbbell)', { 'Front Delts': 'P' }], ['Seated Row (Cable)', { Lats: 'P' }],
     ['Lat Pulldown (Cable)', { Lats: 'P' }], ['Plank (Bodyweight)', { Abs: 'P' }], ["Farmer's Carry (Dumbbell)", { Forearms: 'P' }],
     ['Hip Thrust (Barbell)', { Glutes: 'P' }]].map(([name, muscles], i) => ({ id: 'L' + i, name, muscles }));
-  const week = { SessionA: { label: 'A', focus: 'f', phases: [{ name: 'Main', tag: 'strength', exercises: [
-      ex('Goblet Squat (Dumbbell)', '3 × 10'), ex('Narrow Push Up (BW)', '3 × 8'), ex('Seated Row (Cable)', '3 × 10'), ex('Plank (Bodyweight)', '3 × 30s')] }] },
-    SessionB: { label: 'B', focus: 'f', phases: [{ name: 'Main', tag: 'strength', exercises: [
-      ex('Romanian Deadlift (Dumbbell)', '3 × 8'), ex('Shoulder Press (Dumbbell)', '3 × 10'), ex('Lat Pulldown (Cable)', '3 × 10'), ex("Farmer's Carry (Dumbbell)", '3 × 30s')] }] } };
+  const week = { SessionA: fill({ label: 'A', focus: 'f', phases: [{ name: 'Main', tag: 'strength', exercises: [
+      ex('Goblet Squat (Dumbbell)', '3 × 10'), ex('Narrow Push Up (BW)', '3 × 8'), ex('Seated Row (Cable)', '3 × 10'), ex('Plank (Bodyweight)', '3 × 30s')] }] }),
+    SessionB: fill({ label: 'B', focus: 'f', phases: [{ name: 'Main', tag: 'strength', exercises: [
+      ex('Romanian Deadlift (Dumbbell)', '3 × 8'), ex('Shoulder Press (Dumbbell)', '3 × 10'), ex('Lat Pulldown (Cable)', '3 × 10'), ex("Farmer's Carry (Dumbbell)", '3 × 30s')] }] }) };
   const people = { kim: { name: 'Kim', level: 'Beginner', program: {} } };
   const db3 = { collection: (n) => ({
     doc: (id) => ({ get: async () => ({ exists: n === 'clients' && !!people[id], id, data: () => people[id] }) }),
