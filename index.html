@@ -10283,6 +10283,55 @@ function aiAsk(q) {
   aiSend();
 }
 
+/**
+ * Khách DUY NHẤT được gọi tên trong câu coach gõ. BẢN SAO của namedClientId() trong functions/assistant.js —
+ * tests/ai-named-client.test.js bắt hai bản ra cùng kết quả. Tên một chữ phải viết hoa ("Sang", không phải
+ * "chuyển sang"); "An" phải đúng dấu; nhắc ≥ 2 khách → null.
+ */
+function _aiNamedClient(text, clients) {
+  const fold = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const raw = String(text || '');
+  const flat = raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D');
+  const low = ' ' + fold(raw) + ' ';
+  const HON = /^(chi|anh|em|co|chu|bac|ong|ba|lop)\s+/;
+  const hits = new Set();
+  for (const c of clients || []) {
+    const name = String((c && c.name) || '').trim();
+    if (!name || !c.clientId) continue;
+    const n = fold(name), core = n.replace(HON, '');
+    const word = (w, hay) => new RegExp('(^|[^A-Za-z0-9])' + w + '($|[^A-Za-z0-9])').test(hay);
+    const cap = (w) => w.charAt(0).toUpperCase() + w.slice(1);
+    let ok = false;
+    if (core.length <= 2) {
+      const nm = name.normalize('NFC').split(/\s+/).pop();
+      ok = new RegExp('(^|[^\\p{L}\\p{N}])' + nm + '($|[^\\p{L}\\p{N}])', 'u').test(raw.normalize('NFC'));
+    } else if (n.includes(' ') && low.includes(' ' + n + ' ')) ok = true;
+    else if (core.includes(' ') && low.includes(' ' + core + ' ')) ok = true;
+    else {
+      const one = core.includes(' ') ? core.split(' ').pop() : core;
+      ok = one.length >= 3 && word(cap(one), flat);
+    }
+    if (ok) hits.add(c.clientId);
+  }
+  return hits.size === 1 ? [...hits][0] : null;
+}
+
+/**
+ * Coach hỏi về một khách KHÁC khách đang mở → chuyển hẳn sang khách đó trước khi gửi: hồ sơ (Profile), dashboard,
+ * và luồng chat của khách đó trong Pulse — để thứ coach nhìn thấy khớp thứ Pulse đọc (2026-10-22).
+ */
+async function _aiFollowNamedClient(q) {
+  if (userRole !== 'coach' || _aiMode === 'self' || typeof clientsData === 'undefined') return false;
+  const id = _aiNamedClient(q, (clientsData || []).map((c) => ({ clientId: c.id, name: c.name })));
+  if (!id || (activeClient && activeClient.id === id)) return false;
+  _aiMode = 'client';                       // trả lời nằm trong luồng của khách được hỏi
+  try { await openClientDash(id); } catch (e) { console.warn('[trợ lý] không chuyển được khách:', e.message); return false; }
+  const sel = document.getElementById('client-select');
+  if (sel) sel.value = id;
+  _aiPoint(); _aiTabs(); _aiLoadThread();
+  return true;
+}
+
 async function aiSend(ev, text, show) {
   if (ev) ev.preventDefault();
   if (_aiBusy) return;
@@ -10291,6 +10340,8 @@ async function aiSend(ev, text, show) {
   if (!q) return;
   if (text == null) input.value = '';
   _aiForm = false;
+  // Chỉ với câu coach tự gõ — form (sửa giáo án, thể trạng…) luôn là của khách đang mở.
+  if (text == null) await _aiFollowNamedClient(q);
   _aiMsgs.push(show ? { role: 'user', text: q, show } : { role: 'user', text: q });
   const thread = _aiMsgs;      // trả lời về đúng luồng đã hỏi, kể cả khi coach đổi tab giữa chừng
   _aiBusy = true;

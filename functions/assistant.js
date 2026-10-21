@@ -445,6 +445,41 @@ function nameInText(name, text) {
 }
 
 /**
+ * Khách DUY NHẤT được gọi tên trong câu của coach — để đọc đúng khách đó dù coach đang mở khách khác
+ * (2026-10-22). Chặt hơn nameInText vì tên khách hay trùng từ thường ("chuyển sang", "dao động", "kem",
+ * "khách nam"): tên nhiều chữ khớp không dấu / không hoa; tên MỘT chữ phải viết HOA chữ đầu; tên ≤ 2 chữ cái
+ * ("An") phải đúng dấu và viết hoa. Nhắc ≥ 2 khách → null (đang so sánh, không đổi khách).
+ * BẢN SAO: _aiNamedClient() trong index.html — tests/ai-named-client.test.js bắt hai bản ra cùng kết quả.
+ */
+function namedClientId(text, clients) {
+  const raw = String(text || "");
+  const flat = raw.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").replace(/Đ/g, "D");   // giữ hoa/thường
+  const low = " " + fold(raw) + " ";
+  const HON = /^(chi|anh|em|co|chu|bac|ong|ba|lop)\s+/;
+  const hits = [];   // mảng, không Set.add — test chặn mọi chuỗi trông như lệnh ghi Firestore trong file này
+  for (const c of clients || []) {
+    const name = String((c && c.name) || "").trim();
+    if (!name || !c.clientId) continue;
+    const n = fold(name), core = n.replace(HON, "");
+    const word = (w, hay) => new RegExp("(^|[^A-Za-z0-9])" + w + "($|[^A-Za-z0-9])").test(hay);
+    const cap = (w) => w.charAt(0).toUpperCase() + w.slice(1);
+    let ok = false;
+    if (core.length <= 2) {
+      // "An": đúng dấu, viết hoa, nguyên chữ.
+      const nm = name.normalize("NFC").split(/\s+/).pop();
+      ok = new RegExp("(^|[^\\p{L}\\p{N}])" + nm + "($|[^\\p{L}\\p{N}])", "u").test(raw.normalize("NFC"));
+    } else if (n.includes(" ") && low.includes(" " + n + " ")) ok = true;                  // "anh dao", "thai son"
+    else if (core.includes(" ") && low.includes(" " + core + " ")) ok = true;              // "tran van tien"
+    else {
+      const one = core.includes(" ") ? core.split(" ").pop() : core;                       // tên riêng một chữ
+      ok = one.length >= 3 && word(cap(one), flat);
+    }
+    if (ok && !hits.includes(c.clientId)) hits.push(c.clientId);
+  }
+  return hits.length === 1 ? hits[0] : null;
+}
+
+/**
  * Đề xuất có nhắm đúng khách coach đang nói tới không (2026-10-16: coach mở Anh Đạo,
  * gõ "design lại giáo án của anh đạo", model đề xuất vào hồ sơ Long Chu — coach bấm
  * đồng ý, giáo án của chính coach bị ghi đè). Trả câu lỗi, hoặc null nếu ổn.
@@ -1629,4 +1664,4 @@ function buildMorningPush({ bookings, rec }) {
 }
 
 module.exports = { CLIENT_TOOLS, CLIENT_TOOL_NAMES, CLIENT_SYSTEM, runClientTool, TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, METHOD, GROUP_METHOD, EXPLAIN_METHOD, FORMAT_RULES, compactProgram, checkRationale, GROUP_FORMATS, groupName, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, THINK_DESIGN, designIntent, runTool, runAssistant, progSummary, shapeReply,
-  validateProgram, validateNewClient, makeClientId, LEVELS, CHECK_PARAMS, PLAYBOOK, EDIT_METHOD, fillMuscles, programDiff, MAX_STEPS_DESIGN, TIME_BUDGET_MS, HARD_STOP_MS, mergeProgram, exerciseHit, targetMismatch, nameInText };
+  validateProgram, validateNewClient, makeClientId, LEVELS, CHECK_PARAMS, PLAYBOOK, EDIT_METHOD, namedClientId, fillMuscles, programDiff, MAX_STEPS_DESIGN, TIME_BUDGET_MS, HARD_STOP_MS, mergeProgram, exerciseHit, targetMismatch, nameInText };

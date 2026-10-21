@@ -3422,14 +3422,28 @@ exports.coachAssistant = onCall(
         `Không khởi tạo được Gemini: ${err.message}`);
     }
 
-    const { runAssistant, shapeReply } = require("./assistant.js");
+    const { runAssistant, shapeReply, runTool, namedClientId } = require("./assistant.js");
     // Khách đang mở trên màn hình — chỉ báo cho model nếu coach này xem được
     // khách đó; không thì bỏ, tool cũng sẽ từ chối.
-    const clientId = await (async () => {
+    const openId = await (async () => {
       const id = request.data && request.data.clientId;
       if (!id) return null;
       try { await authz.assertCanView(request, String(id)); return String(id); } catch (_e) { return null; }
     })();
+    // Câu hỏi gọi tên ĐÚNG MỘT khách khác khách đang mở → đọc khách được gọi tên (2026-10-22: coach đang mở
+    // Long Chu, hỏi về Anh Đạo, Pulse đọc nhầm hồ sơ Long Chu). App cũng tự chuyển sang khách đó; đây là chốt
+    // phía server cho trường hợp app chưa kịp đổi. Danh sách khách lọc theo coach (list_clients).
+    const lastText = String(((messages.filter((m) => m.role === "user").pop()) || {}).text || "");
+    const named = await (async () => {
+      try {
+        const list = await runTool("list_clients", {}, role);
+        const id = namedClientId(lastText, (list && list.clients) || []);
+        if (!id || id === openId) return null;
+        await authz.assertCanView(request, id);
+        return id;
+      } catch (_e) { return null; }
+    })();
+    const clientId = named || openId;
     try {
       const r = await runAssistant({
         client,
@@ -3467,7 +3481,8 @@ exports.coachAssistant = onCall(
         + (r.timedOut ? " — HẾT GIỜ" : ""));
       // Qua shapeReply, đừng liệt kê tay từng trường ở đây — đó là chỗ đã làm
       // rơi mất `pending` và thẻ duyệt không bao giờ hiện ra.
-      return shapeReply(r);
+      // Báo app khách nào đã được đọc — app đổi theo nếu chưa đổi.
+      return { ...shapeReply(r), clientId: clientId || null, switchedTo: named || null };
     } catch (err) {
       // Dùng lại đúng cách phân loại lỗi của callGemini: hạn mức ngày, quá tải,
       // khoá sai — mỗi thứ một câu đọc được, thay vì một chữ INTERNAL.

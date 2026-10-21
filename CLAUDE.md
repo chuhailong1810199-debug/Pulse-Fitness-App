@@ -283,6 +283,10 @@ Key routing rules:
 - **Lý do chọn bài** (2026-10-15): mỗi buổi có `focus`, mỗi bài pha strength/accessories có `why` — lưu CÙNG
   giáo án. `checkRationale()` chặn đề xuất thiếu. App hiện `why` ở ô "i" và `focus` dưới tiêu đề buổi, cho MỌI người
   (coach + khách). Hỏi "vì sao tập bài X" → trợ lý trả lời từ `why` đã lưu; không có thì phải nói rõ là suy luận.
+- **Hỏi về khách nào thì đọc khách đó** (2026-10-22): `namedClientId()` (assistant.js) / bản sao `_aiNamedClient()`
+  (index.html). Câu coach tự gõ gọi tên ĐÚNG MỘT khách khác khách đang mở → app `openClientDash()` + chuyển Pulse sang
+  luồng của khách đó trước khi gửi; server `coachAssistant` cũng đọc khách được gọi tên (vẫn qua `assertCanView`).
+  Tên một chữ phải viết hoa ("Sang", không phải "chuyển sang"); "An" đúng dấu; nhắc ≥ 2 khách thì không đổi.
 - **Chat theo khách**: tab tên khách trong khung trợ lý (hoặc nút "Hỏi AI về khách này" trên hồ sơ). Lưu ở
   `clients/{id}/aiChat` — chỉ hàm nền `coachAssistant` ghi (`thread: true`), coach của khách + admin đọc, KHÁCH
   KHÔNG đọc. Form "Hôm nay khách không khoẻ" → chỉnh buổi cho hôm nay theo `EXPLAIN_METHOD`, KHÔNG đổi giáo án gốc.

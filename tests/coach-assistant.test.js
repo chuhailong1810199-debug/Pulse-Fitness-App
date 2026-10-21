@@ -355,7 +355,7 @@ ok("callable PHAI di qua shapeReply, khong liet ke tay tung truong", () => {
   const i = idxSrc.indexOf("exports.coachAssistant");
   assert(i >= 0, "khong tim thay coachAssistant");
   const body = idxSrc.slice(i, i + 6000);
-  assert(/return shapeReply\(/.test(body), "coachAssistant khong dung shapeReply");
+  assert(/return (\{ \.\.\.)?shapeReply\(/.test(body), "coachAssistant khong dung shapeReply");
   assert(!/return \{ text: r\.text/.test(body), "van con liet ke tay tung truong — de roi truong moi");
 });
 
