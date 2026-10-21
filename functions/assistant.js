@@ -477,27 +477,38 @@ function namedClientId(text, clients) {
   const flat = raw.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").replace(/Đ/g, "D");   // giữ hoa/thường
   const low = " " + fold(raw) + " ";
   const HON = /^(chi|anh|em|co|chu|bac|ong|ba|lop)\s+/;
-  const hits = [];   // mảng, không Set.add — test chặn mọi chuỗi trông như lệnh ghi Firestore trong file này
+  const hits = [];   // [{ id, ref }] — mảng, không Set.add (test chặn chuỗi trông như lệnh ghi Firestore trong file này)
+  // Khách đứng ngay sau "theo / giống / như / kiểu / style / tham khảo" là khách LÀM MẪU, không phải khách được hỏi
+  // ("sửa program của Nguyên theo style của Antony" → Nguyên).
+  const REF = /(theo|giong|nhu|kieu|style|tham khao|hoc theo|copy|sao chep|giong het|y nhu)(\s+\S+){0,3}\s*$/i;
+  const before = (str, idx) => fold(str.slice(Math.max(0, idx - 40), idx)) + " ";
   for (const c of clients || []) {
     const name = String((c && c.name) || "").trim();
     if (!name || !c.clientId) continue;
     const n = fold(name), core = n.replace(HON, "");
-    const word = (w, hay) => new RegExp("(^|[^A-Za-z0-9])" + w + "($|[^A-Za-z0-9])").test(hay);
     const cap = (w) => w.charAt(0).toUpperCase() + w.slice(1);
-    let ok = false;
+    let at = -1, str = low;
     if (core.length <= 2) {
       // "An": đúng dấu, viết hoa, nguyên chữ.
       const nm = name.normalize("NFC").split(/\s+/).pop();
-      ok = new RegExp("(^|[^\\p{L}\\p{N}])" + nm + "($|[^\\p{L}\\p{N}])", "u").test(raw.normalize("NFC"));
-    } else if (n.includes(" ") && low.includes(" " + n + " ")) ok = true;                  // "anh dao", "thai son"
-    else if (core.includes(" ") && low.includes(" " + core + " ")) ok = true;              // "tran van tien"
+      str = raw.normalize("NFC");
+      const m = new RegExp("(^|[^\\p{L}\\p{N}])" + nm + "($|[^\\p{L}\\p{N}])", "u").exec(str);
+      at = m ? m.index + m[1].length : -1;
+    } else if (n.includes(" ") && low.includes(" " + n + " ")) at = low.indexOf(" " + n + " ") + 1;   // "anh dao", "thai son"
+    else if (core.includes(" ") && low.includes(" " + core + " ")) at = low.indexOf(" " + core + " ") + 1;   // "tran van tien"
     else {
       const one = core.includes(" ") ? core.split(" ").pop() : core;                       // tên riêng một chữ
-      ok = one.length >= 3 && word(cap(one), flat);
+      if (one.length >= 3) {
+        str = flat;
+        const m = new RegExp("(^|[^A-Za-z0-9])" + cap(one) + "($|[^A-Za-z0-9])").exec(flat);
+        at = m ? m.index + m[1].length : -1;
+      }
     }
-    if (ok && !hits.includes(c.clientId)) hits.push(c.clientId);
+    if (at >= 0 && !hits.some((h) => h.id === c.clientId)) hits.push({ id: c.clientId, ref: REF.test(before(str, at).trim()) });
   }
-  return hits.length === 1 ? hits[0] : null;
+  if (hits.length === 1) return hits[0].id;
+  const main = hits.filter((h) => !h.ref);
+  return hits.length > 1 && main.length === 1 ? main[0].id : null;
 }
 
 /**

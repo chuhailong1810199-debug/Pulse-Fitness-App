@@ -10,7 +10,7 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const a = html.indexOf('function _aiNamedClient'), b = html.indexOf('async function _aiFollowNamedClient');
 const app = new Function(html.slice(a, b) + '; return _aiNamedClient;')();
 
-const CL = [['chị_nguyệt', 'Chị Nguyệt'], ['cindy', 'Cindy'], ['giao', 'Giao'], ['kem', 'Kem'], ['lee', 'Lee'], ['longchu', 'Long Chu'],
+const CL = [['chị_nguyệt', 'Chị Nguyệt'], ['cindy', 'Cindy'], ['antony', 'Antony'], ['giao', 'Giao'], ['kem', 'Kem'], ['lee', 'Lee'], ['longchu', 'Long Chu'],
   ['nam', 'Nam'], ['nguyen', 'Nguyên'], ['sang', 'Sang'], ['soobin', 'anh Soobin'], ['an', 'An'], ['dao', 'Anh Đạo'],
   ['linh', 'Chị Linh'], ['tam', 'Chị Tâm'], ['thaison', 'Thai Son'], ['tien', 'Trần Văn Tiến']].map(([clientId, name]) => ({ clientId, name }));
 const CASES = [
@@ -19,6 +19,9 @@ const CASES = [
   ['giáo án An', 'an'], ['giáo án của tao', null], ['so sánh Cindy với Lee', null], ['thai son vai đỡ chưa', 'thaison'],
   ['anh Tiến đau gối', 'tien'], ['ăn kem được không', null], ['Kem nhảy cao hơn chưa', 'kem'], ['giao hàng', null],
   ['Giao chạy 5km', 'giao'], ['chi linh tập mông', 'linh'], ['Lee bầm đùi sau', 'lee'],
+  // Khách làm MẪU (sau "theo / giống / như / style") không phải khách được hỏi.
+  ['sửa program của Nguyên theo style của Antony', 'nguyen'], ['soạn cho Sang giống giáo án Antony', 'sang'],
+  ['làm cho anh Đạo như kiểu Cindy', 'dao'], ['so sánh Cindy với Lee', null], ['Nguyên và Sang ai tiến bộ hơn', null],
 ];
 
 test('nhan ten khach: dung, khong nham tu thuong, nhac 2 khach thi khong doi', () => {
@@ -31,7 +34,9 @@ test('ban sao trong app khop y server', () => {
 
 test('app chuyen ho so + luong chat truoc khi gui; server doc khach duoc goi ten', () => {
   assert.match(html, /if \(text == null\) await _aiFollowNamedClient\(q\);/);
-  assert.match(html, /await openClientDash\(id\)/);
+  // Gọi bản THẬT và chờ — tên toàn cục openClientDash là hàm xếp hàng trả về ngay (2026-10-22: câu hỏi bị gửi với khách cũ).
+  assert.match(html, /const open = window\._openClientDash;[\s\S]{0,200}await open\(id\)/);
+  assert.match(html, /if \(!activeClient \|\| activeClient\.id !== id\) return false;/);
   const idx = fs.readFileSync(path.join(__dirname, '..', 'functions', 'index.js'), 'utf8');
   assert.match(idx, /const clientId = named \|\| openId;/);
   assert.match(idx, /namedClientId\(lastText/);
