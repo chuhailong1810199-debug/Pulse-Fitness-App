@@ -19,6 +19,7 @@ const PC = require("./program-check.js");
 
 /** Tham số chung của hai tool đề xuất: ngoại lệ có lý do + thời lượng buổi. */
 const CHECK_PARAMS = {
+  plyoLevel: { type: "integer", description: "CHỈ khách < 18 tuổi: mức plyometric 0–3 theo mục YOUTH DEVELOPMENT (server chặn vượt trần tiếp đất/buổi)" },
   sessionMinutes: { type: "integer", description: "thời lượng MỖI buổi (phút) coach đặt — server ước tính và chặn buổi dài quá" },
   volumeExceptions: { type: "object",
     description: "nhóm cơ coach CHỦ Ý dồn volume vượt khung trình độ → lý do. VD {\"Glutes\": \"coach muốn ưu tiên mông\"}. Hiện trên thẻ duyệt." },
@@ -101,6 +102,25 @@ function programDiff(oldProgram, newProgram) {
   };
   const o = names(oldProgram), n = names(newProgram);
   return { removed: [...o].filter((x) => !n.has(x)), added: [...n].filter((x) => !o.has(x)), kept: [...n].filter((x) => o.has(x)).length };
+}
+
+/** Khách dưới 18 tuổi? Tuổi baseline / checkpoint, ngày sinh hồ sơ, hoặc "15 tuổi" trong ghi chú / mục tiêu. */
+async function isMinorClient(db, clientId, cdata) {
+  // Đọc tuổi hỏng thì đoán theo ghi chú — không được làm chết cả lượt đề xuất.
+  let base = null, prof = null;
+  try {
+    const ref = db.collection("clients").doc(clientId);
+    [base, prof] = await Promise.all([
+      ref.collection("assessment").doc("baseline").get().catch(() => null),
+      ref.collection("profile").doc("data").get().catch(() => null),
+    ]);
+  } catch (_e) { /* thiếu dữ liệu → xuống dưới */ }
+  const age = base && base.exists ? Number((base.data() || {}).age) : NaN;
+  if (Number.isFinite(age) && age > 0) return age < 18;
+  const dob = prof && prof.exists ? (prof.data() || {}).dob : null;
+  if (dob) { const y = new Date(dob).getFullYear(); if (y > 1900) return new Date().getFullYear() - y < 18; }
+  const m = String(((cdata || {}).notes || "") + " " + ((cdata || {}).goal || "")).match(/(\d{1,2})\s*tuổi/iu);   // "15 TUỔI" trong ghi chú cũng phải nhận ra
+  return m ? Number(m[1]) < 18 : false;
 }
 
 /** Ghép buổi đổi lên giáo án: buổi không gửi thì giữ, buổi trong drop thì bỏ. Khoá xếp A→Z. */
@@ -264,6 +284,7 @@ const TOOLS = [
         sessionsPerWeek: { type: "integer", description: "1–7" },
         notes: { type: "string" },
         healthConditions: { type: "string", description: "chấn thương, bệnh lý coach vừa kể" },
+        age: { type: "integer", description: "tuổi khách nếu coach cho biết — < 18 thì áp YOUTH DEVELOPMENT" },
         ...CHECK_PARAMS,
         isGroup: { type: "boolean",
           description: "true = đây là LỚP NHÓM (một hồ sơ cho cả lớp), không phải một người. Lớp không có email." },
@@ -760,7 +781,8 @@ async function execTool(db, name, a, role, ctx) {
     const dropped = Object.keys(old).filter((k) => drop.has(k) && !(k in r.program)).sort();
     // Kiểm theo khung (volume, mẫu chuyển động, thời lượng) trên CẢ TUẦN sau khi ghép.
     const cd = c.data() || {};
-    const opts = { level: cd.level, isGroup: cd.isGroup === true, groupFormat: cd.groupFormat || null,
+    const minor = cd.isGroup === true ? false : await isMinorClient(db, a.clientId, cd);
+    const opts = { level: cd.level, isGroup: cd.isGroup === true, groupFormat: cd.groupFormat || null, minor, plyoLevel: a.plyoLevel,
       minutes: Number(a.sessionMinutes) || Number(cd.durationMin) || null,
       volumeExceptions: a.volumeExceptions, coverageExceptions: a.coverageExceptions };
     const chk = PC.checkProgram(program, opts);
@@ -792,6 +814,7 @@ async function execTool(db, name, a, role, ctx) {
         volume: chk.volume,
         minutes: chk.est,
         runSplit: chk.runSplit || null,
+        youth: chk.youth || null,
         waived: chk.waived,
         warnings: [...chk.warnings, ...inherited.map((m) => "Có sẵn từ giáo án cũ: " + m)].slice(0, 12),
         table: compactProgram(program),
@@ -830,7 +853,9 @@ async function execTool(db, name, a, role, ctx) {
           note: "Đổi HẾT các bài trên sang tên ĐÚNG Y trong thư viện (search_exercises với queries), rồi đề xuất lại." };
       }
       const why = checkRationale(r.program);
+      const minorNew = a.isGroup !== true && Number(a.age) > 0 && Number(a.age) < 18;
       chk = PC.checkProgram(r.program, { level: a.level || "Beginner", isGroup: a.isGroup === true, groupFormat: a.groupFormat || null,
+        minor: minorNew, plyoLevel: a.plyoLevel,
         minutes: Number(a.sessionMinutes) || Number(a.durationMin) || null,
         volumeExceptions: a.volumeExceptions, coverageExceptions: a.coverageExceptions });
       if (why.length || chk.errors.length) {
@@ -881,6 +906,7 @@ async function execTool(db, name, a, role, ctx) {
         volume: chk ? chk.volume : {},
         minutes: chk ? chk.est : {},
         runSplit: chk ? chk.runSplit || null : null,
+        youth: chk ? chk.youth || null : null,
         waived: chk ? chk.waived : [],
         warnings: chk ? chk.warnings.slice(0, 12) : [],
       },
@@ -1179,6 +1205,34 @@ const EDIT_METHOD = `SỬA GIÁO ÁN ĐANG CÓ (chấn thương, đổi số bu�
 7. TÓM TẮT cho coach: BỎ gì (vì sao) · GIỮ + LƯU Ý gì · THÊM rehab gì · nối tạ được mấy bài · mốc quay lại.
    Hồ sơ ghi số buổi/tuần khác số buổi mới → nhắc coach.`;
 
+// ── Youth development (2026-10-22) ──────────────────────────────────────
+// Bản rút gọn của docs/prompts/youth-development-program.md — theo giáo án Antony (15 tuổi, 80 kg / 1m60) coach
+// duyệt. Server kiểm phần đo được (program-check.js youthIssues): tiếp đất / buổi, bài vượt mức, 1RM.
+const YOUTH_METHOD = `YOUTH DEVELOPMENT — khách DƯỚI 18 TUỔI (tuổi ở baseline / hồ sơ; không rõ mà hồ sơ ghi tuổi < 18 thì coi là trẻ)
+Mục tiêu: kỹ năng vận động, sức mạnh nền, sức bật an toàn, thói quen tập — KHÔNG phải tạ tối đa hay giảm cân nhanh.
+1. AN TOÀN: không test 1RM, không tập tới thất bại, RPE 6–7 (chừa 2–3 rep), kỹ thuật trước tạ sau. Không kê thâm hụt
+   calo. Cần phụ huynh đồng ý. Đau khi bật ở gối dưới xương bánh chè hoặc gót chân → bỏ bật nhảy, chỉ ném bóng tạ, báo
+   coach. Đang lớn nhanh (cao thêm > 5 cm / 6 tháng) → giảm plyo ~30%. BMI ≥ 30 → không chạy, không nhảy liên tục; cardio
+   bằng xe đạp / máy chèo / đi dốc. ĐỌC ghi chú hồ sơ (notes) — coach ghi giới hạn riêng thì theo đúng ghi chú đó.
+2. MỨC PLYOMETRIC — chọn, ghi rõ trong focus, truyền plyoLevel cho propose_* (server chặn vượt trần tiếp đất/buổi):
+   · 0 (BMI ≥ 30 mới tập, đang đau khớp): chỉ ném bóng tạ (Front Toss, Slam, Side Throw) + học tiếp đất. 0 lần bật.
+   · 1 tác động thấp: + Box Jump LÊN hộp ≤ 30 cm rồi BƯỚC xuống, squat jump giữ tiếp đất. ≤ 30 lần tiếp đất / buổi.
+   · 2 (tiếp đất chuẩn ≥ 4 tuần, cân nặng bình thường): + broad jump giữ tiếp đất, lateral hop đơn, pogo thấp. ≤ 60.
+   · 3 (tập > 6 tháng, chơi thể thao bật nhảy): + hop liên tục, bật một chân, depth drop ≤ 30 cm. ≤ 80.
+   Tập 2 buổi/tuần: bật nhảy chỉ MỘT buổi, buổi còn lại plyo bằng ném bóng tạ. Nghỉ 60–90s giữa các set plyo; dừng set
+   khi tiếp đất ồn, gối chụm vào trong, mất thăng bằng.
+3. CẤU TRÚC MỘT BUỔI (60–70'): [warmup] khởi động 8–10' + "Landing Drill — Drop Squat & Stick" 2 × 5 → [strength]
+   "⚡ Plyometric — … (2 bài)": 1 bài bật theo mức + 1 bài ném bóng tạ, 3 × 4–6, làm KHI CÒN KHOẺ → [strength] 2–3 block
+   × 2 bài không tranh nhóm cơ, 3 × 6–12, RPE 6–7, nghỉ 30–45s giữa 2 bài / 60–90s sau cặp → [accessories] 1–2 block
+   × 2 bài (một chân, core chống duỗi/xoay, vai sau) → [circuit] cardio không va đập 10–12'.
+4. TIẾN ĐỘ 3–4 tuần: lên mức khi tiếp đất luôn êm, gối không chụm, không đau — thêm set → thêm bài → mới tới độ cao.
+5. TÓM TẮT: mức plyo + số lần tiếp đất / buổi, vì sao buổi B chỉ ném bóng, cách ghép block, bài giữ tạ cũ, mốc lên
+   mức, nhắc phụ huynh đồng ý + không thâm hụt calo.
+   Mẫu đã duyệt: Antony (15t, 80 kg / 1m60, mức 1) — A: khởi động + Landing Drill · Plyo [Box Jump 3 × 4 + Front Toss
+   (Med Ball) 3 × 6] · Block Leg Press + Incline Push-up · Block Goblet Squat + Landmine Press · Block Cable Chest Fly +
+   Dead Bug · Cardio bike/đi dốc 12'. B: Plyo [Slam (Med Ball) 3 × 6 + Med Ball Side Throw 3 × 5/side] · 4 block
+   (RDL + Lat Pulldown · Hip Thrust + Seated Cable Row · Bulgarian Split Squat + Face Pull · Leg Curl + Plank) · cardio.`;
+
 // ── Lớp nhóm ────────────────────────────────────────────────────────────
 // Một hồ sơ clients có isGroup:true = MỘT LỚP. Giáo án dùng chung cho mọi
 // học viên có mặt, trình độ trộn lẫn, dụng cụ có hạn — khác hẳn soạn 1-1.
@@ -1316,6 +1370,8 @@ ${METHOD}
 ${PLAYBOOK}
 
 ${EDIT_METHOD}
+
+${YOUTH_METHOD}
 
 ${GROUP_METHOD}
 
@@ -1664,4 +1720,4 @@ function buildMorningPush({ bookings, rec }) {
 }
 
 module.exports = { CLIENT_TOOLS, CLIENT_TOOL_NAMES, CLIENT_SYSTEM, runClientTool, TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, METHOD, GROUP_METHOD, EXPLAIN_METHOD, FORMAT_RULES, compactProgram, checkRationale, GROUP_FORMATS, groupName, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, THINK_DESIGN, designIntent, runTool, runAssistant, progSummary, shapeReply,
-  validateProgram, validateNewClient, makeClientId, LEVELS, CHECK_PARAMS, PLAYBOOK, EDIT_METHOD, namedClientId, fillMuscles, programDiff, MAX_STEPS_DESIGN, TIME_BUDGET_MS, HARD_STOP_MS, mergeProgram, exerciseHit, targetMismatch, nameInText };
+  validateProgram, validateNewClient, makeClientId, LEVELS, CHECK_PARAMS, PLAYBOOK, EDIT_METHOD, YOUTH_METHOD, isMinorClient, namedClientId, fillMuscles, programDiff, MAX_STEPS_DESIGN, TIME_BUDGET_MS, HARD_STOP_MS, mergeProgram, exerciseHit, targetMismatch, nameInText };

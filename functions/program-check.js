@@ -260,6 +260,70 @@ function structureIssues(program, minutes, explicit) {
   return { errors, warnings };
 }
 
+// ── Youth development (< 18 tuổi, 2026-10-22) ───────────────────────────
+/**
+ * Mức plyometric → trần số lần tiếp đất / buổi (docs/prompts/youth-development-program.md). Mức 0 = chỉ ném bóng
+ * tạ + học tiếp đất (khởi động không tính). Bài vượt mức (depth drop, pogo liên tục…) bị chặn theo mức.
+ */
+const PLYO_CAP = [0, 30, 60, 80];
+/** Bài BẬT NHẢY có tiếp đất — [regex, mức tối thiểu được dùng]. Ném bóng tạ không có tiếp đất → không tính. */
+const JUMPS = [
+  [/depth (jump|drop)|drop jump|single[\s-]?leg (hop|bound|jump)|one[\s-]?leg (hop|jump)|bounding|\bbound/i, 3],
+  // "\bhops?\b" nguyên chữ — "Wood Chop" từng bị đếm là bài bật.
+  [/pogo|lateral hop|skater|broad jump|jumping lunge|tuck jump|jump rope|skipping rope|\bhops?\b/i, 2],
+  [/box jump|squat jump|jump squat|vertical jump|countermovement jump|cmj/i, 1],
+];
+/**
+ * Số lần tiếp đất của một bài: "3 × 4" → 12; "3 × 5/side" → 30. Theo thời gian: bật liên tục ~0,6 lần/giây
+ * (một cú bật + tiếp đất ~1,5–2 giây), nhảy dây ~1,5 lần/giây (biên độ thấp, nhịp nhanh).
+ */
+function contacts(setsReps, name) {
+  const raw = String(setsReps || "").toLowerCase().replace(/[×]/g, "x");
+  const n = parseSets(raw);
+  const t = raw.match(/x\s*(\d+(?:[.,]\d+)?)\s*(s|sec|giây|min|phút)\b/);
+  if (t) {
+    const v = parseFloat(t[1].replace(",", "."));
+    const secs = /^(s|sec|giây)$/.test(t[2]) ? v : v * 60;
+    return Math.round(n * secs * (/rope|dây/i.test(String(name || "")) ? 1.5 : 0.6));
+  }
+  const m = raw.match(/x\s*(\d+)/);
+  const reps = m ? +m[1] : 1;
+  return n * reps * (/\/\s*(side|bên|chân|leg)|each/.test(raw) ? 2 : 1);
+}
+/**
+ * Khách < 18 tuổi: tiếp đất / buổi ≤ trần của mức plyo, không bài vượt mức, không 1RM / tới thất bại trong cue,
+ * tập 2 buổi/tuần thì bật nhảy chỉ một buổi (buổi còn lại ném bóng — khớp hồi phục).
+ */
+function youthIssues(program, level) {
+  const lv = Math.max(0, Math.min(3, Number.isInteger(Number(level)) ? Number(level) : 1));
+  const cap = PLYO_CAP[lv];
+  const errors = [], warnings = [], perSession = {};
+  const days = Object.keys(program || {});
+  let jumpDays = 0;
+  for (const k of days) {
+    let total = 0;
+    for (const ph of ((program[k] && program[k].phases) || [])) {
+      const warm = normalizePhaseTag(ph) === "warmup";
+      for (const x of (ph && ph.exercises) || []) {
+        const n = String((x && x.name) || ""), cue = String((x && x.cue) || "") + " " + String((x && x.setsReps) || "");
+        if (/\b1\s*rm\b|test (tạ|1rm)|tới thất bại|to failure|amrap tạ/i.test(cue)) {
+          errors.push({ k: `y1rm:${k}:${n}`, m: `${k} — "${n}": không test 1RM / tập tới thất bại với khách dưới 18 tuổi (RPE 6–7, chừa 2–3 rep).` });
+        }
+        if (warm) continue;                       // drill tiếp đất trong khởi động không tính
+        const j = JUMPS.find(([re]) => re.test(n));
+        if (!j) continue;
+        if (j[1] > lv) errors.push({ k: `ylv:${k}:${n}`, m: `${k} — "${n}" là bài plyo mức ${j[1]}, khách đang ở mức ${lv}. Đổi sang bài mức ≤ ${lv} (mức 1: box jump lên hộp thấp rồi bước xuống, squat jump giữ tiếp đất; mức 0: chỉ ném bóng tạ).` });
+        total += contacts(x && x.setsReps, n);
+      }
+    }
+    perSession[k] = total;
+    if (total > 0) jumpDays++;
+    if (total > cap) errors.push({ k: "ycap:" + k, m: `${k}: ~${total} lần tiếp đất, vượt trần mức plyo ${lv} (${cap}/buổi). Bớt set/rep bật nhảy hoặc thay bằng ném bóng tạ.` });
+  }
+  if (days.length === 2 && jumpDays === 2) warnings.push("Tập 2 buổi/tuần: nên chỉ một buổi có bật nhảy, buổi còn lại plyo bằng ném bóng tạ để gối và cổ chân hồi phục.");
+  return { errors, warnings, contacts: perSession, level: lv };
+}
+
 /** Đẩy : kéo (set) — chỉ nhắc khi đẩy nhiều hơn kéo quá 1,5 lần. */
 function pushPullWarning(program) {
   let push = 0, pull = 0;
@@ -466,9 +530,11 @@ function checkProgram(program, o = {}) {
   const c = coverageIssues(program, o.coverageExceptions);
   const d = durationIssues(program, o.minutes);
   const st = structureIssues(program, o.minutes, Number(o.minutes) > 0);
+  const y = o.minor ? youthIssues(program, o.plyoLevel) : null;
   return {
-    errors: [...v.errors, ...c.errors, ...d.errors, ...st.errors],
-    warnings: [...v.warnings, ...d.warnings, ...st.warnings, ...pushPullWarning(program)],
+    errors: [...v.errors, ...c.errors, ...d.errors, ...st.errors, ...(y ? y.errors : [])],
+    warnings: [...v.warnings, ...d.warnings, ...st.warnings, ...pushPullWarning(program), ...(y ? y.warnings : [])],
+    youth: y ? { level: y.level, contacts: y.contacts } : null,
     volume: v.totals, est: d.est, waived: [...v.waived, ...c.waived],
   };
 }
@@ -483,4 +549,4 @@ function parseMinutes(v) {
 }
 
 module.exports = { canonMuscle, parseSets, muscleSets, volumeIssues, patternsCovered, coverageIssues, estimateMinutes,
-  durationIssues, pushPullWarning, checkProgram, newErrors, structureIssues, hybridIssues, stationKeys, runStationMinutes, exerciseMinutes, SESSION_TYPES, parseMinutes, VOLUME, PATTERN_KEYS, PER_SESSION_MAX };
+  durationIssues, pushPullWarning, checkProgram, newErrors, structureIssues, youthIssues, contacts, PLYO_CAP, hybridIssues, stationKeys, runStationMinutes, exerciseMinutes, SESSION_TYPES, parseMinutes, VOLUME, PATTERN_KEYS, PER_SESSION_MAX };

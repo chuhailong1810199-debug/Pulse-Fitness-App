@@ -9885,6 +9885,8 @@ function _aiCheckRows(p, rows) {
   if (vol.length) rows.push(['Set/tuần', vol.slice(0, 8).map(([m, v]) => m + ' ' + v).join(' · ')]);
   const mins = Object.entries(p.minutes || {});
   if (mins.length) rows.push(['Thời lượng', mins.map(([d, m]) => d.replace('Session', '') + ' ~' + m + "'").join(' · ')]);
+  if (p.youth) rows.push(['Plyo (youth)', 'mức ' + p.youth.level + ' · tiếp đất ' + Object.entries(p.youth.contacts || {})
+    .map(([d, n]) => d.replace('Session', '') + ' ' + n).join(' · ')]);
   const rs = Object.entries(p.runSplit || {});
   if (rs.length) rows.push(['Chạy / trạm', rs.map(([d, x]) => d.replace('Session', '') + ' ' + x.run + "'/" + x.station + "'").join(' · ')]);
   if ((p.waived || []).length) rows.push(['Ngoại lệ', p.waived.join(' | ')]);
@@ -9979,7 +9981,11 @@ function _aiNewClientForm() {
       + f('Mỗi buổi', '<select name="dur">' + opt(['45 phút','60 phút','75 phút','90 phút'], '60 phút') + '</select>')
       + f('Nơi tập', '<select name="place">' + opt(_AI_NF_PLACES, _AI_NF_PLACES[0]) + '</select>', true)
       + f('Kiểu buổi', '<select name="style"><option value="classic">Truyền thống — bài chính, bài phụ, circuit cuối</option>'
-        + '<option value="density">Mật độ — 3 block superset × 2 bài, giữ tim cao</option></select>', true)
+        + '<option value="density">Mật độ — 3 block superset × 2 bài, giữ tim cao</option>'
+        + '<option value="youth">Youth development — plyo an toàn + strength dạng block (dưới 18 tuổi)</option></select>', true)
+      + f('Mức plyo (youth)', '<select name="plyo"><option value="">Pulse tự chọn theo cân nặng / kinh nghiệm</option>'
+        + '<option value="0">0 — chỉ ném bóng tạ + học tiếp đất</option><option value="1">1 — tác động thấp (bật lên hộp, bước xuống)</option>'
+        + '<option value="2">2 — broad jump, lateral hop, pogo thấp</option><option value="3">3 — hop liên tục, một chân</option></select>', true)
       + f('Mục tiêu *', '<textarea name="goal" rows="2" required placeholder="VD: giảm mỡ, tăng sức mạnh thân dưới"></textarea>', true)
       + f('Chấn thương / bệnh lý', '<textarea name="health" rows="2" placeholder="VD: đau lưng dưới khi gập người — trống nếu chưa rõ"></textarea>', true)
       + f('Ghi chú thêm', '<textarea name="notes" rows="2" placeholder="Kinh nghiệm tập, bài thích/ghét, lịch sinh hoạt…"></textarea>', true)
@@ -10183,6 +10189,7 @@ function aiBuildEditPrompt(d, clientName, nDays) {
       'Bỏ hẳn một mẫu chuyển động → coverageExceptions kèm lý do chấn thương.',
     ] : []),
     ...(spw && spw !== nDays ? ['Đổi ' + nDays + ' → ' + spw + ' buổi: gộp/tách từ bài cũ' + (spw < nDays ? ', buổi bỏ ghi vào dropSessions' : '') + '.'] : []),
+    'Khách dưới 18 tuổi → theo mục YOUTH DEVELOPMENT (mức plyo, trần tiếp đất, không 1RM) và ĐỌC ghi chú hồ sơ; truyền plyoLevel.',
     'Buổi sau khi sửa vẫn đủ CẤU TRÚC MỘT BUỔI (QUY TRÌNH mục 7): khởi động 3–4 bài, 3–4 block, ≥ 6 bài chính/phụ — bài bỏ phải được THAY, không để buổi mỏng đi.',
     'Gửi ĐỦ mọi buổi đổi trong MỘT lần propose_program. Tóm tắt: BỎ gì (vì sao) · GIỮ + LƯU Ý gì · THÊM gì · nối tạ mấy bài · mốc quay lại.',
   ];
@@ -10213,6 +10220,9 @@ function aiBuildProgramPrompt(d) {
   const spw = Math.min(6, Math.max(1, parseInt(v('spw'), 10) || 3));
   const keys = Array.from({ length: spw }, (_, i) => 'Session' + String.fromCharCode(65 + i)).join(', ');
   const age = parseInt(v('age'), 10);
+  // Dưới 18 tuổi thì luôn theo khung youth, kể cả khi coach quên chọn kiểu buổi.
+  const youth = v('style') === 'youth' || (age > 0 && age < 18);
+  const plyo = /^[0-3]$/.test(v('plyo')) ? v('plyo') : '';
 
   const info = [
     ['Tên', name],
@@ -10237,9 +10247,13 @@ function aiBuildProgramPrompt(d) {
     'Mỗi bài có setsReps, tempo, cue (kỹ thuật + nghỉ bao lâu). Tên bài pha strength/accessories ĐÚNG Y tên search_exercises trả về.',
     'Mỗi buổi có "focus" (1–2 câu vì sao chia buổi như vậy). Mỗi bài pha strength/accessories có "why": MỘT câu vì sao bài đó hợp với CHÍNH khách này (mục tiêu, chấn thương, trình độ, dụng cụ) — không viết câu chung chung.',
     'Volume mỗi nhóm cơ/tuần trong khung trình độ ' + (v('level') || 'Beginner') + ', cả tuần đủ 8 mẫu chuyển động, mỗi buổi vừa ' + (v('dur') || '60 phút') + ' — server sẽ kiểm. Truyền sessionMinutes = ' + (parseInt(v('dur'), 10) || 60) + '. Chủ ý vượt khung hay bỏ mẫu vì chấn thương thì ghi volumeExceptions / coverageExceptions kèm lý do.',
-    v('style') === 'density'
-      ? 'Kiểu buổi MẬT ĐỘ: mỗi buổi 3 block superset × 2 bài (cặp không tranh nhóm cơ), nghỉ 30–45 giây giữa hai bài, 60–90 giây sau cặp — theo mục giảm mỡ (b) của khung.'
-      : 'Kiểu buổi truyền thống: bài chính → bài phụ → circuit cuối nếu mục tiêu cần.',
+    ...(youth
+      ? ['Khách DƯỚI 18 TUỔI / youth development: soạn theo mục YOUTH DEVELOPMENT — khởi động + Landing Drill → ⚡ plyo block 2 bài → 2–3 block strength × 2 bài → core → cardio không va đập. '
+          + (plyo !== '' ? 'Mức plyo ' + plyo + ' (truyền plyoLevel: ' + plyo + ').' : 'Tự chọn mức plyo 0–3 theo cân nặng, BMI, kinh nghiệm; ghi lý do trong focus và truyền plyoLevel.')
+          + ' Truyền age: ' + (age > 0 ? age : '(tuổi khách)') + '. RPE 6–7, không 1RM, không thâm hụt calo.']
+      : [v('style') === 'density'
+        ? 'Kiểu buổi MẬT ĐỘ: mỗi buổi 3 block superset × 2 bài (cặp không tranh nhóm cơ), nghỉ 30–45 giây giữa hai bài, 60–90 giây sau cặp — theo mục giảm mỡ (b) của khung.'
+        : 'Kiểu buổi truyền thống: bài chính → bài phụ → circuit cuối nếu mục tiêu cần.']),
     'Chọn bài theo đúng dụng cụ ở nơi tập, và tránh/thay bài động vào chỗ chấn thương nếu có.',
     'Không chép từng bài ra chữ — thẻ duyệt tự vẽ bảng. Chỉ 2–4 câu giải thích vì sao chia như vậy.',
     'Làm theo QUY TRÌNH SOẠN GIÁO ÁN (cặp bài không tranh cơ, cue ghi nghỉ + kỹ thuật, why gắn số liệu của khách này).',
@@ -10253,7 +10267,7 @@ function aiBuildProgramPrompt(d) {
   const prompt = 'Thông tin khách mới:\n' + info + '\n\nYêu cầu:\n'
     + rules.map((r, i) => (i + 1) + '. ' + r).join('\n');
   const show = 'Soạn giáo án cho khách mới: ' + name + ' · ' + (v('level') || 'Beginner')
-    + ' · ' + spw + ' buổi/tuần' + (v('style') === 'density' ? ' · mật độ' : '') + ' — ' + goal;
+    + ' · ' + spw + ' buổi/tuần' + (youth ? ' · youth' + (plyo !== '' ? ' (plyo ' + plyo + ')' : '') : v('style') === 'density' ? ' · mật độ' : '') + ' — ' + goal;
   return { prompt, show, email };
 }
 
@@ -19388,7 +19402,12 @@ const I18N_FULL = {
   'Ghi đè giáo án của {0}? Bạn đang mở {1}.': 'Overwrite {0}\'s program? You have {1} open.',
   'Giữ nguyên': 'Unchanged', 'Xoá buổi': 'Sessions removed', 'Set/tuần': 'Sets/week', 'Thời lượng': 'Duration',
   'Ngoại lệ': 'Exceptions', 'Lưu ý': 'Notes', 'Kiểu buổi': 'Session style', 'Nối tạ cũ': 'Weights carried over',
-  'Chạy / trạm': 'Run / stations', 'Bỏ': 'Removed', 'Thêm': 'Added', 'Giữ': 'Kept', '{0#} bài (đúng tên cũ)': '{0} exercises (same names)',
+  'Chạy / trạm': 'Run / stations', 'Plyo (youth)': 'Plyo (youth)', 'Mức plyo (youth)': 'Plyo level (youth)',
+  'Youth development — plyo an toàn + strength dạng block (dưới 18 tuổi)': 'Youth development — safe plyo + block strength (under 18)',
+  'Pulse tự chọn theo cân nặng / kinh nghiệm': 'Pulse picks from weight / experience',
+  '0 — chỉ ném bóng tạ + học tiếp đất': '0 — med ball throws + landing drills only',
+  '1 — tác động thấp (bật lên hộp, bước xuống)': '1 — low impact (jump up to box, step down)',
+  '2 — broad jump, lateral hop, pogo thấp': '2 — broad jump, lateral hop, low pogo', '3 — hop liên tục, một chân': '3 — continuous hops, single-leg', 'Bỏ': 'Removed', 'Thêm': 'Added', 'Giữ': 'Kept', '{0#} bài (đúng tên cũ)': '{0} exercises (same names)',
   'Sửa giáo án — chấn thương, đổi số buổi, đổi mục tiêu': 'Edit program — injury, sessions/week, goal',
   'Giữ bài cũ + tạ cũ, chỉ thay bài buộc phải thay, thêm rehab': 'Keeps exercises + weights, swaps only what must change, adds rehab',
   'Sửa giáo án của {0}': 'Edit {0}\'s program', 'Sửa giáo án': 'Edit program', 'Lý do sửa': 'Reason', 'Vùng đau': 'Painful area',

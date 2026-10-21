@@ -283,6 +283,10 @@ Key routing rules:
 - **Lý do chọn bài** (2026-10-15): mỗi buổi có `focus`, mỗi bài pha strength/accessories có `why` — lưu CÙNG
   giáo án. `checkRationale()` chặn đề xuất thiếu. App hiện `why` ở ô "i" và `focus` dưới tiêu đề buổi, cho MỌI người
   (coach + khách). Hỏi "vì sao tập bài X" → trợ lý trả lời từ `why` đã lưu; không có thì phải nói rõ là suy luận.
+- **Youth development** (2026-10-22, khách < 18 tuổi): `YOUTH_METHOD` (assistant.js, rút gọn từ
+  `docs/prompts/youth-development-program.md`, mẫu Antony). Mức plyo 0–3 (`plyoLevel`) → trần tiếp đất/buổi 0/30/60/80;
+  `youthIssues()` chặn vượt trần, bài vượt mức (depth drop, pogo…), 1RM / tới thất bại; khởi động không tính. Tuổi:
+  `isMinorClient()` (baseline.age → profile.dob → "15 tuổi" trong notes/goal). **Kem chưa có tuổi trong dữ liệu.**
 - **Hỏi về khách nào thì đọc khách đó** (2026-10-22): `namedClientId()` (assistant.js) / bản sao `_aiNamedClient()`
   (index.html). Câu coach tự gõ gọi tên ĐÚNG MỘT khách khác khách đang mở → app `openClientDash()` + chuyển Pulse sang
   luồng của khách đó trước khi gửi; server `coachAssistant` cũng đọc khách được gọi tên (vẫn qua `assertCanView`).
