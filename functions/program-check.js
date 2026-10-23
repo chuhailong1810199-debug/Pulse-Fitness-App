@@ -50,6 +50,12 @@ function canonMuscle(name) {
 }
 
 const working = (ph) => { const t = normalizePhaseTag(ph); return t === "strength" || t === "accessories"; };
+/**
+ * Pha plyometric / sức bật (tag strength nhưng tên ghi plyo, jump, sức bật, power): KHÔNG tính vào trần volume tăng
+ * cơ — set bật nhảy ít gây mỏi, không phải "set làm việc" kiểu phì đại. Kem 2026-10-24: 9 bài plyo được gắn nhóm cơ
+ * làm đùi trước / mông vượt trần dù phần hypertrophy chỉ 4 bài / buổi. Số tiếp đất của trẻ đã có youthIssues giữ.
+ */
+const plyoPhase = (ph) => /plyo|sức\s*bật|\bjump|power\b|bật nhảy/i.test(String((ph && ph.name) || ""));
 const round1 = (x) => Math.round(x * 10) / 10;
 
 /** { totals: {Glutes: 9,…}, perSession: {SessionA: {Glutes: 4,…}} } */
@@ -58,7 +64,7 @@ function muscleSets(program) {
   for (const [day, d] of Object.entries(program || {})) {
     const s = (perSession[day] = {});
     for (const ph of (d && d.phases) || []) {
-      if (!working(ph)) continue;
+      if (!working(ph) || plyoPhase(ph)) continue;
       for (const x of (ph && ph.exercises) || []) {
         const n = parseSets(x && x.setsReps);
         for (const [m0, role] of Object.entries((x && x.muscles) || {})) {

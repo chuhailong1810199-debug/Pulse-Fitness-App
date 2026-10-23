@@ -130,3 +130,12 @@ test('cau truc buoi: thieu khoi dong / buoi mong bi chan, nguong theo thoi luong
   assert.deepStrictEqual(r.errors.map((e) => e.k), ['struct:SessionA']);
   assert.deepStrictEqual(r.inherited, ['y']);
 });
+
+test('pha plyometric khong tinh vao tran volume tang co (Kem 2026-10-24)', () => {
+  const ex = (n, s, m) => ({ name: n, setsReps: s, muscles: m });
+  const p = { SessionA: day([
+    ph('strength', [ex('Box Jump', '3 × 5', { Quads: 'P', Glutes: 'P' }), ex('Broad Jump', '3 × 4', { Quads: 'P' })], '⚡ Plyometrics'),
+    ph('strength', [ex('Goblet Squat', '3 × 10', { Quads: 'P' })], '💪 Hypertrophy — Anterior')]) };
+  assert.strictEqual(C.muscleSets(p).totals.Quads, 3, 'chi tinh pha hypertrophy');
+  assert.strictEqual(C.muscleSets(p).totals.Glutes, undefined);
+});
