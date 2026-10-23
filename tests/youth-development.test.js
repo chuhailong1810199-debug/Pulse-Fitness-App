@@ -52,6 +52,15 @@ test('prompt Pulse co khung YOUTH DEVELOPMENT + mau Antony; tool nhan plyoLevel 
   assert.match(A.YOUTH_METHOD, /MỨC PLYOMETRIC/);
   assert.match(A.YOUTH_METHOD, /Landing Drill/);
   assert.match(A.YOUTH_METHOD, /Antony/);
+  // Bổ sung 2026-10-23: giai đoạn PHV, bộ test, tốc độ, phòng chấn thương (nữ), theo dõi chiều cao, tải môn thể thao.
+  assert.match(A.YOUTH_METHOD, /QUANH PHV/);
+  assert.match(A.YOUTH_METHOD, /CMJ, bật xa, chạy 10 m/);
+  assert.match(A.YOUTH_METHOD, /\[circuit\] "🏃 Tốc độ \/\s*nhanh nhẹn"/, 'drill doi huong ngoai thu vien -> tag circuit');
+  assert.match(A.YOUTH_METHOD, /KHÁCH NỮ mỗi buổi/);
+  assert.match(A.YOUTH_METHOD, /đo chiều cao 1–3 tháng/);
+  assert.match(A.YOUTH_METHOD, /TỔNG TẢI = gym \+ môn thể thao/);
+  const doc = fs.readFileSync(path.join(__dirname, '..', 'docs', 'prompts', 'youth-development-program.md'), 'utf8');
+  for (const h of ['## Giai đoạn trưởng thành (PHV)', '## Đánh giá đầu vào + test lại', '## Tổng tải = gym + môn thể thao', '## Theo dõi']) assert.ok(doc.includes(h), h);
   const pp = A.TOOLS.find((t) => t.name === 'propose_program').parameters.properties;
   const pn = A.TOOLS.find((t) => t.name === 'propose_new_client').parameters.properties;
   assert.ok(pp.plyoLevel && pn.plyoLevel && pn.age);

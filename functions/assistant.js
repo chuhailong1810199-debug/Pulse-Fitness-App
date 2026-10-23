@@ -1225,6 +1225,16 @@ Mục tiêu: kỹ năng vận động, sức mạnh nền, sức bật an toàn,
    calo. Cần phụ huynh đồng ý. Đau khi bật ở gối dưới xương bánh chè hoặc gót chân → bỏ bật nhảy, chỉ ném bóng tạ, báo
    coach. Đang lớn nhanh (cao thêm > 5 cm / 6 tháng) → giảm plyo ~30%. BMI ≥ 30 → không chạy, không nhảy liên tục; cardio
    bằng xe đạp / máy chèo / đi dốc. ĐỌC ghi chú hồ sơ (notes) — coach ghi giới hạn riêng thì theo đúng ghi chú đó.
+1b. GIAI ĐOẠN TRƯỞNG THÀNH (PHV) — quyết định ưu tiên; ước tính từ tốc độ cao lên / chiều cao ngồi, ghi rõ căn cứ, không
+   đủ dữ liệu thì coi là QUANH PHV (an toàn nhất) và nói ra. Trước PHV (cao đều < ~5 cm/năm): kỹ năng vận động cơ bản,
+   phối hợp, tốc độ, sức mạnh qua kỹ thuật, tạ nhẹ. QUANH PHV (đang cao nhanh ≥ 7–8 cm/năm, hay vụng, đau gối/gót): giữ
+   kỹ thuật + kiểm soát, GIẢM plyo và va đập ~30%, mobility. Sau PHV: tăng dần sức mạnh, phì đại, công suất.
+1c. ĐÁNH GIÁ + TEST LẠI 8–12 tuần (cùng bộ): chuyển động (squat, hinge, lunge, tiếp đất 2 chân + 1 chân — gối chụm?,
+   chống đẩy, kéo, giữ thân) + thể lực (CMJ, bật xa, chạy 10 m / 20 m, sức nắm, plank, test aerobic). Chưa có kết quả
+   → buổi đầu là buổi test (ghi trong focus). Lỗi chuyển động nào thì đưa bài sửa lỗi đó vào khởi động.
+1d. TỔNG TẢI = gym + môn thể thao (hỏi số giờ ở trường / câu lạc bộ / thi đấu). Môn đã nhiều bật nhảy / chạy → gym bớt
+   plyo + tốc độ, giữ sức mạnh + phòng chấn thương; mùa thi đấu giảm khối lượng gym ~30–40%; không xếp buổi nặng chân
+   ngay trước ngày thi đấu.
 2. MỨC PLYOMETRIC — chọn, ghi rõ trong focus, truyền plyoLevel cho propose_* (server chặn vượt trần tiếp đất/buổi):
    · 0 (BMI ≥ 30 mới tập, đang đau khớp): chỉ ném bóng tạ (Front Toss, Slam, Side Throw) + học tiếp đất. 0 lần bật.
    · 1 tác động thấp: + Box Jump LÊN hộp ≤ 30 cm rồi BƯỚC xuống, squat jump giữ tiếp đất. ≤ 30 lần tiếp đất / buổi.
@@ -1232,13 +1242,22 @@ Mục tiêu: kỹ năng vận động, sức mạnh nền, sức bật an toàn,
    · 3 (tập > 6 tháng, chơi thể thao bật nhảy): + hop liên tục, bật một chân, depth drop ≤ 30 cm. ≤ 80.
    Tập 2 buổi/tuần: bật nhảy chỉ MỘT buổi, buổi còn lại plyo bằng ném bóng tạ. Nghỉ 60–90s giữa các set plyo; dừng set
    khi tiếp đất ồn, gối chụm vào trong, mất thăng bằng.
-3. CẤU TRÚC MỘT BUỔI (60–70'): [warmup] khởi động 8–10' + "Landing Drill — Drop Squat & Stick" 2 × 5 → [strength]
-   "⚡ Plyometric — … (2 bài)": 1 bài bật theo mức + 1 bài ném bóng tạ, 3 × 4–6, làm KHI CÒN KHOẺ → [strength] 2–3 block
-   × 2 bài không tranh nhóm cơ, 3 × 6–12, RPE 6–7, nghỉ 30–45s giữa 2 bài / 60–90s sau cặp → [accessories] 1–2 block
-   × 2 bài (một chân, core chống duỗi/xoay, vai sau) → [circuit] cardio không va đập 10–12'.
+3. CẤU TRÚC MỘT BUỔI (60–70'): [warmup] khởi động RAMP 8–10' + "Landing Drill — Drop Squat & Stick" 2 × 5 → [strength]
+   "⚡ Plyometric — … (2 bài)": 1 bài bật theo mức + 1 bài ném bóng tạ, 3 × 4–6, làm KHI CÒN KHOẺ → [circuit] "🏃 Tốc độ /
+   nhanh nhẹn" 5–8' (tag circuit: drill đổi hướng không có trong thư viện; sprint dùng "Sprint (Bodyweight)") ít nhất MỘT buổi/tuần (sprint 10–20 m, đổi hướng 5-10-5, phản xạ theo tín hiệu, nghỉ đủ; BMI ≥ 30
+   hoặc đau tăng trưởng → đổi hướng đi nhanh / phản xạ tay / sprint xe đạp) → [strength] 2–3 block × 2 bài không tranh
+   nhóm cơ, 3 × 6–12, RPE 6–7, nghỉ 30–45s giữa 2 bài / 60–90s sau cặp → [accessories] PHÒNG CHẤN THƯƠNG có chủ đích
+   1–2 block × 2 bài: đùi sau (Nordic hỗ trợ, leg curl), kiểm soát gối một chân (split squat, step-up chậm, giữ tiếp đất
+   một chân — KHÁCH NỮ mỗi buổi, nguy cơ đứt dây chằng chéo trước cao hơn), core chống duỗi/xoay, cổ chân, vai sau →
+   [circuit] thể lực không va đập hoặc trò chơi có vận động 10–12' → thả lỏng 3–5' (ghi trong focus).
 4. TIẾN ĐỘ 3–4 tuần: lên mức khi tiếp đất luôn êm, gối không chụm, không đau — thêm set → thêm bài → mới tới độ cao.
-5. TÓM TẮT: mức plyo + số lần tiếp đất / buổi, vì sao buổi B chỉ ném bóng, cách ghép block, bài giữ tạ cũ, mốc lên
-   mức, nhắc phụ huynh đồng ý + không thâm hụt calo.
+   THEO DÕI: đo chiều cao 1–3 tháng/lần (cao nhanh lên → chuyển luật QUANH PHV), RPE + đau (gối dưới bánh chè, gót, lưng
+   dưới) + ngủ mỗi buổi, test lại 8–12 tuần. Lên mức theo tiêu chí đo được, không theo lịch. Vui + được chọn một phần
+   bài là một phần mục tiêu; khuyến khích chơi nhiều môn; không nói về cân nặng theo hướng tiêu cực.
+5. TÓM TẮT: giai đoạn trưởng thành + căn cứ, mức plyo + số lần tiếp đất / buổi, vì sao buổi B chỉ ném bóng, phần tốc
+   độ ở buổi nào, phòng chấn thương nhắm vào gì, tải môn thể thao đã tính chưa, bài giữ tạ cũ, mốc lên mức, ngày đo chiều
+   cao + ngày test lại, nhắc phụ huynh đồng ý + không thâm hụt calo. Thiếu dữ liệu (chiều cao cũ, môn thể thao, test) →
+   hỏi coach trong tóm tắt, không bịa.
    Mẫu đã duyệt: Antony (15t, 80 kg / 1m60, mức 1) — A: khởi động + Landing Drill · Plyo [Box Jump 3 × 4 + Front Toss
    (Med Ball) 3 × 6] · Block Leg Press + Incline Push-up · Block Goblet Squat + Landmine Press · Block Cable Chest Fly +
    Dead Bug · Cardio bike/đi dốc 12'. B: Plyo [Slam (Med Ball) 3 × 6 + Med Ball Side Throw 3 × 5/side] · 4 block
