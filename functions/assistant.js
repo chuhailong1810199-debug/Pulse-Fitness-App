@@ -1118,7 +1118,8 @@ const METHOD = `PHƯƠNG PHÁP SOẠN GIÁO ÁN (khung của studio — coach n�
    - 1–3 buổi/tuần → toàn thân mỗi buổi. 4 buổi → Trên/Dưới ×2. 5–6 buổi → Trên/Dưới + toàn thân,
      hoặc Đẩy/Kéo/Chân. Mỗi nhóm cơ chính được tập ≥2 lần/tuần khi số buổi cho phép.
    - Cả tuần phải đủ các mẫu chuyển động: gập gối (squat/lunge), gập hông (hinge), đẩy ngang, đẩy dọc,
-     kéo ngang, kéo dọc, core chống xoay/chống duỗi, một bài một chân hoặc carry.
+     kéo ngang, kéo dọc, core ĐỦ 3 cơ chế ổn định (chống duỗi, chống xoay, chống nghiêng — xem mục CORE), một bài
+     một chân hoặc carry.
    - Đẩy : kéo ≈ 1 : 1 (kéo nhiều hơn nếu khách ngồi nhiều, gù, đau vai).
 4. THỨ TỰ BÀI TRONG BUỔI — đúng 4 tag pha, theo thứ tự:
    warmup (5–10 phút: mobility + kích hoạt) → strength (bài nhiều khớp nặng nhất, bài power/nhảy trước khi mỏi)
@@ -1134,9 +1135,39 @@ Dưới 18 tuổi: ưu tiên kỹ thuật, RIR 2–3, không test 1RM, không t�
 Khi in giáo án: kèm một dòng tổng số set làm việc mỗi nhóm cơ chính trong tuần, để coach đối chiếu mục 1.
 SERVER TỰ KIỂM khi đề xuất (sai là bị trả lỗi): cấu trúc buổi (khởi động ≥ 2 bài; buổi 60' ≥ 6 bài chính/phụ và
 ≥ 15 set — xem QUY TRÌNH mục 7), volume mỗi nhóm cơ/tuần không vượt trần trình độ, mỗi buổi
-một nhóm cơ ≤ ~10 set, cả tuần đủ 8 mẫu chuyển động (squat, hinge, hpush, vpush, hpull, vpull, core, single),
+một nhóm cơ ≤ ~10 set, cả tuần đủ các mẫu chuyển động (squat, hinge, hpush, vpush, hpull, vpull, core_ext, core_rot,
+core_lat, single),
 và buổi không dài quá thời lượng (sessionMinutes; ~2,5 phút/set, superset ~1,75). Coach CHỦ Ý dồn volume một
 nhóm cơ hoặc bỏ một mẫu vì chấn thương → ghi volumeExceptions / coverageExceptions kèm lý do, đừng lách.`;
+
+// ── Core (2026-10-26) ───────────────────────────────────────────────────
+// Coach yêu cầu áp đủ các cơ chế core cho MỌI giáo án từ nay. Server kiểm 3 cơ chế ổn định / tuần
+// (program-check.js core_ext / core_rot / core_lat); phần còn lại là hướng dẫn chọn theo mục tiêu.
+const CORE_METHOD = `CORE — 9 cơ chế, áp cho MỌI giáo án (1-1, youth, sửa giáo án)
+A. ỔN ĐỊNH (chống chuyển động) — ưu tiên, chức năng chính của core khi chạy, nhảy, mang, đẩy kéo:
+   1. Chống DUỖI (lưng không võng): Plank, Dead Bug, Ab Wheel / Rollout, Body Saw, Hollow Hold.
+   2. Chống XOAY (thân không vặn): Pallof Press, Bird Dog, Renegade Row, plank kéo tạ / chạm vai.
+   3. Chống NGHIÊNG (thân không đổ bên): Side Plank, Suitcase Carry (xách tạ một tay), Copenhagen Plank.
+   4. Chống GẬP (lưng không cong khi mang nặng): Front Rack / Zercher Carry, giữ tĩnh back extension, lưng thẳng khi hinge.
+B. ĐỘNG (tạo chuyển động) — tuỳ mục tiêu:
+   5. Gập thân: Cable Crunch, Reverse Crunch, Hanging Knee / Leg Raise — liều vừa; đau lưng thì ưu tiên nhóm A.
+   6. Duỗi thân: Back Extension, Reverse Hyper — duỗi về thẳng người, không ưỡn quá.
+   7. Xoay có kiểm soát: Cable Woodchop, Landmine Rotation, Russian Twist chậm — xoay từ hông + ngực, không vặn lưng dưới.
+   8. Công suất xoay / ném: Med Ball Side Throw, Rotational Slam, Chest Pass — làm khi còn khoẻ (boxing, bóng, tennis).
+C. NỀN: 9. Thở + gồng bụng (áp lực ổ bụng): thở bụng 90/90, gồng 360°, Dead Bug thở ra hết — người mới, đau lưng, sau
+   sinh bắt đầu từ đây.
+LUẬT:
+- MỖI TUẦN BẮT BUỘC đủ 3 cơ chế ổn định 1–2–3 (server kiểm: core_ext, core_rot, core_lat; bài trong khởi động / Core
+  Activation cũng tính). Chống gập (4) có qua bài mang vác / hinge. Cơ chế động (5–8) thêm theo mục tiêu.
+- Bài gập thân / xoay động KHÔNG thay được 3 cơ chế ổn định.
+- Tiến độ: giữ tĩnh 20–30s → động chậm (dead bug, bird dog) → có tải / tay đòn dài (rollout, Pallof nặng) → mang vác
+  một bên (suitcase) → công suất (ném bóng tạ).
+- Liều: giữ tĩnh 3 × 20–45s; động 2–3 × 8–12 (/bên); mang vác 3 × 20–40 m; ném 3 × 5–6 nổ.
+- Vị trí: kích hoạt nhẹ (dead bug, bird dog) ở khởi động; core nặng / có tải cuối buổi hoặc ghép cặp. KHÔNG làm core mệt
+  TRƯỚC squat / deadlift nặng.
+- Theo mục tiêu: đau lưng / mới tập → nhóm A + thở. Thể thao, boxing → thêm 7 + 8. Thẩm mỹ bụng → thêm 5 có tải.
+  Chấn thương không cho phép một cơ chế → coverageExceptions.<core_ext | core_rot | core_lat> kèm lý do.
+- Tóm tắt cho coach: ghi cơ chế core nào nằm ở buổi nào.`;
 
 // ── Quy trình soạn của coach (2026-10-19) ───────────────────────────────
 // Chép từ cách giáo án Sang / Cindy / Thái Sơn / Anh Đạo được soạn tay và coach duyệt:
@@ -1396,6 +1427,8 @@ GIÁO ÁN
   Trong câu trả lời KHÔNG chép lại từng bài; chỉ 2–4 câu: chia buổi thế nào, tổng set mỗi nhóm cơ, điểm cần lưu ý.
 
 ${METHOD}
+
+${CORE_METHOD}
 
 ${PLAYBOOK}
 
@@ -1750,4 +1783,4 @@ function buildMorningPush({ bookings, rec }) {
 }
 
 module.exports = { CLIENT_TOOLS, CLIENT_TOOL_NAMES, CLIENT_SYSTEM, runClientTool, TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, METHOD, GROUP_METHOD, EXPLAIN_METHOD, FORMAT_RULES, compactProgram, checkRationale, GROUP_FORMATS, groupName, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, THINK_DESIGN, designIntent, runTool, runAssistant, progSummary, shapeReply,
-  validateProgram, validateNewClient, makeClientId, LEVELS, CHECK_PARAMS, PLAYBOOK, EDIT_METHOD, YOUTH_METHOD, isMinorClient, namedClientId, fillMuscles, programDiff, MAX_STEPS_DESIGN, TIME_BUDGET_MS, HARD_STOP_MS, mergeProgram, exerciseHit, targetMismatch, nameInText };
+  validateProgram, validateNewClient, makeClientId, LEVELS, CHECK_PARAMS, PLAYBOOK, EDIT_METHOD, YOUTH_METHOD, CORE_METHOD, isMinorClient, namedClientId, fillMuscles, programDiff, MAX_STEPS_DESIGN, TIME_BUDGET_MS, HARD_STOP_MS, mergeProgram, exerciseHit, targetMismatch, nameInText };

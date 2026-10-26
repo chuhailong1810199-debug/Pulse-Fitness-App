@@ -287,6 +287,9 @@ Key routing rules:
   `docs/prompts/youth-development-program.md`, mẫu Antony). Mức plyo 0–3 (`plyoLevel`) → trần tiếp đất/buổi 0/30/60/80;
   `youthIssues()` chặn vượt trần, bài vượt mức (depth drop, pogo…), 1RM / tới thất bại; khởi động không tính. Tuổi:
   `isMinorClient()` (baseline.age → profile.dob → "15 tuổi" trong notes/goal). **Kem chưa có tuổi trong dữ liệu.**
+- **Core** (2026-10-26): `CORE_METHOD` (assistant.js) — 9 cơ chế (ổn định: chống duỗi / xoay / nghiêng / gập; động:
+  gập, duỗi, xoay, công suất xoay; nền: thở + gồng). Server bắt MỖI TUẦN đủ 3 mẫu `core_ext`, `core_rot`, `core_lat`
+  (thay mẫu "core" cũ; bài trong khởi động cũng tính; crunch / russian twist không thay được). Ngoại lệ cũ `core` miễn cả 3.
 - **Hỏi về khách nào thì đọc khách đó** (2026-10-22): `namedClientId()` (assistant.js) / bản sao `_aiNamedClient()`
   (index.html). Câu coach tự gõ gọi tên ĐÚNG MỘT khách khác khách đang mở → app `openClientDash()` + chuyển Pulse sang
   luồng của khách đó trước khi gửi; server `coachAssistant` cũng đọc khách được gọi tên (vẫn qua `assertCanView`).

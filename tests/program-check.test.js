@@ -14,7 +14,8 @@ const ph = (tag, exercises, name) => ({ name: name || tag, tag, exercises });
 const FULL = {
   SessionA: day([ph('warmup', [ex('Jumping Jacks', '2 phút')]),
     ph('strength', [ex('Goblet Squat (Dumbbell)', '3 × 10', { Quads: 'P', Glutes: 'S' }), ex('Push Up', '3 × 8', { Chest: 'P', Triceps: 'S' })]),
-    ph('accessories', [ex('Lat Pulldown (Cable)', '3 × 10', { Lats: 'P', Biceps: 'S' }), ex('Dead Bug', '3 × 8/bên', { Abs: 'P' })])]),
+    ph('accessories', [ex('Lat Pulldown (Cable)', '3 × 10', { Lats: 'P', Biceps: 'S' }), ex('Dead Bug', '3 × 8/bên', { Abs: 'P' }),
+      ex('Pallof Press (Band)', '2 × 10/bên', { Abs: 'P' }), ex('Side Plank (Bodyweight)', '2 × 30s/bên', { Abs: 'P' })])]),
   SessionB: day([ph('strength', [ex('Romanian Deadlift (Dumbbell)', '3 × 8', { Hamstrings: 'P', Glutes: 'P' }), ex('Shoulder Press (Dumbbell)', '3 × 10', { 'Front Delts': 'P' })]),
     ph('accessories', [ex('Seated Cable Row', '3 × 10', { Lats: 'P', Rhomboids: 'S' }), ex("Farmer's Carry (Dumbbell)", '3 × 30s', { Forearms: 'P' })])]),
 };
@@ -138,4 +139,19 @@ test('pha plyometric khong tinh vao tran volume tang co (Kem 2026-10-24)', () =>
     ph('strength', [ex('Goblet Squat', '3 × 10', { Quads: 'P' })], '💪 Hypertrophy — Anterior')]) };
   assert.strictEqual(C.muscleSets(p).totals.Quads, 3, 'chi tinh pha hypertrophy');
   assert.strictEqual(C.muscleSets(p).totals.Glutes, undefined);
+});
+
+test('core: du 3 co che on dinh moi tuan; crunch / russian twist khong thay duoc; core trong khoi dong van tinh', () => {
+  const only = (names, tag = 'accessories') => ({ SessionA: day([ph(tag, names.map((n) => ({ name: n, setsReps: '3 × 10' })))]) });
+  const ks = (p) => [...C.patternsCovered(p)].filter((k) => k.startsWith('core')).sort();
+  assert.deepStrictEqual(ks(only(['Plank', 'Pallof Press (Band)', 'Suitcase Carry'])), ['core_ext', 'core_lat', 'core_rot']);
+  assert.deepStrictEqual(ks(only(['Cable Crunch', 'Russian Twist', 'Hanging Leg Raise'])), [], 'co che dong khong tinh');
+  assert.deepStrictEqual(ks(only(['Side Plank', 'Copenhagen Plank'])), ['core_lat'], 'side plank khong phai chong duoi');
+  assert.deepStrictEqual(ks(only(['Dead Bug', 'Bird Dog', 'Side Plank'], 'warmup')), ['core_ext', 'core_lat', 'core_rot'], 'Core Activation dau buoi van tinh');
+  const miss = C.coverageIssues(only(['Plank'])).errors.map((e) => e.k);
+  assert.ok(miss.includes('cov:core_rot') && miss.includes('cov:core_lat') && !miss.includes('cov:core_ext'));
+  assert.deepStrictEqual(C.coverageIssues(only(['Plank']), { core: 'cu' }).errors.filter((e) => /core/.test(e.k)), [], 'ngoai le "core" cu mien ca 3');
+  const A = require('../functions/assistant.js');
+  assert.match(A.SYSTEM, /CORE — 9 cơ chế/);
+  assert.match(A.CORE_METHOD, /MỖI TUẦN BẮT BUỘC đủ 3 cơ chế ổn định/);
 });

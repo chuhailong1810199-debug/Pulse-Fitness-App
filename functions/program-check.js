@@ -122,21 +122,27 @@ const PATTERNS = [
   ["vpush", "đẩy dọc", /overhead|shoulder press|military|push press|arnold|landmine press|pike|handstand|\bohp\b|thruster|\bjerk\b|z[\s-]?press|y[\s-]?press/i],
   ["hpull", "kéo ngang", /\brows?\b|rowing|face ?pull|inverted|reverse fly|rear delt fly|pull[\s-]?apart|seal row/i],
   ["vpull", "kéo dọc", /pull[\s-]?up|chin[\s-]?up|pull[\s-]?down|lat pull|pulldown/i],
-  ["core", "core chống xoay / chống duỗi", /plank|dead ?bug|pallof|bird ?dog|crunch|sit[\s-]?up|rollout|ab wheel|hollow|wood ?chop|russian twist|leg raise|knee raise|toes[\s-]?to[\s-]?bar|v[\s-]?up|mountain climber|anti[\s-]?rotation|suitcase|copenhagen|landmine rotation|stir the pot/i],
+  // Core tách 3 cơ chế ỔN ĐỊNH bắt buộc mỗi tuần (2026-10-26, CORE_METHOD trong assistant.js). Bài gập thân (crunch,
+  // leg raise) / xoay động (woodchop, russian twist) là cơ chế ĐỘNG — tốt, nhưng không thay được 3 cơ chế này.
+  ["core_ext", "core chống duỗi (plank, dead bug, rollout, hollow)", /^(?!.*(side|copenhagen)).*\bplank\b|dead ?bug|rollout|ab wheel|body ?saw|hollow|stir the pot|bear (crawl|hold|plank)/i],
+  ["core_rot", "core chống xoay (pallof, bird dog, renegade row)", /pallof|bird ?dog|renegade|anti[\s-]?rotation|plank (pull|drag|row|reach)|shoulder tap|landmine (anti|rainbow)/i],
+  ["core_lat", "core chống nghiêng (side plank, suitcase carry, copenhagen)", /side plank|suitcase|copenhagen|offset (carry|farmer)|single[\s-]?arm (farmer|carry)|one[\s-]?arm (farmer|carry)/i],
   ["single", "một chân hoặc carry", /lunge|split squat|step[\s-]?up|single[\s-]?leg|one[\s-]?leg|\bsl\b|pistol|bulgarian|carry|farmer|suitcase|skater|cossack|kickstand/i],
 ];
 const PATTERN_KEYS = PATTERNS.map((p) => p[0]);
+/** Mẫu core: tính cả bài trong khởi động (Core Activation đầu buổi là core thật, liều nhẹ). */
+const CORE_KEYS = ["core_ext", "core_rot", "core_lat"];
 
 /** Mẫu chuyển động có mặt trong tuần (bỏ khởi động; máy cardio không tính là bài kéo). */
 function patternsCovered(program) {
   const have = new Set();
   for (const d of Object.values(program || {})) {
     for (const ph of (d && d.phases) || []) {
-      if (normalizePhaseTag(ph) === "warmup") continue;
+      const warm = normalizePhaseTag(ph) === "warmup";
       for (const x of (ph && ph.exercises) || []) {
         const n = String((x && x.name) || "");
         if (ERG.test(n)) continue;
-        for (const [k, , re] of PATTERNS) if (re.test(n)) have.add(k);
+        for (const [k, , re] of PATTERNS) if ((!warm || CORE_KEYS.includes(k)) && re.test(n)) have.add(k);
       }
     }
   }
@@ -153,7 +159,8 @@ function coverageIssues(program, exceptions) {
   const errors = [], waived = [];
   for (const [k, label] of PATTERNS) {
     if (have.has(k)) continue;
-    const why = String(ex[k] || "").trim();
+    // Ngoại lệ cũ ghi "core" (một khoá chung) vẫn miễn cả 3 cơ chế core.
+    const why = String(ex[k] || (CORE_KEYS.includes(k) ? ex.core : "") || "").trim();
     if (why) waived.push(`${label}: ${why}`);
     else errors.push({ k: "cov:" + k, m: `Cả tuần thiếu mẫu ${label} [${k}]. Thêm một bài, hoặc nếu chấn thương không cho phép thì ghi coverageExceptions.${k} = lý do.` });
   }
@@ -554,5 +561,5 @@ function parseMinutes(v) {
   return m ? +m[0] : null;
 }
 
-module.exports = { canonMuscle, parseSets, muscleSets, volumeIssues, patternsCovered, coverageIssues, estimateMinutes,
+module.exports = { CORE_KEYS, canonMuscle, parseSets, muscleSets, volumeIssues, patternsCovered, coverageIssues, estimateMinutes,
   durationIssues, pushPullWarning, checkProgram, newErrors, structureIssues, youthIssues, contacts, PLYO_CAP, hybridIssues, stationKeys, runStationMinutes, exerciseMinutes, SESSION_TYPES, parseMinutes, VOLUME, PATTERN_KEYS, PER_SESSION_MAX };

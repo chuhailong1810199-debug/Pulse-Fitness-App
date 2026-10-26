@@ -29,6 +29,8 @@ const LIB = [
   { id: 'e11', name: 'Lat Pulldown (Cable)', tool: 'Cable', muscles: { Lats: 'P' } },
   { id: 'e12', name: 'Plank (Bodyweight)', tool: 'Bodyweight', muscles: { Abs: 'P' } },
   { id: 'e13', name: 'Hip Thrust (Barbell)', tool: 'Barbell', muscles: { Glutes: 'P' } },
+  { id: 'e14', name: 'Pallof Press (Band)', tool: 'Band', muscles: { Abs: 'P' } },
+  { id: 'e15', name: 'Side Plank (Bodyweight)', tool: 'Bodyweight', muscles: { Abs: 'P' } },
 ];
 const db = { collection: (n) => ({
   doc: (id) => ({ get: async () => ({ exists: n === 'clients' && id === 'dao', id,
@@ -193,11 +195,13 @@ test('propose_program chan giao an vuot khung; sua 1 buoi thi loi cu khong chan,
   const lib = [['Goblet Squat (Dumbbell)', { Quads: 'P', Glutes: 'S' }], ['Romanian Deadlift (Dumbbell)', { Hamstrings: 'P', Glutes: 'P' }],
     ['Narrow Push Up (BW)', { Chest: 'P' }], ['Shoulder Press (Dumbbell)', { 'Front Delts': 'P' }], ['Seated Row (Cable)', { Lats: 'P' }],
     ['Lat Pulldown (Cable)', { Lats: 'P' }], ['Plank (Bodyweight)', { Abs: 'P' }], ["Farmer's Carry (Dumbbell)", { Forearms: 'P' }],
-    ['Hip Thrust (Barbell)', { Glutes: 'P' }]].map(([name, muscles], i) => ({ id: 'L' + i, name, muscles }));
+    ['Hip Thrust (Barbell)', { Glutes: 'P' }], ['Pallof Press (Band)', { Abs: 'P' }], ['Side Plank (Bodyweight)', { Abs: 'P' }]]
+    .map(([name, muscles], i) => ({ id: 'L' + i, name, muscles }));
   const week = { SessionA: fill({ label: 'A', focus: 'f', phases: [{ name: 'Main', tag: 'strength', exercises: [
       ex('Goblet Squat (Dumbbell)', '3 × 10'), ex('Narrow Push Up (BW)', '3 × 8'), ex('Seated Row (Cable)', '3 × 10'), ex('Plank (Bodyweight)', '3 × 30s')] }] }),
     SessionB: fill({ label: 'B', focus: 'f', phases: [{ name: 'Main', tag: 'strength', exercises: [
-      ex('Romanian Deadlift (Dumbbell)', '3 × 8'), ex('Shoulder Press (Dumbbell)', '3 × 10'), ex('Lat Pulldown (Cable)', '3 × 10'), ex("Farmer's Carry (Dumbbell)", '3 × 30s')] }] }) };
+      ex('Romanian Deadlift (Dumbbell)', '3 × 8'), ex('Shoulder Press (Dumbbell)', '3 × 10'), ex('Lat Pulldown (Cable)', '3 × 10'), ex("Farmer's Carry (Dumbbell)", '3 × 30s'),
+      ex('Pallof Press (Band)', '2 × 10/side'), ex('Side Plank (Bodyweight)', '2 × 30s')] }] }) };
   const people = { kim: { name: 'Kim', level: 'Beginner', program: {} } };
   const db3 = { collection: (n) => ({
     doc: (id) => ({ get: async () => ({ exists: n === 'clients' && !!people[id], id, data: () => people[id] }) }),
