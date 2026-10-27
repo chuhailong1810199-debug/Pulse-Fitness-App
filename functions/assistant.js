@@ -17,6 +17,41 @@ const { getFirestore } = require("firebase-admin/firestore");
 const { fold } = require("./log-reminder.js");
 const PC = require("./program-check.js");
 
+/**
+ * Schema ĐẦY ĐỦ của một giáo án cho tool đề xuất. Trước để `{ type: "object" }` trống → Gemini tự đoán: gửi pha dưới
+ * dạng chuỗi, nhét sessionMinutes vào trong program → bị từ chối liên tục, một lần soạn lớp nhóm mất 12 lượt (2026-10-27).
+ * Khoá buổi khai rõ SessionA…G (validateProgram vẫn chặn khoá sai).
+ */
+const EXERCISE_SCHEMA = { type: "object", properties: {
+  name: { type: "string" }, setsReps: { type: "string", description: "VD \"3 × 8-10\", \"3 × 10/bên\", \"5 × 3 phút\"" },
+  tempo: { type: "string" }, cue: { type: "string", description: "nghỉ bao lâu | kỹ thuật ngắn | Last load nếu có" },
+  why: { type: "string", description: "1 câu vì sao bài này cho CHÍNH khách này (bắt buộc ở strength/accessories)" },
+}, required: ["name", "setsReps"] };
+const SESSION_SCHEMA = { type: "object", properties: {
+  label: { type: "string" }, focus: { type: "string", description: "1–2 câu vì sao buổi này chia như vậy" },
+  phases: { type: "array", items: { type: "object", properties: {
+    name: { type: "string" }, tag: { type: "string", enum: ["warmup", "strength", "accessories", "circuit"] },
+    exercises: { type: "array", items: EXERCISE_SCHEMA },
+  }, required: ["name", "tag", "exercises"] } },
+}, required: ["label", "focus", "phases"] };
+const PROGRAM_SCHEMA = { type: "object",
+  properties: Object.fromEntries(["A", "B", "C", "D", "E", "F", "G"].map((x) => ["Session" + x, SESSION_SCHEMA])) };
+
+/**
+ * Gemini hay nhét tham số của tool vào TRONG program ({ SessionA…, sessionMinutes: 60 }) → bị chặn "khoá buổi sai định
+ * dạng", tốn một lượt. Nhấc các giá trị không phải object (số, chuỗi) ở khoá không phải SessionX ra tham số tool (nếu
+ * tham số đó còn trống). Khoá buổi sai thật (VD "Mon" mang object) vẫn để validateProgram chặn.
+ */
+function liftProgramParams(a) {
+  const p = a && a.program;
+  if (!p || typeof p !== "object" || Array.isArray(p)) return;
+  for (const k of Object.keys(p)) {
+    if (/^Session[A-G]$/.test(k) || (p[k] && typeof p[k] === "object")) continue;
+    if (a[k] == null) a[k] = p[k];
+    delete p[k];
+  }
+}
+
 /** Tham số chung của hai tool đề xuất: ngoại lệ có lý do + thời lượng buổi. */
 const CHECK_PARAMS = {
   plyoLevel: { type: "integer", description: "CHỈ khách < 18 tuổi: mức plyometric 0–3 theo mục YOUTH DEVELOPMENT (server chặn vượt trần tiếp đất/buổi)" },
@@ -248,7 +283,7 @@ const TOOLS = [
       properties: {
         clientId: { type: "string" },
         program: {
-          type: "object",
+          ...PROGRAM_SCHEMA,
           description:
             "{ SessionA: { label, focus, phases: [ { name, tag, exercises: " +
             "[ { name, setsReps, tempo, cue, why } ] } ] } }. focus = 1–2 câu vì sao buổi này chia như vậy; " +
@@ -292,7 +327,7 @@ const TOOLS = [
         groupSize: { type: "integer", description: "Chỉ khi isGroup: số học viên thường có mặt (2–40)" },
         durationMin: { type: "integer", description: "Chỉ khi isGroup: thời lượng một buổi lớp, phút" },
         equipment: { type: "string", description: "Chỉ khi isGroup: dụng cụ có sẵn KÈM SỐ LƯỢNG, đúng như coach kể" },
-        program: { type: "object", description: "giáo án ban đầu, cùng dạng propose_program" },
+        program: { ...PROGRAM_SCHEMA, description: "giáo án ban đầu, cùng dạng propose_program" },
       },
       required: ["name"],
     },
@@ -389,7 +424,7 @@ async function libFor(db, oldProgram) {
   }
   const keep = new Set(names);
   const idx = buildLibIndex(lib);
-  return { errors: [], idx, resolve: (p) => resolveProgram(p, idx, { keepNames: keep }) };
+  return { errors: [], idx, resolve: (p, o = {}) => resolveProgram(p, idx, { keepNames: keep, ...o }) };
 }
 
 /**
@@ -761,6 +796,7 @@ async function execTool(db, name, a, role, ctx) {
           + "Gọi các tool đó, xem chấn thương và mức tạ hiện tại, rồi soạn lại và đề xuất."] };
       }
     }
+    liftProgramParams(a);
     const v = validateProgram(a.program);
     if (!v.ok) return { rejected: true, errors: v.errors, note: "Giáo án chưa hợp lệ, sửa rồi đề xuất lại." };
     const c = await db.collection("clients").doc(a.clientId).get();
@@ -773,7 +809,11 @@ async function execTool(db, name, a, role, ctx) {
     }
     // Báo MỌI lỗi trong một lần — tên bài lẫn thiếu why/focus. Báo từng đợt (12 lỗi
     // tên, sửa xong mới tới lỗi why) thì giáo án 30 bài cần 4–5 vòng và chạm trần.
-    const r = lib.resolve(a.program);
+    // Lớp Hybrid / HYROX: trạm thi (Sled Push / Pull, SkiErg, Sandbag Lunge, Burpee Broad Jump…) phần lớn không có trong
+    // thư viện — cho dùng tên ngoài thư viện ở mọi pha (lớp không kiểm volume / nối tạ theo tên). 2026-10-27: "Sled Push"
+    // ở pha kỹ thuật bị chặn liên tục, mỗi lần soạn lớp tốn thêm 2–4 lượt.
+    const hyroxGroup = (c0.data() || {}).isGroup === true && (c0.data() || {}).groupFormat === "hyrox";
+    const r = lib.resolve(a.program, hyroxGroup ? { strict: false } : {});
     const inferred = fillMuscles(r.program, old, lib.idx);
     const why = checkRationale(r.program);
     if (r.errors.length || why.length) {
@@ -837,6 +877,7 @@ async function execTool(db, name, a, role, ctx) {
   }
 
   if (name === "propose_new_client") {
+    liftProgramParams(a);
     const v = validateNewClient(a);
     if (!v.ok) return { rejected: true, errors: v.errors };
     const em = emailKey(a.email);
@@ -858,7 +899,7 @@ async function execTool(db, name, a, role, ctx) {
     if (a.program && Object.keys(a.program).length) {
       const lib = await libFor(db, {});
       if (lib.errors.length) return { rejected: true, errors: lib.errors };
-      const r = lib.resolve(a.program);
+      const r = lib.resolve(a.program, a.isGroup === true && a.groupFormat === "hyrox" ? { strict: false } : {});
       if (r.errors.length) {
         return { rejected: true, errors: r.errors.slice(0, 60),
           note: "Đổi HẾT các bài trên sang tên ĐÚNG Y trong thư viện (search_exercises với queries), rồi đề xuất lại." };
@@ -1316,7 +1357,8 @@ const GROUP_METHOD = `LỚP NHÓM (hồ sơ có isGroup, hoặc coach nói "lớ
 - Khi in giáo án lớp: thêm dòng "Setup" (dụng cụ chuẩn bị theo số người) cho mỗi buổi.
 
 LỚP HYBRID / HYROX (groupFormat hyrox) — theo cách các training club đang chạy lớp
-- 8 TRẠM THI: SkiErg, Sled Push, Sled Pull, Burpee Broad Jump, Row, Farmers Carry, Sandbag Lunges, Wall Balls.
+- 8 TRẠM THI: SkiErg, Sled Push, Sled Pull, Burpee Broad Jump, Row, Farmers Carry, Sandbag Lunges, Wall Balls — lớp hybrid
+  được ghi THẲNG tên trạm dù thư viện không có (không cần search_exercises cho trạm thi).
   Chạy chiếm ~60% thời gian thi → trong buổi Compromised / Engine / Race Sim, ở KHỐI CHẠY XEN TRẠM THỜI GIAN
   CHẠY PHẢI NHIỀU HƠN THỜI GIAN Ở TRẠM (server kiểm; pha kỹ thuật và finisher không tính). Lớp trộn trình độ: chạy THEO THỜI GIAN ("4 × 3 phút"), không
   theo mét, để cả lớp bắt đầu và xong cùng lúc. Chạy LUÔN là một DÒNG BÀI riêng (name "Run", setsReps "5 × 3 phút")
@@ -1623,7 +1665,10 @@ async function runAssistant({ client, model, messages, clientId, role, day, audi
 
     // Giữ nguyên các bước model sinh ra rồi mới nối kết quả — bỏ qua là model
     // mất dấu nó vừa hỏi gì, và sẽ gọi lại đúng tool đó mãi.
-    input.push(...calls);
+    // Gửi lại TOÀN BỘ các bước của lượt này (thought kèm chữ ký + function_call), không chỉ function_call.
+    // Gemini 3 bắt buộc từ ~10/2026: thiếu bước thought có chữ ký → 400 "Request contains an invalid argument"
+    // ở lượt thứ hai — mọi câu hỏi cần tra dữ liệu (soạn lớp nhóm, sửa giáo án…) đều hỏng (2026-10-27).
+    input.push(...(interaction.steps || []).filter((st) => st && st.type !== "model_output"));
     // Model tự đi tra thư viện / đề xuất giáo án = đang soạn, kể cả khi câu hỏi
     // không nói thẳng "giáo án".
     if (calls.some((c) => /^(search_exercises|propose_)/.test(c.name))) design = true;
@@ -1783,4 +1828,4 @@ function buildMorningPush({ bookings, rec }) {
 }
 
 module.exports = { CLIENT_TOOLS, CLIENT_TOOL_NAMES, CLIENT_SYSTEM, runClientTool, TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, METHOD, GROUP_METHOD, EXPLAIN_METHOD, FORMAT_RULES, compactProgram, checkRationale, GROUP_FORMATS, groupName, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, THINK_DESIGN, designIntent, runTool, runAssistant, progSummary, shapeReply,
-  validateProgram, validateNewClient, makeClientId, LEVELS, CHECK_PARAMS, PLAYBOOK, EDIT_METHOD, YOUTH_METHOD, CORE_METHOD, isMinorClient, namedClientId, fillMuscles, programDiff, MAX_STEPS_DESIGN, TIME_BUDGET_MS, HARD_STOP_MS, mergeProgram, exerciseHit, targetMismatch, nameInText };
+  validateProgram, validateNewClient, makeClientId, LEVELS, CHECK_PARAMS, PROGRAM_SCHEMA, liftProgramParams, PLAYBOOK, EDIT_METHOD, YOUTH_METHOD, CORE_METHOD, isMinorClient, namedClientId, fillMuscles, programDiff, MAX_STEPS_DESIGN, TIME_BUDGET_MS, HARD_STOP_MS, mergeProgram, exerciseHit, targetMismatch, nameInText };
