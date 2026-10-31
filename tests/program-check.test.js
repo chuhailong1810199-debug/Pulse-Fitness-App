@@ -46,15 +46,15 @@ test('ten nhom co server khop canonMuscle cua app', () => {
 
 test('1. volume vuot tran trinh do bi chan; coach chu y thi ghi ngoai le co ly do', () => {
   const heavy = { SessionA: day([ph('strength', [ex('Hip Thrust', '5 × 8', { Glutes: 'P' }), ex('RDL', '4 × 8', { Glutes: 'P' })])]),
-    SessionB: day([ph('strength', [ex('Hip Thrust', '5 × 8', { Glutes: 'P' })])]) };   // 14 set Glutes
+    SessionB: day([ph('strength', [ex('Hip Thrust', '5 × 8', { Glutes: 'P' }), ex('Kickback', '3 × 12', { Glutes: 'P' })])]) };   // 17 set Glutes
   const r = C.volumeIssues(heavy, 'Beginner');
   assert.ok(r.errors.some((e) => e.k === 'vol:Glutes'));
-  assert.strictEqual(C.volumeIssues(heavy, 'Advanced').errors.length, 0, 'Advanced 14–20 thi 14 la hop le');
+  assert.strictEqual(C.volumeIssues(heavy, 'Advanced').errors.length, 0, 'Advanced 16–22 thi 17 la hop le');
   const w = C.volumeIssues(heavy, 'Beginner', { Glutes: 'coach muốn ưu tiên mông' });
   assert.strictEqual(w.errors.filter((e) => e.k === 'vol:Glutes').length, 0);
   assert.match(w.waived[0], /ưu tiên mông/);
   // Trần mỗi buổi vẫn giữ dù có ngoại lệ tuần.
-  const one = { SessionA: day([ph('strength', [ex('Hip Thrust', '6 × 8', { Glutes: 'P' }), ex('RDL', '6 × 8', { Glutes: 'P' })])]) };
+  const one = { SessionA: day([ph('strength', [ex('Hip Thrust', '7 × 8', { Glutes: 'P' }), ex('RDL', '7 × 8', { Glutes: 'P' })])]) };   // 14 > ~12/buổi
   assert.ok(C.volumeIssues(one, 'Advanced', { Glutes: 'x' }).errors.some((e) => e.k === 'sess:SessionA:Glutes'));
 });
 
@@ -116,9 +116,11 @@ test('cau truc buoi: thieu khoi dong / buoi mong bi chan, nguong theo thoi luong
   const lee = { SessionA: day([warm, ...[1, 2, 3, 4].map((i) => ph(i < 3 ? 'strength' : 'accessories', [ex('X' + i, '3 × 8'), ex('Y' + i, '3 × 10')], 'Block ' + i))]) };
   assert.deepStrictEqual(C.structureIssues(lee).errors, []);
   // Buổi 45' chỉ cần 5 bài / 12 set; buổi 90' cần 8 bài.
-  const five = { SessionA: day([warm, ph('strength', ['A', 'B', 'C', 'D', 'E'].map((n) => ex(n, '3 × 8')))]) };
+  // Ngưỡng nâng 2026-10-31: 45' ≥ 6 bài / 15 set; 75' ≥ 8 / 21; 90' ≥ 9 / 24.
+  const five = { SessionA: day([warm, ph('strength', ['A', 'B', 'C', 'D', 'E', 'F'].map((n) => ex(n, '3 × 8')))]) };
   assert.deepStrictEqual(C.structureIssues(five, 45).errors, []);
-  assert.ok(C.structureIssues(lee, 90).errors.length === 0);
+  assert.ok(C.structureIssues(lee, 75).errors.length === 0);
+  assert.ok(C.structureIssues(lee, 90).errors.some((e) => e.k === 'struct:SessionA'), '8 bai chua du cho buoi 90');
   assert.ok(C.structureIssues(five, 90).errors.some((e) => e.k === 'struct:SessionA'));
   // Bài nặng + WOD dài (buổi "Lower nặng + WOD" của coach) và buổi chỉ conditioning: hợp lệ.
   const wod = { SessionA: day([warm, ph('strength', [ex('Squat', '4 × 5'), ex('Bench', '4 × 5'), ex('Row', '3 × 8')]),

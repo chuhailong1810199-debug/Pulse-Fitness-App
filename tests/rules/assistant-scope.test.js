@@ -24,7 +24,7 @@ function fillProgram(prog) {
     const { normalizePhaseTag } = require(path.join(__dirname, "..", "..", "functions", "program-lib.js"));
     const main = ((d && d.phases) || []).find((ph) => ph && /^(strength|accessories)$/.test(normalizePhaseTag(ph))) || {};
     const first = main.exercises || [];
-    const copy = first[0] ? [{ ...first[0], setsReps: "3 × 10" }, { ...first[0], setsReps: "3 × 10" }] : [];
+    const copy = first[0] ? [{ ...first[0], setsReps: "4 × 10" }, { ...first[0], setsReps: "4 × 10" }] : [];
     out[k] = { ...d, phases: [...((d && d.phases) || []),
       ...(copy.length ? [{ name: "Pad", tag: "accessories", exercises: copy }] : []),
       { name: "Warm-up", tag: "warmup", exercises: [{ name: "Bike nhẹ", setsReps: "1 × 5 phút" }, { name: "Band Pull-apart", setsReps: "2 × 15" }] },

@@ -1139,8 +1139,10 @@ function makeClientId(name, now) {
 // (tests/coach-assistant.test.js) chỉ kiểm có đủ 6 mục, không kiểm con số.
 const METHOD = `PHƯƠNG PHÁP SOẠN GIÁO ÁN (khung của studio — coach nói khác thì theo coach)
 1. VOLUME — số set LÀM VIỆC mỗi nhóm cơ chính mỗi TUẦN (bài nhóm cơ phụ tính nửa set; set khởi động không tính):
-   Beginner 6–10 · Intermediate 10–16 · Advanced 14–20. Một nhóm cơ không quá ~8–10 set làm việc trong một buổi.
-   Buổi 60 phút ≈ 15–22 set làm việc; tính ~2,5–3 phút mỗi set (gồm nghỉ) để khớp thời lượng.
+   Beginner 8–14 · Intermediate 12–18 · Advanced 16–22 — soạn ở NỬA TRÊN khoảng, studio tập dày (coach 2026-10-31:
+   giáo án trước đây quá nhẹ). Một nhóm cơ không quá ~12 set làm việc trong một buổi.
+   SET MẶC ĐỊNH: bài chính nhiều khớp 4 set, bài phụ / cô lập 3 set (3–4). Buổi 60' ≈ 18–26 set làm việc; tính
+   ~2,5 phút mỗi set (superset ~1,75) để khớp thời lượng.
 2. REP THEO MỤC TIÊU
    - Sức mạnh: bài chính 3–6 rep × 3–5 set, nghỉ 2–3 phút; bài phụ 6–10 rep.
    - Tăng cơ: 6–12 rep (bài cô lập 10–15), nghỉ 60–120 giây (bài chính tới 2–3 phút).
@@ -1174,9 +1176,9 @@ const METHOD = `PHƯƠNG PHÁP SOẠN GIÁO ÁN (khung của studio — coach n�
 Chấn thương: tránh hoặc thay bài gây đau, giữ tải trong khoảng không đau, ghi rõ bài thay và vì sao.
 Dưới 18 tuổi: ưu tiên kỹ thuật, RIR 2–3, không test 1RM, không tập tới thất bại.
 Khi in giáo án: kèm một dòng tổng số set làm việc mỗi nhóm cơ chính trong tuần, để coach đối chiếu mục 1.
-SERVER TỰ KIỂM khi đề xuất (sai là bị trả lỗi): cấu trúc buổi (khởi động ≥ 2 bài; buổi 60' ≥ 6 bài chính/phụ và
-≥ 15 set — xem QUY TRÌNH mục 7), volume mỗi nhóm cơ/tuần không vượt trần trình độ, mỗi buổi
-một nhóm cơ ≤ ~10 set, cả tuần đủ các mẫu chuyển động (squat, hinge, hpush, vpush, hpull, vpull, core_ext, core_rot,
+SERVER TỰ KIỂM khi đề xuất (sai là bị trả lỗi): cấu trúc buổi (khởi động ≥ 2 bài; buổi 60' ≥ 7 bài chính/phụ và
+≥ 18 set — xem QUY TRÌNH mục 7), volume mỗi nhóm cơ/tuần không vượt trần trình độ, mỗi buổi
+một nhóm cơ ≤ ~12 set, cả tuần đủ các mẫu chuyển động (squat, hinge, hpush, vpush, hpull, vpull, core_ext, core_rot,
 core_lat, single),
 và buổi không dài quá thời lượng (sessionMinutes; ~2,5 phút/set, superset ~1,75). Coach CHỦ Ý dồn volume một
 nhóm cơ hoặc bỏ một mẫu vì chấn thương → ghi volumeExceptions / coverageExceptions kèm lý do, đừng lách.`;
@@ -1232,8 +1234,9 @@ const PLAYBOOK = `QUY TRÌNH SOẠN GIÁO ÁN (cách coach Long Chu soạn — l
    viết "bài tốt cho chân". FOCUS của buổi: 1–2 câu nói buổi này phục vụ mục tiêu thế nào.
 7. CẤU TRÚC MỘT BUỔI (buổi 60'; server kiểm theo thời lượng): khởi động 3–4 bài (5–8': cardio nhẹ + mobility +
    kích hoạt) → [rehab nếu có chấn thương] → 3–4 BLOCK, mỗi block 2 bài (superset) hoặc 1 bài chính nặng + 1 bài phụ
-   → [finisher / core 5–8' nếu mục tiêu cần]. Tổng 6–8 bài chính/phụ, 16–24 set làm việc, 55–65 phút. Buổi 45': ≥ 5
-   bài, ≥ 12 set. Buổi 75–90': 7–10 bài. Buổi chỉ conditioning (WOD, boxing) thì khởi động + đủ giờ.
+   → [finisher / core 5–8' nếu mục tiêu cần]. Buổi 60' MẶC ĐỊNH 4 BLOCK × 2 bài: tổng 7–9 bài chính/phụ, 18–26 set làm
+   việc (bài chính 4 set, bài phụ 3 set), 55–65 phút. Buổi 45': ≥ 6 bài, ≥ 15 set. Buổi 75': ≥ 8 bài, ≥ 21 set. Buổi
+   90': ≥ 9 bài, ≥ 24 set. Buổi chỉ conditioning (WOD, boxing) thì khởi động + đủ giờ.
    Buổi mẫu Lee (bầm đùi sau, đã duyệt): Warm-up 3 bài · Rehab 3 bài · Block 1 Bench + Leg Press · Block 2 Shoulder
    Press + Cable Row · Block 3 Leg Extension + Chest Fly · Block 4 Lateral Raise + Bicep Curl = 8 bài, 25 set, ~56'.
 8. ĐỀ XUẤT một lần đủ mọi buổi coach nhờ (propose_program). Bị trả lỗi thì sửa hết trong một lần.

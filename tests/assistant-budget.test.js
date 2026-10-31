@@ -48,7 +48,7 @@ function fill(day, thin) {
   const phases = [{ name: 'Warm-up', tag: 'warmup', exercises: [free('Bike nhẹ', '1 × 5 phút'), free('Band Pull-apart', '2 × 15')] },
     ...day.phases,
     ...(thin ? [{ name: 'Accessories', tag: 'accessories', exercises: [
-      { name: 'Narrow Push Up (BW)', setsReps: '3 × 8', why: 'pad' }, { name: 'Walking Lunge (Dumbbell)', setsReps: '3 × 10', why: 'pad' }] }] : []),
+      { name: 'Narrow Push Up (BW)', setsReps: '4 × 8', why: 'pad' }, { name: 'Walking Lunge (Dumbbell)', setsReps: '4 × 10', why: 'pad' }] }] : []),
     { name: "Finisher (12')", tag: 'circuit', exercises: ['Assault Bike Sprint', 'Jump Rope', 'Battle Rope Waves', 'Shadow Boxing'].map((n) => free(n, '4 × 1 phút')) }];
   return { ...day, phases };
 }
@@ -214,6 +214,8 @@ test('propose_program chan giao an vuot khung; sua 1 buoi thi loi cu khong chan,
   // Dồn mông: thêm 3 bài × 4 set Hip Thrust → vượt trần Beginner → chặn; ghi lý do → qua, hiện "Ngoại lệ".
   const heavy = JSON.parse(JSON.stringify(week));
   heavy.SessionA.phases.push({ name: 'Glutes', tag: 'accessories', exercises: [ex('Hip Thrust (Barbell)', '4 × 10'), ex('Hip Thrust (Barbell)', '4 × 10')] });
+  // Trần Beginner nâng lên 14 (2026-10-31): dồn thêm ở buổi B để tổng tuần vượt, mỗi buổi vẫn dưới ~12.
+  heavy.SessionB.phases.push({ name: 'Glutes', tag: 'accessories', exercises: [ex('Hip Thrust (Barbell)', '3 × 10'), ex('Hip Thrust (Barbell)', '3 × 10')] });
   const bad = await A.execTool(db3, 'propose_program', { clientId: 'kim', program: heavy }, ROLE, ctx);
   assert.strictEqual(bad.rejected, true);
   assert.ok(bad.errors.some((e) => /Volume Glutes/.test(e)));
@@ -222,7 +224,8 @@ test('propose_program chan giao an vuot khung; sua 1 buoi thi loi cu khong chan,
   assert.ok(waived.preview.waived.some((w) => /ưu tiên mông/.test(w)));
   // Giáo án cũ ĐÃ vượt (dồn mông) → sửa riêng SessionB không bị chặn vì lỗi của SessionA cũ.
   people.kim.program = JSON.parse(JSON.stringify(waived.action.program));   // bản đã gắn muscles, như trong Firestore
-  const editB = await A.execTool(db3, 'propose_program', { clientId: 'kim', program: { SessionB: week.SessionB } }, ROLE, ctx);
+  // Sửa riêng SessionB (đổi label) mà vẫn giữ phần dồn mông → lỗi volume tuần là lỗi CŨ → chỉ nhắc, không chặn.
+  const editB = await A.execTool(db3, 'propose_program', { clientId: 'kim', program: { SessionB: { ...heavy.SessionB, label: 'B2' } } }, ROLE, ctx);
   assert.strictEqual(editB.needsConfirm, true, JSON.stringify(editB.errors));
   assert.ok(editB.preview.warnings.some((w) => /Có sẵn từ giáo án cũ/.test(w)));
 });

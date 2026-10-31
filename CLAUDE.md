@@ -270,15 +270,16 @@ Key routing rules:
   (Compromised / Strength Endurance / Engine / Foundation / Race Sim / Partner); số buổi/tuần quyết định loại
   (form tự gán). Buổi Compromised / Engine / Race Sim: phút CHẠY ≥ phút TRẠM — `hybridIssues()` trong
   `functions/program-check.js` chặn. Bài thay chạy (không có chỗ chạy) ghi "(thay chạy)" trong tên.
-- **Khung 1-1 kiểm bằng code** (`program-check.js`): trần volume theo trình độ, ≤ ~10 set/nhóm cơ/buổi, đủ 8 mẫu
+- **Khung 1-1 kiểm bằng code** (`program-check.js`): trần volume theo trình độ (nâng 2026-10-31: Beginner 8–14,
+  Intermediate 12–18, Advanced 16–22 set/nhóm cơ/tuần; soạn ở nửa trên khoảng), ≤ ~12 set/nhóm cơ/buổi, đủ 8 mẫu
   chuyển động, thời lượng buổi. Ngoại lệ có chủ ý → `volumeExceptions` / `coverageExceptions` kèm lý do. Sửa vài
   buổi: lỗi có sẵn ở giáo án cũ chỉ thành lời nhắc (`newErrors`).
 - **Sửa giáo án đang có** (2026-10-20): `EDIT_METHOD` (assistant.js) — đổi ít nhất, giữ tên + tạ cũ, xếp bài cũ vào
   bỏ / giữ + lưu ý / giữ nguyên, pha "🩹 Rehab" (tag warmup) theo LOẠI chấn thương, mốc quay lại. Form "Sửa giáo án"
   trong tab khách. Server: `fillMuscles()` gắn nhóm cơ cho tên cũ không có trong thư viện (so từ động tác, bỏ dụng cụ);
   thẻ duyệt hiện Bỏ / Thêm / Giữ (`programDiff`).
-- **Cấu trúc một buổi 1-1** (2026-10-20, `structureIssues`): khởi động ≥ 2 bài; buổi 45/60/75/90' cần ≥ 5/6/7/8 bài
-  chính/phụ và ≥ 12/15/18/20 set (thời lượng không rõ → coi 60'). Khối circuit ≥ 10' thì bài trong đó được tính và
+- **Cấu trúc một buổi 1-1** (2026-10-20, `structureIssues`): khởi động ≥ 2 bài; buổi 45/60/75/90' cần ≥ 6/7/8/9 bài
+  chính/phụ và ≥ 15/18/21/24 set (nâng 2026-10-31; mặc định 4 block × 2, bài chính 4 set, bài phụ 3) (thời lượng không rõ → coi 60'). Khối circuit ≥ 10' thì bài trong đó được tính và
   ngưỡng set × 0,6; buổi chỉ conditioning chỉ cần khởi động. Sửa buổi nào thì buổi đó phải đạt (`newErrors` changedDays).
 - **Lý do chọn bài** (2026-10-15): mỗi buổi có `focus`, mỗi bài pha strength/accessories có `why` — lưu CÙNG
   giáo án. `checkRationale()` chặn đề xuất thiếu. App hiện `why` ở ô "i" và `focus` dưới tiêu đề buổi, cho MỌI người

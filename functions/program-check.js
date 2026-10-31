@@ -11,9 +11,10 @@ const { normalizePhaseTag } = require("./program-lib.js");
 
 const MUSCLE_WEIGHTS = { P: 1, S: 0.5, T: 0, Q: 0 };
 /** Khoảng set làm việc / nhóm cơ / tuần (METHOD mục 1). */
-const VOLUME = { Beginner: [6, 10], Intermediate: [10, 16], Advanced: [14, 20] };
+// Nâng 2026-10-31 (coach: giáo án đang nhẹ so với cách studio tập): trước 6–10 / 10–16 / 14–20.
+const VOLUME = { Beginner: [8, 14], Intermediate: [12, 18], Advanced: [16, 22] };
 /** Một nhóm cơ trong MỘT buổi. */
-const PER_SESSION_MAX = 10;
+const PER_SESSION_MAX = 12;
 /** Dư thêm để nửa set (cơ phụ) không làm giáo án đúng khung bị chặn oan. */
 const SLACK = 1;
 /** Nhóm cơ chính: thiếu volume thì nhắc (không chặn). */
@@ -232,7 +233,8 @@ function durationIssues(program, minutes) {
  * Buổi coach soạn có 3–4 bài khởi động, 6–10 bài chính/phụ, 18–30 set, 50–75 phút. Pulse hay trả buổi 4–6 bài, thiếu
  * khởi động, ~30 phút — kiểm volume theo TUẦN không bắt được. Ngưỡng theo thời lượng buổi (không biết thì coi 60').
  */
-const STRUCT = [[45, 5, 12], [60, 6, 15], [75, 7, 18], [90, 8, 20]];
+// Nâng 2026-10-31: trước 5/12 · 6/15 · 7/18 · 8/20.
+const STRUCT = [[45, 6, 15], [60, 7, 18], [75, 8, 21], [90, 9, 24]];
 function structureIssues(program, minutes, explicit) {
   const target = Number(minutes) > 0 ? Number(minutes) : 60;
   const [, minEx, minSets] = STRUCT.find(([m]) => target <= m) || STRUCT[STRUCT.length - 1];
