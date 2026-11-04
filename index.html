@@ -3184,8 +3184,52 @@ function cdDetailHTML(c, keys, isCoach) {
     }).join('');
     return rows ? '<div class="cd-ph-b"><div class="cd-ph">' + cdEsc(f.name || 'Phần ' + (pi + 1)) + (f.tag ? '<span>' + cdEsc(f.tag) + '</span>' : '') + '</div>' + rows + '</div>' : '';
   }).join('');
+  // Nộp buổi ngay tại đây — trước phải sang tab Workout mới có nút Complete Workout.
+  var today = cdSessions().some(function (s) { return s.day === k && cdAgo(s.t) === 0; });
+  var foot = '<div class="cd-detail-f"><button class="cd-submit" type="button" data-day="' + cdEsc(k) + '"' + (today ? ' disabled' : '') + '>'
+    + (today ? 'Đã nộp hôm nay ✓' : 'Nộp buổi này ✓') + '</button></div>';
   return '<section class="cd-detail" aria-labelledby="cd-detail-t"><div class="cd-detail-h"><h3 id="cd-detail-t">' + cdEsc(cdDayName(c, k, _cdd.cur)) + '</h3>'
-    + '<span>' + cdExs(p).length + ' bài · ' + ph.length + ' phần</span><button class="cd-detail-x" type="button">Thu gọn</button></div><div class="cd-phs">' + body + '</div></section>';
+    + '<span>' + cdExs(p).length + ' bài · ' + ph.length + ' phần</span><button class="cd-detail-x" type="button">Thu gọn</button></div><div class="cd-phs">' + body + '</div>' + foot + '</section>';
+}
+
+/**
+ * Nộp một buổi từ dashboard. Dùng lại ĐÚNG finishWorkout() của tab Workout, nên
+ * mọi chốt chặn của nó vẫn giữ: chặn nộp hai lần trong ngày, hỏi bài có tạ mà
+ * chưa tích, chỉ bài đã tích mới vào volume/lịch sử.
+ *
+ * finishWorkout chỉ biết activeDay, nên đổi sang buổi đó trước (setDay nạp lại
+ * tạ từ sessionLoads — gồm cả số vừa gõ ở dashboard). Dashboard không có ô tích:
+ * chưa bài nào được tích thì hỏi một lần rồi tính cả buổi là đã tập.
+ */
+var _cdSubmitting = false;
+async function cdSubmitDay(k, btn) {
+  if (!activeClient || _cdSubmitting) return;
+  var d = getProgram()[k];
+  if (!d) return;
+  var name = cdDayName(activeClient, k, Math.max(0, cdKeys(activeClient).indexOf(k)));
+  _cdSubmitting = true;
+  if (btn) { btn.disabled = true; btn.textContent = T('Đang nộp…'); }
+  try {
+    if (k !== activeDay) await (window._setDay || setDay)(k);
+    var st = exerciseState[activeClient.id] || (exerciseState[activeClient.id] = {});
+    var all = [];
+    (d.phases || []).forEach(function (ph, pi) { (ph.exercises || []).forEach(function (_, ei) { all.push(activeClient.id + '_' + k + '_' + pi + '_' + ei); }); });
+    var ticked = all.filter(function (x) { return st[x]; }).length;
+    if (!_sessionLogged) {
+      if (!ticked) {
+        if (!confirm(T('Nộp ' + name + '? Chưa bài nào được đánh dấu xong — OK sẽ tính cả ' + all.length + ' bài là đã tập.'))) return;
+        all.forEach(function (x) { st[x] = true; });
+      } else if (!confirm(T('Nộp ' + name + ' với ' + ticked + '/' + all.length + ' bài đã đánh dấu xong?'))) return;
+    }
+    await (window._finishWorkout || finishWorkout)();
+    await loadClientDash(true);
+  } catch (e) {
+    console.warn('[cdSubmitDay]', e && e.message);
+  } finally {
+    _cdSubmitting = false;
+    var wrap = document.getElementById('cdash-body');
+    if (wrap && activeClient) cdRender(wrap);
+  }
 }
 
 // ── Render + behaviour ───────────────────────────────────────────────────
@@ -3262,6 +3306,7 @@ function cdBind(page) {
       _cdd.open = !(_cdd.open && i === _cdd.cur); _cdd.cur = i; return cdRefresh();
     }
     if (e.target.closest('.cd-detail-x')) { _cdd.open = false; return cdRefresh(); }
+    if ((el = e.target.closest('.cd-submit'))) return cdSubmitDay(el.getAttribute('data-day'), el);
     if ((el = e.target.closest('[data-scope]'))) { var v = el.getAttribute('data-scope'); _cdd.scope = v === 'last' ? v : +v; _cdd.sel = null; _cdd.allMus = false; _cdd.side = null; return cdRefresh('mus'); }
     if ((el = e.target.closest('.cd-muscle-row'))) {
       var n = el.getAttribute('data-mus'); _cdd.sel = _cdd.sel === n ? null : n;
@@ -17393,6 +17438,10 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 #cdash-page .cd-detail-h h3{flex:1 1 auto;margin:0;font-size:18px;font-weight:800}
 #cdash-page .cd-detail-h span{font-size:12.5px;color:rgba(255,255,255,.68)}
 #cdash-page .cd-detail-x{min-height:44px;padding:0 16px;border-radius:999px;border:1px solid var(--cd-line);background:none;color:rgba(255,255,255,.88);font:700 13px 'Figtree',sans-serif;cursor:pointer}
+#cdash-page .cd-detail-f{display:flex;justify-content:flex-end;padding-top:16px;margin-top:4px;border-top:1px solid rgba(255,255,255,.08)}
+#cdash-page .cd-submit{min-height:48px;padding:0 24px;border-radius:999px;border:none;background:var(--accent,#8FDBFF);color:#161111;font:800 15px 'Figtree',sans-serif;letter-spacing:.3px;cursor:pointer}
+#cdash-page .cd-submit:disabled{opacity:.45;cursor:default}
+@media (max-width:640px){#cdash-page .cd-submit{width:100%}}
 @media (min-width:1280px){#cdash-page .cd-phs{columns:2;column-gap:32px}}
 #cdash-page .cd-ph-b{break-inside:avoid;padding-top:8px}
 #cdash-page .cd-ph{display:flex;align-items:center;gap:8px;padding:10px 0 4px;font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.68)}
@@ -19264,6 +19313,7 @@ Object.assign(I18N_VI_EN, {
   'cơ dựng sống': 'erector spinae', 'chưa có trên hình': 'not on the figure',
   'Chưa kết nối đồng hồ.': 'No watch connected.', 'Giáo án': 'Program', 'Buổi tới': 'Next up',
   'Xem bài và nhập tạ': 'View exercises & log weights', 'Xem chi tiết': 'View details', 'Đang mở bên dưới': 'Open below',
+  'Nộp buổi này ✓': 'Submit session ✓', 'Đã nộp hôm nay ✓': 'Submitted today ✓', 'Đang nộp…': 'Submitting…',
   'Thu gọn': 'Collapse', 'Chưa tập buổi này': 'Not trained yet', 'Chưa tập buổi nào': 'No sessions yet',
   'Chưa có': 'None yet', 'Chưa đo': 'Not measured', 'Đổi ảnh đại diện': 'Change photo', 'Xoá ảnh đại diện': 'Remove photo',
   'Chuyển khách': 'Switch client', 'Khoảng thời gian': 'Time range', 'Mặt cơ thể': 'Body side',
@@ -19378,6 +19428,8 @@ const I18N_FULL = {
   'Tập {0} · {1}/{2} bài · {3} kg': 'Trained {0} · {1}/{2} exercises · {3} kg', 'Tập {0} · {1}/{2} bài': 'Trained {0} · {1}/{2} exercises',
   '{0} · {1}/{2} bài · {3} kg': '{0} · {1}/{2} exercises · {3} kg', '{0} · {1}/{2} bài': '{0} · {1}/{2} exercises',
   'Buổi {0}': 'Session {0}', 'Buổi {0} · {1}': 'Session {0} · {1}',
+  'Nộp {0}? Chưa bài nào được đánh dấu xong — OK sẽ tính cả {1#} bài là đã tập.': 'Submit {0}? No exercise is marked done yet — OK counts all {1} exercises as done.',
+  'Nộp {0} với {1#}/{2#} bài đã đánh dấu xong?': 'Submit {0} with {1}/{2} exercises marked done?',
   '{0}, xem bài và nhập tạ': '{0}, view exercises & log weights', '{0}, xem chi tiết': '{0}, view details',
   'Mức tạ {0}': 'Weight for {0}', 'Ghi lại {0}, {1} kcal': 'Log again: {0}, {1} kcal',
   'Chưa tập {0#} ngày': 'No training for {0} days', 'Quá hạn đo InBody {0#} tuần': 'InBody overdue by {0} weeks',
