@@ -333,6 +333,22 @@ service cloud.firestore {
       // nền clientAssistant ghi. Đếm lượt hỏi/ngày cũng chỉ hàm nền ghi.
       match /clientChat/{d=**}      { allow read: if canRead(clientId); allow write: if false; }
       match /clientChatUsage/{d=**} { allow read: if canRead(clientId); allow write: if false; }
+      // Tin nhắn NGƯỜI ↔ NGƯỜI (coach ↔ khách). Riêng tư: chỉ coach phụ trách và
+      // chính khách — canAccess, KHÔNG canRead, nên admin đang quan sát khách của
+      // coach khác không đọc được. Người gửi phải ký đúng vai và đúng uid của mình
+      // (khách không mạo danh coach được), giờ do server đặt, không sửa, không xoá.
+      match /messages/{msgId} {
+        allow read: if canAccess(clientId);
+        allow create: if request.resource.data.keys().hasOnly(['from', 'uid', 'text', 't'])
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.t == request.time
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 2000
+          && ((request.resource.data.from == 'coach' && canManage(clientId))
+              || (request.resource.data.from == 'client' && isClientOwner(clientId)));
+        allow update, delete: if false;
+      }
     }
   }
 }

@@ -3382,6 +3382,57 @@ exports.pushTest = onCall(
   },
 );
 
+/**
+ * Người nhận push của một tin nhắn chat. Thuần dữ liệu để test được.
+ *
+ * Khách nhắn → coach phụ trách (coachUid). Coach nhắn → mọi tài khoản của KHÁCH
+ * đó. users.clientId tự khai được (luật cho tự tạo users doc), nên phải khớp CẢ
+ * email với email trên hồ sơ khách — không thì ai cũng tự gắn mình vào khách khác
+ * để đọc trộm lời nhắn qua thông báo.
+ */
+function chatRecipients(msg, client, users) {
+  if (!msg || !client) return [];
+  if (msg.from === "client") return client.coachUid ? [client.coachUid] : [];
+  if (msg.from !== "coach") return [];
+  const email = String(client.email || "").trim().toLowerCase();
+  if (!email) return [];
+  return [...new Set((users || [])
+    .filter((u) => String(u.email || "").trim().toLowerCase() === email && u.uid !== msg.uid)
+    .map((u) => u.uid))];
+}
+
+/**
+ * Thông báo đẩy khi có tin nhắn mới coach ↔ khách. Luật Firestore đã bảo đảm
+ * `from` đúng vai người gửi, nên ở đây chỉ việc chọn người nhận.
+ */
+exports.notifyChatMessage = onDocumentCreated(
+  { document: "clients/{clientId}/messages/{msgId}", region: "asia-southeast1", secrets: [VAPID_PRIVATE] },
+  async (event) => {
+    const m = event.data && event.data.data();
+    if (!m || !m.text) return;
+    const cid = event.params.clientId;
+    const db = getFirestore();
+    const cs = await db.collection("clients").doc(cid).get();
+    if (!cs.exists) return;
+    const c = cs.data() || {};
+    let users = [];
+    if (m.from === "coach") {
+      const us = await db.collection("users").where("clientId", "==", cid).get();
+      users = us.docs.map((d) => ({ uid: d.id, email: (d.data() || {}).email }));
+    }
+    const to = chatRecipients(m, c, users);
+    if (!to.length) return;
+    const body = String(m.text).replace(/\s+/g, " ").slice(0, 140);
+    const payload = m.from === "client"
+      ? { title: `${c.name || "Khách"} nhắn`, body, tag: `chat-${cid}`,
+        url: `/index.html?client=${encodeURIComponent(cid)}&tab=chat` }
+      : { title: "Coach nhắn", body, tag: "chat", url: "/index.html?tab=chat" };
+    for (const uid of to) {
+      try { await pushToAll(payload, { uid }); } catch (e) { console.warn("[chat] push hỏng", e.message || e); }
+    }
+  },
+);
+
 // ═══════════════════════════════════════════════════════════════════════════
 // TRỢ LÝ COACH — hỏi đáp về khách và giáo án
 //

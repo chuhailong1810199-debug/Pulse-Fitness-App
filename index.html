@@ -788,6 +788,7 @@ async function loadApp() {
     if (youthTab) youthTab.style.display = '';
     aiMount();                       // nút trợ lý nổi, mọi tab, chỉ coach
     pbarMount();                     // thanh Pulse ở đáy màn hình — thay nút tròn cho coach
+    chatMount();                     // tab Chat + hộp thư (số tin chưa đọc theo thời gian thực)
     // Coach with no clients yet — show empty state
     if (clientsData.length === 0) {
       activeClient = null;
@@ -888,6 +889,7 @@ async function loadApp() {
     activeClient = clientsData[0];
     afterClientChange();
     aiMount();                       // khách cũng có trợ lý (chỉ đọc giáo án của chính mình)
+    chatMount();                     // nhắn tin với coach
     console.log('[clientId-debug] activeClient.id =', activeClient.id, '| userClientId =', userClientId);
     renderClientBar(false);
 
@@ -948,6 +950,7 @@ async function _applyDeepLink() {
     if (cid && userRole === 'coach' && clientsData.some((c) => c.id === cid) && (!activeClient || activeClient.id !== cid)) {
       await switchClient(cid);
     }
+    if (tab === 'chat') _chatViewNext = 'thread';
     if (tab && /^[a-z]+$/.test(tab) && document.querySelector('.nav-tab[data-page="' + tab + '"]')) showPage(tab);
     // Lối tắt "Ask Pulse" của app đã cài (manifest shortcuts — chuột phải icon trên taskbar/dock, giữ icon trên điện thoại).
     if (pulse && typeof aiOpen === 'function') aiOpen(cid ? 'client' : 'general');
@@ -1043,6 +1046,7 @@ function afterClientChange() {
   if (!billingOn() && document.getElementById('billing-page')?.classList.contains('active')) showPage('workout');
   renderAccessAlert();
   if (typeof aiOnClientChange === 'function') aiOnClientChange();
+  if (typeof chatOnClientChange === 'function') chatOnClientChange();
 }
 
 async function observeCoach(uid) {
@@ -1268,6 +1272,7 @@ async function loadAllClients() {
     document.getElementById('client-level').textContent = activeClient.level || '—';
   }
   if (typeof pbarRefresh === 'function') pbarRefresh();
+  if (typeof chatWatchInbox === 'function' && _chatInboxUnsub) { chatWatchInbox(); chatBadge(); }
 }
 
 // Realtime listener for program changes
@@ -1282,12 +1287,21 @@ function subscribeProgram() {
   _progSig = null;
   if (!activeClient) return;
   const listenId = activeClient.id;
+  // Lượt nghe mới: snapshot đầu tiên luôn phải chạy hết (đặt _progSig, vẽ bài).
+  { const _co = clientsData.find(c => c.id === listenId); if (_co) delete _co._progJson; }
   _programUnsub = onSnapshot(doc(db, 'clients', listenId), snap => {
     if (!snap.exists) return;
     const data = snap.data();
     // Find the client object this snapshot belongs to
     const clientObj = clientsData.find(c => c.id === listenId);
     if (!clientObj) return;
+    // Tin nhắn ghi tóm tắt `chat` lên CHÍNH doc này. Giáo án không đổi thì
+    // đừng vẽ lại bài tập — đang gõ kg mà bị vẽ lại là mất ô đang nhập.
+    clientObj.chat = data.chat || null;
+    if (typeof chatBadge === 'function') chatBadge();
+    const _pj = JSON.stringify(data.program || {});
+    if (clientObj._progJson === _pj) return;
+    clientObj._progJson = _pj;
     clientObj.program = data.program || {};
     saveProgramCache(listenId, clientObj.program);
     // Only re-render if this client is still active
@@ -2330,6 +2344,341 @@ async function dshOpenLog(id) {
 // mà không phải vào Dashboard. Thay nút trợ lý tròn (#ai-fab) khi đang hiện.
 // Số liệu đọc từ clientsData (miễn phí) + MỘT lượt đọc bookings hôm nay.
 // ═══════════════════════════════════════════════════════════════════════════
+// ── TIN NHẮN coach ↔ khách (2026-11-07) ─────────────────────────────
+//
+//   clients/{id}/messages/{auto}  { from: 'coach'|'client', uid, text, t }
+//   clients/{id}.chat             { lastAt, lastText, lastFrom, coachSeenAt, clientSeenAt }
+//
+// Tóm tắt nằm trên CHÍNH doc khách: coach vốn đã đọc mọi doc khách, nên hộp thư
+// và số chưa đọc không tốn thêm lượt đọc nào. Tin + tóm tắt ghi chung một batch.
+// Ai đọc được: CHỈ coach phụ trách và chính khách (luật canAccess) — admin đang
+// quan sát khách của coach khác không đọc tin riêng. Không sửa, không xoá tin.
+// Thông báo đẩy: hàm nền notifyChatMessage (functions/index.js).
+const CHAT_MAX = 2000;
+let _chatUnsub = null, _chatCid = null, _chatMsgs = [], _chatLoaded = false, _chatErr = null;
+let _chatView = 'list', _chatViewNext = null, _chatInboxUnsub = null, _chatInboxKey = null;
+
+function chatMe() { return userRole === 'coach' ? 'coach' : 'client'; }
+/** Khách tự đăng nhập được mới đọc được tin — coach-managed (email '') và lớp nhóm thì không. */
+function chatCanUse(c) { return !!(c && !c.isGroup && String(c.email || '').trim()); }
+/** Coach chỉ nhắn khách của CHÍNH MÌNH (admin quan sát thì không). */
+function chatMine(c) { return userRole !== 'coach' || (c && currentUser && c.coachUid === currentUser.uid); }
+function chatUnread(c) {
+  const ch = (c && c.chat) || {};
+  if (!ch.lastAt || ch.lastFrom === chatMe()) return false;
+  return _toMs(ch.lastAt) > _toMs(chatMe() === 'coach' ? ch.coachSeenAt : ch.clientSeenAt);
+}
+function chatUnreadCount() {
+  return clientsData.filter((c) => chatMine(c) && chatCanUse(c) && chatUnread(c)).length;
+}
+function chatPageActive() { const p = document.getElementById('chat-page'); return !!(p && p.classList.contains('active')); }
+
+function chatMount() {
+  const tab = document.getElementById('chat-nav-tab');
+  if (tab) tab.style.display = '';
+  chatWatchInbox();
+  chatBadge();
+  if (!window._chatVisBound) {
+    window._chatVisBound = true;
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) chatMarkSeen(); });
+    window.addEventListener('resize', chatFit);
+  }
+}
+
+/** Số khách có tin chưa đọc, trên tab Chat. */
+function chatBadge() {
+  const n = chatUnreadCount();
+  const tab = document.getElementById('chat-nav-tab');
+  if (tab) {
+    let b = tab.querySelector('.chat-nb');
+    if (!b) { b = document.createElement('span'); b.className = 'chat-nb'; b.setAttribute('aria-hidden', 'true'); tab.appendChild(b); }
+    b.textContent = n > 9 ? '9+' : String(n);
+    b.hidden = !n;
+    tab.setAttribute('aria-label', n ? T('Chat · ' + n + ' tin chưa đọc') : 'Chat');
+  }
+}
+
+/**
+ * Coach: nghe thay đổi doc khách để số chưa đọc + hộp thư cập nhật ngay khi khách
+ * nhắn. Chỉ chép trường `chat` vào clientsData — phần còn lại của app không bị đụng.
+ * Nghe lại khi phạm vi danh sách đổi (admin bật "Tất cả coach" / quan sát coach khác).
+ */
+function chatWatchInbox() {
+  if (userRole !== 'coach' || !currentUser) return;
+  const key = (typeof _allCoaches !== 'undefined' && _allCoaches ? 'all' : '') + '|' + ((typeof _observeCoachUid !== 'undefined' && _observeCoachUid) || '');
+  if (_chatInboxUnsub && _chatInboxKey === key) return;
+  if (_chatInboxUnsub) { try { _chatInboxUnsub(); } catch (_e) {} }
+  _chatInboxKey = key;
+  try {
+    _chatInboxUnsub = clientsQuery().onSnapshot((snap) => {
+      snap.docChanges().forEach((ch) => {
+        const c = clientsData.find((x) => x.id === ch.doc.id);
+        if (c) c.chat = (ch.doc.data() || {}).chat || null;
+      });
+      chatBadge();
+      if (chatPageActive()) { chatRenderInbox(); chatMarkSeen(); }
+    }, (e) => console.warn('[chat] hộp thư:', e.code || e.message));
+  } catch (e) { console.warn('[chat] hộp thư:', e.message || e); }
+}
+
+function chatPageOpen() {
+  if (_chatViewNext) { _chatView = _chatViewNext; _chatViewNext = null; }
+  else _chatView = userRole === 'coach' ? 'list' : 'thread';
+  window.scrollTo(0, 0);
+  chatRender();
+  if (userRole !== 'coach' && 'Notification' in window && Notification.permission === 'granted') pushAutoSubscribe({ any: true });
+}
+function chatPageClose() { chatStop(); }
+function chatStop() {
+  if (_chatUnsub) { try { _chatUnsub(); } catch (_e) {} }
+  _chatUnsub = null; _chatCid = null; _chatMsgs = []; _chatLoaded = false; _chatErr = null;
+}
+function chatOnClientChange() {
+  chatBadge();
+  if (chatPageActive()) chatRender();
+}
+
+/** Mở luồng của một khách từ hộp thư. */
+async function chatPick(id) {
+  if (userRole === 'coach' && (!activeClient || activeClient.id !== id)) await switchClient(id);
+  _chatView = 'thread';
+  chatRender();
+  const ta = document.getElementById('chat-in');
+  if (ta && window.matchMedia('(min-width: 900px)').matches) ta.focus();
+}
+function chatBack() { _chatView = 'list'; chatRender(); }
+
+// ── vẽ ───────────────────────────────────────────────────────────────
+
+function _chatInitial(name) { return escHtml((String(name || '?').trim()[0] || '?').toUpperCase()); }
+function _chatTime(ms) {
+  const d = new Date(ms);
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+function _chatDayLabel(ms) {
+  const d = new Date(ms), now = new Date();
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(now) - day(d)) / 86400000);
+  if (diff === 0) return T('Hôm nay');
+  if (diff === 1) return T('Hôm qua');
+  return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + (d.getFullYear() !== now.getFullYear() ? '/' + d.getFullYear() : '');
+}
+/** Giờ ngắn cho hộp thư: hôm nay → 14:05, cũ hơn → 07/11. */
+function _chatWhen(ms) {
+  if (!ms) return '';
+  const d = new Date(ms), now = new Date();
+  if (d.toDateString() === now.toDateString()) return _chatTime(ms);
+  return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0');
+}
+/** Chữ của tin: thoát HTML trước, rồi mới gắn link và xuống dòng. */
+function _chatText(t) {
+  return escHtml(String(t || ''))
+    .replace(/https?:\/\/[^\s<]+/g, (u) => '<a href="' + u + '" target="_blank" rel="noopener noreferrer">' + u + '</a>')
+    .replace(/\n/g, '<br>');
+}
+
+function chatRender() {
+  const body = document.getElementById('chat-body');
+  if (!body) return;
+  const coach = userRole === 'coach';
+  const c = activeClient;
+  body.innerHTML = '<div class="ch-wrap' + (coach ? '' : ' ch-solo') + '" data-view="' + _chatView + '">'
+    + (coach ? '<aside class="ch-inbox" aria-label="' + escHtml(T('Hộp thư')) + '">'
+      + '<div class="ch-ib-h"><h2>' + escHtml(T('Tin nhắn')) + '</h2></div>'
+      + '<div class="ch-ib-list" id="ch-ib-list"></div></aside>' : '')
+    + '<section class="ch-thread" id="ch-thread">' + _chatThreadShell(c) + '</section></div>';
+  if (coach) chatRenderInbox();
+  _chatBindThread();
+  chatFit();
+  if (c && chatCanUse(c) && chatMine(c) && (!coach || _chatView === 'thread' || window.matchMedia('(min-width: 900px)').matches)) {
+    chatListen(c.id);
+  } else {
+    chatStop();
+  }
+}
+
+function _chatThreadShell(c) {
+  const coach = userRole === 'coach';
+  const back = coach ? '<button type="button" class="ch-back" onclick="chatBack()" aria-label="' + escHtml(T('Hộp thư')) + '">'
+    + '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>' : '';
+  if (!c) return '<div class="ch-note">' + escHtml(T('Chọn một khách để nhắn.')) + '</div>';
+  const name = coach ? (c.name || c.id) : 'Coach';
+  const sub = coach ? (c.goal || '') : T('Trả lời thường trong ngày');
+  const head = '<header class="ch-th-h">' + back
+    + '<span class="ch-av">' + _chatInitial(name) + '</span>'
+    + '<span class="ch-th-t"><b>' + escHtml(name) + '</b>' + (sub ? '<span>' + escHtml(sub) + '</span>' : '') + '</span></header>';
+  if (coach && !chatMine(c)) {
+    return head + '<div class="ch-note">' + escHtml(T('Tin nhắn là riêng giữa khách và coach phụ trách — đang quan sát thì không đọc được.')) + '</div>';
+  }
+  if (!chatCanUse(c)) {
+    return head + '<div class="ch-note">' + escHtml(c.isGroup
+      ? T('Lớp nhóm không có hộp tin nhắn.')
+      : T('Khách này chưa tự đăng nhập app (chưa có Gmail), nên chưa đọc được tin. Thêm Gmail ở hồ sơ khách để bật chat.')) + '</div>';
+  }
+  let push = '';
+  if (!coach && 'Notification' in window && Notification.permission === 'default' && pushState().ok) {
+    push = '<div class="ch-push"><span>' + escHtml(T('Bật thông báo để biết ngay khi coach trả lời.')) + '</span>'
+      + '<button type="button" onclick="pushEnable(this)">' + escHtml(T('Bật thông báo')) + '</button></div>';
+  }
+  return head + push
+    + '<div class="ch-list" id="ch-list" role="log" aria-live="polite"><div class="ch-note">' + escHtml(T('Đang tải…')) + '</div></div>'
+    + '<form class="ch-comp" id="ch-form" autocomplete="off">'
+    + '<label for="chat-in" class="ch-sr">' + escHtml(T('Tin nhắn')) + '</label>'
+    + '<textarea id="chat-in" rows="1" maxlength="' + CHAT_MAX + '" placeholder="' + escHtml(coach ? T('Nhắn cho ' + name + '…') : T('Nhắn cho coach…')) + '"></textarea>'
+    + '<button type="submit" class="ch-send" aria-label="' + escHtml(T('Gửi')) + '">'
+    + '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg></button>'
+    + '</form>';
+}
+
+function _chatBindThread() {
+  const f = document.getElementById('ch-form'), ta = document.getElementById('chat-in');
+  if (!f || !ta) return;
+  f.addEventListener('submit', (e) => { e.preventDefault(); chatSend(); });
+  const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 140) + 'px'; };
+  ta.addEventListener('input', grow);
+  // Máy tính: Enter gửi, Shift+Enter xuống dòng. Điện thoại: Enter là xuống dòng, gửi bằng nút.
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
+      e.preventDefault(); chatSend();
+    }
+  });
+}
+
+/** Khung chat cao đúng phần màn hình còn lại — danh sách tin cuộn bên trong, ô nhập luôn ở đáy. */
+function chatFit() {
+  const w = document.querySelector('#chat-page .ch-wrap');
+  if (!w || !chatPageActive()) return;
+  w.style.setProperty('--ch-top', Math.max(0, w.getBoundingClientRect().top + window.scrollY) + 'px');
+}
+
+function chatRenderInbox() {
+  const el = document.getElementById('ch-ib-list');
+  if (!el) return;
+  const list = clientsData.filter((c) => chatMine(c) && !c.isGroup)
+    .map((c) => ({ c, at: _toMs((c.chat || {}).lastAt), ok: chatCanUse(c), un: chatUnread(c) }))
+    .sort((a, b) => (b.ok - a.ok) || (b.at - a.at) || String(a.c.name || '').localeCompare(String(b.c.name || ''), 'vi'));
+  if (!list.length) { el.innerHTML = '<div class="ch-note">' + escHtml(T('Chưa có khách nào.')) + '</div>'; return; }
+  const cur = activeClient && activeClient.id;
+  el.innerHTML = list.map(({ c, at, ok, un }) => {
+    const ch = c.chat || {};
+    const prev = !ok ? T('Chưa đăng nhập app')
+      : ch.lastText ? (ch.lastFrom === 'coach' ? T('Bạn') + ': ' : '') + ch.lastText
+      : T('Chưa có tin nhắn');
+    return '<button type="button" class="ch-ib' + (c.id === cur ? ' on' : '') + (un ? ' un' : '') + (ok ? '' : ' off') + '"'
+      + (c.id === cur ? ' aria-current="true"' : '') + ' data-cid="' + escHtml(c.id) + '">'
+      + '<span class="ch-av">' + _chatInitial(c.name) + '</span>'
+      + '<span class="ch-ib-t"><b>' + escHtml(c.name || c.id) + '</b><span>' + escHtml(prev) + '</span></span>'
+      + '<span class="ch-ib-m">' + (at ? '<time>' + _chatWhen(at) + '</time>' : '') + (un ? '<i class="ch-dot" aria-label="' + escHtml(T('Chưa đọc')) + '"></i>' : '') + '</span>'
+      + '</button>';
+  }).join('');
+  if (!el._chatBound) {
+    el._chatBound = true;
+    el.addEventListener('click', (e) => { const b = e.target.closest('.ch-ib'); if (b) chatPick(b.getAttribute('data-cid')); });
+  }
+}
+
+function chatListen(cid) {
+  if (_chatCid === cid && _chatUnsub) { chatRenderThread(); return; }
+  chatStop();
+  _chatCid = cid;
+  _chatUnsub = db.collection('clients').doc(cid).collection('messages')
+    .orderBy('t', 'desc').limit(200)
+    .onSnapshot({ includeMetadataChanges: true }, (snap) => {
+      if (_chatCid !== cid) return;
+      _chatMsgs = snap.docs.map((d) => Object.assign({ id: d.id, pending: d.metadata.hasPendingWrites },
+        d.data({ serverTimestamps: 'estimate' }))).reverse();
+      _chatLoaded = true; _chatErr = null;
+      chatRenderThread();
+      chatMarkSeen();
+    }, (e) => {
+      if (_chatCid !== cid) return;
+      _chatLoaded = true; _chatErr = e.code || e.message;
+      console.warn('[chat] đọc tin:', _chatErr);
+      chatRenderThread();
+    });
+}
+
+function chatRenderThread() {
+  const el = document.getElementById('ch-list');
+  if (!el) return;
+  if (!_chatLoaded) return;
+  if (_chatErr) {
+    el.innerHTML = '<div class="ch-note">' + escHtml(_chatErr === 'permission-denied'
+      ? T('Không có quyền đọc tin nhắn của khách này.')
+      : T('Chưa tải được tin nhắn — kiểm tra mạng rồi mở lại.')) + '</div>';
+    return;
+  }
+  if (!_chatMsgs.length) {
+    el.innerHTML = '<div class="ch-empty"><b>' + escHtml(T('Chưa có tin nhắn nào')) + '</b><span>'
+      + escHtml(userRole === 'coach' ? T('Hỏi thăm buổi tập, nhắc lịch, gửi lưu ý — khách nhận được thông báo.') : T('Hỏi coach về bài tập, lịch, ăn uống — coach nhận được thông báo.'))
+      + '</span></div>';
+    return;
+  }
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  const me = chatMe();
+  let html = '', lastDay = '';
+  _chatMsgs.forEach((m, i) => {
+    const ms = _toMs(m.t) || Date.now();
+    const day = _chatDayLabel(ms);
+    if (day !== lastDay) { html += '<div class="ch-day"><span>' + escHtml(day) + '</span></div>'; lastDay = day; }
+    const mine = m.from === me;
+    const next = _chatMsgs[i + 1];
+    const tail = !next || next.from !== m.from || (_toMs(next.t) - ms) > 5 * 60000;
+    html += '<div class="ch-msg ' + (mine ? 'me' : 'them') + (tail ? ' tail' : '') + '">'
+      + '<div class="ch-bub">' + _chatText(m.text) + '</div>'
+      + (tail ? '<div class="ch-meta">' + _chatTime(ms) + (mine ? (m.pending ? ' · ' + escHtml(T('Đang gửi…')) : ' · ' + escHtml(T('Đã gửi'))) : '') + '</div>' : '')
+      + '</div>';
+  });
+  el.innerHTML = html;
+  if (atBottom || !el._chatSeen) { el.scrollTop = el.scrollHeight; el._chatSeen = true; }
+}
+
+/** Đánh dấu đã đọc — chỉ khi trang Chat đang mở, đang nhìn đúng luồng, và app đang hiện. */
+function chatMarkSeen() {
+  if (!_chatCid || !chatPageActive() || document.hidden) return;
+  const c = clientsData.find((x) => x.id === _chatCid);
+  if (!c || !chatMine(c) || !chatUnread(c)) return;
+  if (userRole === 'coach' && _chatView !== 'thread' && !window.matchMedia('(min-width: 900px)').matches) return;
+  const f = chatMe() + 'SeenAt';
+  c.chat = Object.assign({}, c.chat, { [f]: firebase.firestore.Timestamp.now() });
+  chatBadge();
+  if (userRole === 'coach') chatRenderInbox();
+  updateDoc(doc(db, 'clients', c.id), { ['chat.' + f]: serverTimestamp() })
+    .catch((e) => console.warn('[chat] đánh dấu đã đọc:', e.code || e.message));
+}
+
+/**
+ * Gửi: tin + tóm tắt trên doc khách trong MỘT batch. Không chờ server mới xoá ô
+ * nhập — tin hiện ngay ở trạng thái "Đang gửi…" và tự lên khi có mạng.
+ */
+function chatSend() {
+  const ta = document.getElementById('chat-in');
+  const c = clientsData.find((x) => x.id === _chatCid);
+  if (!ta || !c) return;
+  const text = String(ta.value || '').replace(/\s+$/g, '').replace(/^\s+/g, '');
+  if (!text) return;
+  if (text.length > CHAT_MAX) { alert(T('Tin nhắn dài quá — tối đa 2000 ký tự.')); return; }
+  const me = chatMe();
+  const cref = doc(db, 'clients', c.id);
+  const b = writeBatch(db);
+  b.set(cref.collection('messages').doc(), { from: me, uid: currentUser.uid, text, t: serverTimestamp() });
+  b.update(cref, {
+    'chat.lastAt': serverTimestamp(),
+    'chat.lastText': text.replace(/\s+/g, ' ').slice(0, 140),
+    'chat.lastFrom': me,
+    ['chat.' + me + 'SeenAt']: serverTimestamp(),
+  });
+  c.chat = Object.assign({}, c.chat, { lastAt: firebase.firestore.Timestamp.now(), lastText: text.replace(/\s+/g, ' ').slice(0, 140), lastFrom: me });
+  ta.value = ''; ta.style.height = 'auto'; ta.focus();
+  const el = document.getElementById('ch-list'); if (el) el._chatSeen = false;
+  if (userRole === 'coach') chatRenderInbox();
+  b.commit().catch((e) => {
+    console.warn('[chat] gửi hỏng:', e.code || e.message);
+    if (!ta.value) ta.value = text;
+    alert(T('Chưa gửi được tin nhắn') + ': ' + (e.code || e.message));
+  });
+}
+
 const PB_ICON = {
   pulse: '<path d="M2 12h4l3-7 4 14 3-7h6"/>',
   find: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
@@ -8492,6 +8841,8 @@ function showPage(page) {
   document.getElementById('active-page').classList.toggle('active', page === 'active');
   document.getElementById('cdash-page').classList.toggle('active', page === 'cdash');
   document.getElementById('platform-page').classList.toggle('active', page === 'platform');
+  document.getElementById('chat-page').classList.toggle('active', page === 'chat');
+  if (page === 'chat') chatPageOpen(); else chatPageClose();
   if (page === 'platform') renderPlatform();
   if (page === 'dash') renderDashboard();
   if (page === 'cdash') renderClientDash();
@@ -10809,8 +11160,9 @@ async function pushDisable(btn) {
  * có nơi chặn thẳng. Chưa cấp quyền thì ghi lý do ra console rồi thôi, bật
  * tay bằng pushEnable() được.
  */
-async function pushAutoSubscribe() {
-  if (userRole !== 'coach') return;
+async function pushAutoSubscribe(opts = {}) {
+  // Khách chỉ đăng ký từ trang Chat (opts.any) — để nhận tin coach trả lời.
+  if (userRole !== 'coach' && !opts.any) return;
   const st = pushState();
   if (!st.ok) { console.info('[push]', st.why); return; }
   if (Notification.permission !== 'granted') {
@@ -14982,6 +15334,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <div class="nav-tab" id="youth-nav-tab" data-page="youth" style="display:none" onclick="showPage('youth')">Youth</div>
     <div class="nav-tab" data-page="billing" onclick="showPage('billing')">Billing</div>
     <div class="nav-tab" data-page="log" onclick="showPage('log')">Log</div>
+    <div class="nav-tab" id="chat-nav-tab" data-page="chat" style="display:none" onclick="showPage('chat')">Chat</div>
     <div class="nav-tab" id="schedule-nav-tab" data-page="schedule" style="display:none" onclick="showPage('schedule')">Schedule</div>
   </div>
 
@@ -15036,6 +15389,9 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     </div>
     <div id="workout-log-list"><div class="loading">Loading sessions...</div></div>
   </div>
+
+  <!-- CHAT PAGE — tin nhắn coach ↔ khách -->
+  <div id="chat-page"><div id="chat-body"></div></div>
 
   <!-- SCHEDULE PAGE (coach only) -->
   <div id="schedule-page">
@@ -17919,6 +18275,70 @@ button.cd-av:focus-visible{outline:2px solid #8FDBFF;outline-offset:2px;}
 #ai-fab:focus-visible{ outline: 2px solid var(--ai-acc); outline-offset: 3px; }
 body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-events: none; }
 
+/* ── Chat coach ↔ khách (chatRender) ── */
+#chat-page{display:none;padding:12px 16px 0;--ch-bot:calc(16px + env(safe-area-inset-bottom));}
+#chat-page.active{display:block;}
+body.has-pbar #chat-page{--ch-bot:calc(112px + env(safe-area-inset-bottom));}
+.nav-tab .chat-nb{display:inline-grid;place-items:center;min-width:16px;height:16px;margin-left:6px;padding:0 4px;box-sizing:border-box;border-radius:999px;background:#EE5A4F;color:#fff;font-size:10px;font-weight:800;line-height:1;vertical-align:1px;}
+.nav-tab .chat-nb[hidden]{display:none;}
+.ch-wrap{display:grid;grid-template-columns:320px minmax(0,1fr);gap:16px;max-width:1100px;margin:0 auto;
+  height:calc(100dvh - var(--ch-top, 160px) - var(--ch-bot));min-height:360px;}
+.ch-wrap.ch-solo{grid-template-columns:minmax(0,1fr);max-width:760px;}
+.ch-inbox,.ch-thread{min-height:0;border-radius:22px;background:var(--bg-2);border:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden;}
+.ch-ib-h{padding:16px 16px 8px;}
+.ch-ib-h h2{margin:0;font-size:17px;font-weight:800;color:var(--txt);}
+.ch-ib-list{flex:1;min-height:0;overflow-y:auto;padding:4px 8px 12px;display:flex;flex-direction:column;gap:2px;}
+.ch-ib{display:flex;align-items:center;gap:12px;width:100%;min-height:60px;padding:8px 10px;border:none;border-radius:14px;background:transparent;color:var(--txt);font:inherit;text-align:left;cursor:pointer;}
+.ch-ib:hover{background:var(--surface);}
+.ch-ib.on{background:var(--accent-tint);}
+.ch-ib:focus-visible,.ch-back:focus-visible,.ch-send:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+.ch-ib.off{opacity:.55;}
+.ch-av{flex:none;width:38px;height:38px;border-radius:50%;background:var(--surface-2);display:grid;place-items:center;font-weight:800;font-size:14px;color:var(--txt);}
+.ch-ib-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.ch-ib-t b{font-size:15px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ch-ib-t span{font-size:13px;color:var(--txt-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ch-ib.un .ch-ib-t b{font-weight:800;}
+.ch-ib.un .ch-ib-t span{color:var(--txt);}
+.ch-ib-m{flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:6px;font-size:12px;color:var(--txt-muted);}
+.ch-dot{width:10px;height:10px;border-radius:50%;background:var(--accent);}
+.ch-th-h{flex:none;display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);}
+.ch-th-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.ch-th-t b{font-size:16px;font-weight:800;color:var(--txt);}
+.ch-th-t span{font-size:13px;color:var(--txt-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ch-back{display:none;flex:none;width:40px;height:40px;margin-left:-8px;border:none;border-radius:12px;background:transparent;color:var(--txt);cursor:pointer;place-items:center;}
+.ch-push{flex:none;display:flex;align-items:center;gap:10px;margin:10px 12px 0;padding:10px 12px;border-radius:14px;background:var(--accent-tint);font-size:13px;color:var(--txt);}
+.ch-push span{flex:1;}
+.ch-push button{flex:none;min-height:36px;padding:0 12px;border:none;border-radius:10px;background:var(--accent);color:var(--on-accent);font:800 13px 'Figtree',sans-serif;cursor:pointer;}
+.ch-list{flex:1;min-height:0;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:2px;overscroll-behavior:contain;}
+.ch-day{display:flex;justify-content:center;margin:12px 0 8px;}
+.ch-day span{padding:3px 10px;border-radius:999px;background:var(--surface);font-size:12px;font-weight:700;color:var(--txt-muted);}
+.ch-msg{display:flex;flex-direction:column;max-width:78%;}
+.ch-msg.me{align-self:flex-end;align-items:flex-end;}
+.ch-msg.them{align-self:flex-start;align-items:flex-start;}
+.ch-msg.tail{margin-bottom:8px;}
+.ch-bub{padding:9px 13px;border-radius:18px;font-size:15px;line-height:1.4;word-wrap:break-word;overflow-wrap:anywhere;white-space:normal;}
+.ch-msg.me .ch-bub{background:var(--accent);color:var(--on-accent);}
+.ch-msg.them .ch-bub{background:var(--surface-2);color:var(--txt);}
+.ch-msg.me.tail .ch-bub{border-bottom-right-radius:6px;}
+.ch-msg.them.tail .ch-bub{border-bottom-left-radius:6px;}
+.ch-bub a{color:inherit;text-decoration:underline;}
+.ch-meta{margin-top:3px;font-size:11px;color:var(--txt-muted);}
+.ch-empty{margin:auto;max-width:300px;text-align:center;display:flex;flex-direction:column;gap:6px;color:var(--txt-muted);font-size:14px;line-height:1.45;}
+.ch-empty b{color:var(--txt);font-size:16px;}
+.ch-note{margin:auto;padding:24px;max-width:340px;text-align:center;font-size:14px;line-height:1.45;color:var(--txt-muted);}
+.ch-comp{flex:none;display:flex;align-items:flex-end;gap:8px;padding:10px 12px 12px;border-top:1px solid var(--line);margin:0;}
+.ch-comp textarea{flex:1;min-width:0;min-height:44px;max-height:140px;padding:11px 14px;box-sizing:border-box;border-radius:14px;border:1px solid var(--line);background:rgba(0,0,0,0.3);color:var(--txt);font:500 16px/1.35 'Figtree',sans-serif;resize:none;}
+.ch-comp textarea:focus{outline:none;border-color:var(--accent-line);}
+.ch-send{flex:none;width:44px;height:44px;border:none;border-radius:14px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;cursor:pointer;}
+.ch-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
+@media (max-width:899px){
+  #chat-page{padding:8px 12px 0;}
+  .ch-wrap{grid-template-columns:minmax(0,1fr);}
+  .ch-wrap[data-view="list"] .ch-thread{display:none;}
+  .ch-wrap[data-view="thread"] .ch-inbox{display:none;}
+  .ch-back{display:grid;}
+  .ch-msg{max-width:86%;}
+}
 /* ── Thanh Pulse (pbarMount) — thiết kế claude.ai/artifact/K77Ya2HeZ5iDhGFbHLnfi2 ── */
 body.has-pbar{ padding-bottom: calc(104px + env(safe-area-inset-bottom)); }
 body.has-pbar #ai-fab{ display: none; }
@@ -19619,6 +20039,22 @@ Object.assign(I18N_VI_EN, {
   'cần chú ý': 'needs attention', 'Chi tiết, tempo, video': 'Details, tempo, video',
   // Dashboard coach
   'Bảng điều khiển': 'Dashboard', 'Tải lại dữ liệu cũ': 'Reload older data', 'Cài Pulse lên máy': 'Install Pulse',
+  // Chat coach ↔ khách
+  'Hộp thư': 'Inbox', 'Tin nhắn': 'Messages', 'Chọn một khách để nhắn.': 'Pick a client to message.',
+  'Trả lời thường trong ngày': 'Usually replies within the day', 'Bạn': 'You', 'Chưa đọc': 'Unread',
+  'Tin nhắn là riêng giữa khách và coach phụ trách — đang quan sát thì không đọc được.': 'Messages are private between the client and their coach — not visible while observing.',
+  'Lớp nhóm không có hộp tin nhắn.': 'Group classes have no message thread.',
+  'Khách này chưa tự đăng nhập app (chưa có Gmail), nên chưa đọc được tin. Thêm Gmail ở hồ sơ khách để bật chat.': "This client doesn't log in to the app yet (no Gmail), so they can't read messages. Add their Gmail on the client profile to turn on chat.",
+  'Bật thông báo để biết ngay khi coach trả lời.': 'Turn on notifications to know as soon as your coach replies.',
+  'Bật thông báo': 'Turn on notifications', 'Đang tải…': 'Loading…', 'Nhắn cho coach…': 'Message your coach…',
+  'Chưa có khách nào.': 'No clients yet.', 'Chưa đăng nhập app': "Doesn't log in yet", 'Chưa có tin nhắn': 'No messages yet',
+  'Không có quyền đọc tin nhắn của khách này.': "You don't have access to this client's messages.",
+  'Chưa tải được tin nhắn — kiểm tra mạng rồi mở lại.': "Couldn't load messages — check your connection and reopen.",
+  'Chưa có tin nhắn nào': 'No messages yet',
+  'Hỏi thăm buổi tập, nhắc lịch, gửi lưu ý — khách nhận được thông báo.': 'Check in on a session, remind them of a booking, send a note — the client gets a notification.',
+  'Hỏi coach về bài tập, lịch, ăn uống — coach nhận được thông báo.': 'Ask your coach about training, scheduling or food — your coach gets a notification.',
+  'Đang gửi…': 'Sending…', 'Đã gửi': 'Sent', 'Tin nhắn dài quá — tối đa 2000 ký tự.': 'Message too long — 2000 characters max.',
+  'Chưa gửi được tin nhắn': "Couldn't send the message",
   'Lịch': 'Schedule', 'Chưa log': 'To log', 'Kết quả': 'Results', 'Mở': 'Open', 'Hỏi': 'Ask', 'Hỏi Pulse': 'Ask Pulse', 'Log': 'Log',
   'Hỏi Pulse về khách…': 'Ask Pulse about a client…', 'Không ai cần chú ý.': 'Nobody needs attention.',
   'Không có khách nào tên như vậy.': 'No client by that name.',
@@ -19728,6 +20164,7 @@ const I18N_FULL = {
   'Tập {0} · {1}/{2} bài · {3} kg': 'Trained {0} · {1}/{2} exercises · {3} kg', 'Tập {0} · {1}/{2} bài': 'Trained {0} · {1}/{2} exercises',
   '{0} · {1}/{2} bài · {3} kg': '{0} · {1}/{2} exercises · {3} kg', '{0} · {1}/{2} bài': '{0} · {1}/{2} exercises',
   'Buổi {0}': 'Session {0}', 'Buổi {0} · {1}': 'Session {0} · {1}',
+  'Nhắn cho {0}…': 'Message {0}…', 'Chat · {0#} tin chưa đọc': 'Chat · {0} unread',
   '{0#} cần chú ý': '{0} need attention', '{0#} chưa log': '{0} to log', 'Hôm nay · {0}': 'Today · {0}', '{0#} khách': '{0} clients',
   'Xem cả {0#} khách trên Dashboard': 'See all {0} clients on Dashboard', 'Buổi {0} · chưa log': 'Session {0} · not logged',
   'Nộp {0}? Chưa bài nào được đánh dấu xong — OK sẽ tính cả {1#} bài là đã tập.': 'Submit {0}? No exercise is marked done yet — OK counts all {1} exercises as done.',

@@ -88,6 +88,42 @@ const STRANGER = { uid: "u_x", email: "la@gmail.com", ...V };
   ok("clientChatUsage: khach KHONG tu reset luot hoi", () =>
     assertFails(db(CINDY).doc("clients/cindy/clientChatUsage/2026-10-15").set({ count: 0 })));
 
+  // ── Tin nhắn coach ↔ khách (messages) — riêng tư, chỉ hai bên ──
+  const firebaseCompat = require("firebase/compat/app"); require("firebase/compat/firestore");
+  const serverTimestamp = () => firebaseCompat.firestore.FieldValue.serverTimestamp();
+  const msgs = (who, cid = "cindy") => db(who).collection(`clients/${cid}/messages`);
+  const msg = (from, who, extra = {}) => ({ from, uid: who.uid, text: "Mai tập 7h nhé", t: serverTimestamp(), ...extra });
+  ok("messages: chinh khach doc duoc", () => assertSucceeds(msgs(CINDY).get()));
+  ok("messages: coach cua khach doc duoc", () => assertSucceeds(msgs(COACH_A).get()));
+  ok("messages: ADMIN quan sat KHONG doc (tin rieng)", () => assertFails(msgs(ADMIN).get()));
+  ok("messages: coach khac KHONG doc", () => assertFails(msgs(COACH_B).get()));
+  ok("messages: khach khac KHONG doc", () => assertFails(msgs(SANG).get()));
+  ok("messages: nguoi la KHONG doc", () => assertFails(msgs(STRANGER).get()));
+  ok("messages: khach gui tin cua minh", () => assertSucceeds(msgs(CINDY).add(msg("client", CINDY))));
+  ok("messages: coach gui cho khach cua minh", () => assertSucceeds(msgs(COACH_A).add(msg("coach", COACH_A))));
+  ok("messages: admin gui cho khach cua CHINH MINH", () => assertSucceeds(msgs(ADMIN, "longchu").add(msg("coach", ADMIN))));
+  ok("messages: khach KHONG mao danh coach", () => assertFails(msgs(CINDY).add(msg("coach", CINDY))));
+  ok("messages: coach KHONG mao danh khach", () => assertFails(msgs(COACH_A).add(msg("client", COACH_A))));
+  ok("messages: KHONG ky uid nguoi khac", () => assertFails(msgs(CINDY).add(msg("client", CINDY, { uid: "coachA" }))));
+  ok("messages: coach khac KHONG gui", () => assertFails(msgs(COACH_B).add(msg("coach", COACH_B))));
+  ok("messages: admin KHONG gui cho khach coach khac", () => assertFails(msgs(ADMIN).add(msg("coach", ADMIN))));
+  ok("messages: gio do may khach tu dat bi chan", () => assertFails(msgs(CINDY).add(msg("client", CINDY, { t: new Date("2020-01-01") }))));
+  ok("messages: tin rong bi chan", () => assertFails(msgs(CINDY).add(msg("client", CINDY, { text: "" }))));
+  ok("messages: tin > 2000 ky tu bi chan", () => assertFails(msgs(CINDY).add(msg("client", CINDY, { text: "x".repeat(2001) }))));
+  ok("messages: truong la bi chan", () => assertFails(msgs(CINDY).add(msg("client", CINDY, { photoUrl: "x" }))));
+  ok("messages: KHONG sua tin da gui", async () => {
+    const r = await msgs(CINDY).add(msg("client", CINDY));
+    await assertFails(r.update({ text: "sửa" }));
+  });
+  ok("messages: KHONG xoa tin", async () => {
+    const r = await msgs(COACH_A).add(msg("coach", COACH_A));
+    await assertFails(r.delete());
+  });
+  ok("chat tom tat: khach ghi da doc tren doc cua minh", () =>
+    assertSucceeds(db(CINDY).doc("clients/cindy").update({ "chat.clientSeenAt": serverTimestamp() })));
+  ok("chat tom tat: coach ghi tin cuoi tren khach cua minh", () =>
+    assertSucceeds(db(COACH_A).doc("clients/cindy").update({ "chat.lastFrom": "coach", "chat.lastText": "x" })));
+
   // ── Danh sách khách ────────────────────────────────────────────
   ok("admin goc truy van tran clients", () => assertSucceeds(db(ADMIN).collection("clients").get()));
   ok("admin (coaches.isAdmin) truy van tran clients", () => assertSucceeds(db(ADMIN2).collection("clients").get()));

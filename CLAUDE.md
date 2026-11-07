@@ -70,7 +70,7 @@ free one → allowed.
 
 When deleting a client, remove **all** of: the `clients/{id}` doc, every subcollection
 (`assessment`, `checkpoints`, `workoutHistory`, `nutrition`, `progressPhotos`, `videos`,
-`sessionLoads`, `aiChat`, `programBackups`), the `clientEmails/{email}` entry, and any `users` doc pointing at it.
+`sessionLoads`, `aiChat`, `messages`, `programBackups`), the `clientEmails/{email}` entry, and any `users` doc pointing at it.
 Deleting a Firestore doc does *not* delete its subcollections — that is how the orphaned
 records were created in the first place.
 
@@ -295,6 +295,12 @@ Key routing rules:
   (index.html). Câu coach tự gõ gọi tên ĐÚNG MỘT khách khác khách đang mở → app `openClientDash()` + chuyển Pulse sang
   luồng của khách đó trước khi gửi; server `coachAssistant` cũng đọc khách được gọi tên (vẫn qua `assertCanView`).
   Tên một chữ phải viết hoa ("Sang", không phải "chuyển sang"); "An" đúng dấu; nhắc ≥ 2 khách thì không đổi.
+- **Tin nhắn coach ↔ khách** (2026-11-07): tab **Chat**. Tin ở `clients/{id}/messages` `{from, uid, text, t}`; tóm tắt
+  `clients/{id}.chat` `{lastAt, lastText, lastFrom, coachSeenAt, clientSeenAt}` ghi CÙNG batch (hộp thư + số chưa đọc
+  khỏi đọc thêm). Luật: đọc `canAccess` — CHỈ coach phụ trách + chính khách, admin quan sát KHÔNG đọc; ký đúng vai + uid,
+  `t == request.time`, ≤ 2000 ký tự, không sửa/xoá. Push: `notifyChatMessage` (khách → coachUid; coach → users có
+  clientId VÀ email khớp hồ sơ — users.clientId tự khai được). Khách coach-managed (`email: ''`) không chat được.
+  `subscribeProgram` bỏ qua snapshot khi giáo án không đổi — ghi `chat` lên doc khách không được vẽ lại bài đang gõ kg.
 - **Chat theo khách**: tab tên khách trong khung trợ lý (hoặc nút "Hỏi AI về khách này" trên hồ sơ). Lưu ở
   `clients/{id}/aiChat` — chỉ hàm nền `coachAssistant` ghi (`thread: true`), coach của khách + admin đọc, KHÁCH
   KHÔNG đọc. Form "Hôm nay khách không khoẻ" → chỉnh buổi cho hôm nay theo `EXPLAIN_METHOD`, KHÔNG đổi giáo án gốc.
