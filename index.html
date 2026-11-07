@@ -787,6 +787,7 @@ async function loadApp() {
     const youthTab = document.getElementById('youth-nav-tab');
     if (youthTab) youthTab.style.display = '';
     aiMount();                       // nút trợ lý nổi, mọi tab, chỉ coach
+    pbarMount();                     // thanh Pulse ở đáy màn hình — thay nút tròn cho coach
     // Coach with no clients yet — show empty state
     if (clientsData.length === 0) {
       activeClient = null;
@@ -1266,6 +1267,7 @@ async function loadAllClients() {
     }
     document.getElementById('client-level').textContent = activeClient.level || '—';
   }
+  if (typeof pbarRefresh === 'function') pbarRefresh();
 }
 
 // Realtime listener for program changes
@@ -2278,26 +2280,37 @@ function _lrMatchClient(b, clients) {
   });
   return hits.length === 1 ? hits[0] : null;
 }
+/**
+ * Lịch hôm nay: số buổi (bỏ buổi huỷ) + buổi ĐÃ XONG mà khách chưa log.
+ * Dashboard và thanh Pulse dùng chung — một lượt đọc bookings, không phải hai.
+ */
+async function _todayBookings() {
+  const today = _ymd(), now = new Date(), nowMin = now.getHours() * 60 + now.getMinutes();
+  const snap = await getDocs(bookingsQuery(where('date', '==', today)));
+  const hm = (x) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(x || '')); return m ? +m[1] * 60 + +m[2] : null; };
+  const list = [];
+  let count = 0;
+  snap.forEach((d) => {
+    const b = d.data() || {};
+    if (b.status === 'cancelled') return;
+    count++;
+    const st = hm(b.startTime), en = hm(b.endTime) != null ? hm(b.endTime) : (st != null ? st + 60 : null);
+    if (en == null || en > nowMin) return;                 // chưa xong
+    const c = _lrMatchClient(b, clientsData || []);
+    if (!c) return;
+    const startMs = new Date(today + 'T' + b.startTime + ':00').getTime();
+    const lw = _toMs(c.lastWorkoutAt);
+    if (lw && lw >= startMs - 3600e3) return;              // đã log
+    list.push({ c, b });
+  });
+  return { count, unlogged: list };
+}
 async function loadUnloggedToday() {
   const box = document.getElementById('dsh-unlogged');
   if (!box || userRole !== 'coach') return;
   try {
-    const today = _ymd(), now = new Date(), nowMin = now.getHours() * 60 + now.getMinutes();
-    const snap = await getDocs(bookingsQuery(where('date', '==', today)));
-    const hm = (x) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(x || '')); return m ? +m[1] * 60 + +m[2] : null; };
-    const list = [];
-    snap.forEach((d) => {
-      const b = d.data() || {};
-      if (b.status === 'cancelled') return;
-      const st = hm(b.startTime), en = hm(b.endTime) != null ? hm(b.endTime) : (st != null ? st + 60 : null);
-      if (en == null || en > nowMin) return;                 // chưa xong
-      const c = _lrMatchClient(b, clientsData || []);
-      if (!c) return;
-      const startMs = new Date(today + 'T' + b.startTime + ':00').getTime();
-      const lw = _toMs(c.lastWorkoutAt);
-      if (lw && lw >= startMs - 3600e3) return;              // đã log
-      list.push({ c, b });
-    });
+    const { count, unlogged: list } = await _todayBookings();
+    pbarSetToday(count, list);
     box.innerHTML = list.length ? '<div class="dsh-unlog"><b>Hôm nay chưa log (' + list.length + ')</b>'
       + list.map(({ c, b }) => '<button type="button" onclick="dshOpenLog(\'' + escHtml(c.id) + '\')">'
         + escHtml(c.name || c.id) + ' <span>' + escHtml(b.startTime + (b.endTime ? '–' + b.endTime : '')) + '</span> → Log</button>').join('')
@@ -2307,6 +2320,179 @@ async function loadUnloggedToday() {
 async function dshOpenLog(id) {
   if (!activeClient || activeClient.id !== id) await switchClient(id);
   showPage('workout');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THANH PULSE (2026-11-07) — thanh nổi ở đáy màn hình, chỉ coach, mọi tab.
+// Thiết kế: claude.ai/artifact/K77Ya2HeZ5iDhGFbHLnfi2. Laptop: tìm khách · cần chú ý ·
+// buổi hôm nay · chưa log · Pulse. Điện thoại: 5 nút, Pulse ở giữa. Bấm Pulse mở
+// "Quick check" (khách cần chú ý, buổi chưa log, ô hỏi Pulse) — xem nhanh khách
+// mà không phải vào Dashboard. Thay nút trợ lý tròn (#ai-fab) khi đang hiện.
+// Số liệu đọc từ clientsData (miễn phí) + MỘT lượt đọc bookings hôm nay.
+// ═══════════════════════════════════════════════════════════════════════════
+const PB_ICON = {
+  pulse: '<path d="M2 12h4l3-7 4 14 3-7h6"/>',
+  find: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  cal: '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  check: '<path d="m5 12 4 4 10-10"/>',
+  home: '<path d="M3 11 12 4l9 7v9H3z"/>',
+  users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2 .7 3.2 2.4 3.6 5.2"/>',
+  chat: '<path d="M12 3a9 9 0 0 0-9 9c0 1.6.42 3.1 1.15 4.4L3 21l4.7-1.1A9 9 0 1 0 12 3Z"/>',
+  go: '<path d="m9 6 6 6-6 6"/>',
+};
+const pbIco = (k, sz) => '<svg width="' + (sz || 18) + '" height="' + (sz || 18) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+  + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + PB_ICON[k] + '</svg>';
+let _pb = { today: null, unlogged: [], open: false, q: '', t: 0 };
+
+function pbarMount() {
+  if (userRole !== 'coach' || document.getElementById('pbar')) return;
+  const bar = document.createElement('nav');
+  bar.id = 'pbar';
+  bar.setAttribute('aria-label', 'Pulse');
+  bar.innerHTML =
+      '<span class="pb-logo" aria-hidden="true">' + pbIco('pulse', 24) + '</span>'
+    + '<label class="pb-find"><span class="pb-sr">Tìm khách</span>' + pbIco('find')
+    + '<input id="pb-find" type="search" autocomplete="off" placeholder="Tìm khách" oninput="pbarFind(this.value)"'
+    + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();pbarFindGo()}else if(event.key===\'Escape\'){pbarToggle(false)}">'
+    + '<kbd class="pb-kbd">⌘K</kbd></label>'
+    + '<span class="pb-sep" aria-hidden="true"></span>'
+    + '<button type="button" class="pb-chip pb-alert" id="pb-alert" onclick="pbarToggle(true)"></button>'
+    + '<button type="button" class="pb-chip" id="pb-today" onclick="showPage(\'schedule\')"></button>'
+    + '<button type="button" class="pb-chip" id="pb-unlog" onclick="pbarToggle(true)"></button>'
+    + '<span class="pb-sep" aria-hidden="true"></span>'
+    // Điện thoại: 5 nút. Laptop ẩn các nút này (CSS), hiện chip ở trên.
+    + '<button type="button" class="pb-tab" onclick="pbarToggle(false);showPage(\'dash\')">' + pbIco('home', 22) + '<span>Dashboard</span></button>'
+    + '<button type="button" class="pb-tab" onclick="pbarToggle(true,true)">' + pbIco('users', 22) + '<span>Khách</span><b class="pb-badge" id="pb-badge"></b></button>'
+    + '<button type="button" class="pb-go" id="pb-go" aria-expanded="false" onclick="pbarToggle()">' + pbIco('chat') + '<span>Pulse</span></button>'
+    + '<button type="button" class="pb-tab" onclick="pbarToggle(false);showPage(\'schedule\')">' + pbIco('cal', 22) + '<span>Lịch</span></button>'
+    + '<button type="button" class="pb-tab" onclick="pbarToggle(true)">' + pbIco('check', 22) + '<span>Chưa log</span><b class="pb-badge" id="pb-badge2"></b></button>';
+  const panel = document.createElement('section');
+  panel.id = 'pb-panel';
+  panel.setAttribute('aria-label', 'Quick check');
+  panel.hidden = true;
+  document.body.appendChild(panel);
+  document.body.appendChild(bar);
+  document.body.classList.add('has-pbar');
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k' && document.body.classList.contains('has-pbar')) {
+      e.preventDefault(); const i = document.getElementById('pb-find'); if (i) i.focus();
+    } else if (e.key === 'Escape' && _pb.open) pbarToggle(false);
+  });
+  document.addEventListener('click', (e) => {
+    if (_pb.open && !e.target.closest('#pb-panel, #pbar')) pbarToggle(false);
+  });
+  pbarRefresh();
+  // Lịch hôm nay đổi theo giờ (buổi vừa xong thành "chưa log") — đọc lại 5 phút một lần, chỉ khi app đang mở trước mặt.
+  setInterval(() => { if (!document.hidden) pbarRefresh(); }, 5 * 60e3);
+}
+
+/** Đọc lại số liệu. clientsData đã có sẵn; chỉ bookings hôm nay là một lượt đọc. */
+async function pbarRefresh() {
+  if (!document.getElementById('pbar')) return;
+  pbarPaint();
+  try { const t = await _todayBookings(); pbarSetToday(t.count, t.unlogged); }
+  catch (e) { console.warn('[pbar] lịch hôm nay:', e.code || e.message); }
+}
+function pbarSetToday(count, unlogged) {
+  _pb.today = count; _pb.unlogged = unlogged || [];
+  pbarPaint();
+}
+
+function pbarPaint() {
+  const bar = document.getElementById('pbar');
+  if (!bar) return;
+  const rows = typeof dashRows === 'function' ? dashRows() : [];
+  const n = rows.length, u = _pb.unlogged.length;
+  const set = (id, html, show) => { const el = document.getElementById(id); if (el) { el.innerHTML = html; el.hidden = !show; } };
+  set('pb-alert', '<i class="pb-dot" aria-hidden="true"></i>' + n + ' cần chú ý', n > 0);
+  set('pb-today', pbIco('cal') + 'Hôm nay · ' + (_pb.today == null ? '…' : _pb.today), true);
+  set('pb-unlog', pbIco('check') + u + ' chưa log', u > 0);
+  set('pb-badge', String(n), n > 0);
+  set('pb-badge2', String(u), u > 0);
+  if (_pb.open) pbarPanel();
+}
+
+function pbarToggle(open, focusFind) {
+  _pb.open = open == null ? !_pb.open : !!open;
+  const panel = document.getElementById('pb-panel'), go = document.getElementById('pb-go');
+  if (!panel) return;
+  panel.hidden = !_pb.open;
+  if (go) go.setAttribute('aria-expanded', String(_pb.open));
+  if (_pb.open) { pbarPanel(); if (focusFind) setTimeout(() => { const i = document.getElementById('pb-pfind'); if (i) i.focus(); }, 50); }
+  else { _pb.q = ''; const i = document.getElementById('pb-find'); if (i) i.value = ''; }
+}
+
+function _pbFold(x) { return (typeof _schFold === 'function' ? _schFold(String(x || '')) : String(x || '')).toLowerCase(); }
+function _pbMatches(q) {
+  const f = _pbFold(q).trim();
+  if (!f) return [];
+  return (clientsData || []).filter((c) => _pbFold(c.name || c.id).includes(f)).slice(0, 6);
+}
+function pbarFind(q) {
+  _pb.q = q || '';
+  if (!_pb.open) pbarToggle(true); else pbarPanel();
+  const mirror = document.getElementById('pb-find'); if (mirror && mirror.value !== _pb.q) mirror.value = _pb.q;
+}
+function pbarFindGo() { const m = _pbMatches(_pb.q); if (m.length) pbarOpenClient(m[0].id); }
+
+async function pbarOpenClient(id, log) {
+  pbarToggle(false);
+  if (log) return dshOpenLog(id);
+  await openClientDash(id);
+}
+
+function _pbRow(c, sub, tone, action, act) {
+  const ini = escHtml(String(c.name || c.id || '?').trim().charAt(0).toUpperCase());
+  const av = typeof cdHasAvatar === 'function' && cdHasAvatar(c) ? '<img src="' + c.avatar + '" alt="">' : ini;
+  return '<button type="button" class="pb-row" onclick="pbarOpenClient(\'' + escHtml(c.id) + '\'' + (act === 'log' ? ',true' : '') + ')">'
+    + '<span class="pb-av" aria-hidden="true">' + av + '</span>'
+    + '<span class="pb-rt"><b>' + escHtml(c.name || c.id) + '</b><span class="pb-' + tone + '">' + escHtml(sub) + '</span></span>'
+    + '<span class="pb-act">' + action + '</span></button>';
+}
+
+function pbarPanel() {
+  const panel = document.getElementById('pb-panel');
+  if (!panel) return;
+  const rows = typeof dashRows === 'function' ? dashRows() : [];
+  const q = _pb.q.trim();
+  let body;
+  if (q) {
+    const m = _pbMatches(q);
+    body = '<h3 class="pb-h">Kết quả</h3>' + (m.length
+      ? m.map((c) => { const a = clientAlert(c); return _pbRow(c, a ? (a.reason + (a.mag ? ' ' + a.mag + ' ' + a.unit : '')) : (c.goal || c.level || ''), a ? (a.sev === 'red' ? 'red' : 'amber') : 'mute', 'Mở'); }).join('')
+      : '<p class="pb-empty">Không có khách nào tên như vậy.</p>');
+  } else {
+    body = (_pb.unlogged.length ? '<h3 class="pb-h">Hôm nay chưa log</h3>' + _pb.unlogged.map(({ c, b }) =>
+        _pbRow(c, 'Buổi ' + b.startTime + (b.endTime ? '–' + b.endTime : '') + ' · chưa log', 'mute', 'Log', 'log')).join('') : '')
+      + '<h3 class="pb-h">Cần chú ý</h3>' + (rows.length
+        ? rows.slice(0, 6).map((r) => _pbRow(r.c, r.reason + (r.mag ? ' ' + r.mag + ' ' + r.unit : ''), r.sev === 'red' ? 'red' : 'amber', 'Mở')).join('')
+          + (rows.length > 6 ? '<button type="button" class="pb-more" onclick="pbarToggle(false);showPage(\'dash\')">Xem cả ' + rows.length + ' khách trên Dashboard</button>' : '')
+        : '<p class="pb-empty">Không ai cần chú ý.</p>');
+  }
+  const loc = typeof i18nGet === 'function' && i18nGet() === 'en' ? 'en-GB' : 'vi-VN';
+  panel.innerHTML = '<div class="pb-ph"><h2>Quick check</h2><span data-i18n-skip>'
+    + new Date().toLocaleDateString(loc, { weekday: 'short', day: '2-digit', month: '2-digit' }) + '</span><span>' + (clientsData || []).length + ' khách</span></div>'
+    + '<label class="pb-pfind"><span class="pb-sr">Tìm khách</span>' + pbIco('find')
+    + '<input id="pb-pfind" type="search" autocomplete="off" placeholder="Tìm khách" value="' + escHtml(_pb.q) + '" oninput="pbarFind(this.value)"'
+    + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();pbarFindGo()}"></label>'
+    + '<div class="pb-list">' + body + '</div>'
+    + '<form class="pb-ask" onsubmit="pbarAsk(event)"><label class="pb-sr" for="pb-ask-in">Hỏi Pulse</label>'
+    + '<input id="pb-ask-in" type="text" autocomplete="off" placeholder="Hỏi Pulse về khách…">'
+    + '<button type="submit">Hỏi</button></form>';
+  // Giữ con trỏ trong ô tìm khi gõ — vẽ lại khung không được cướp focus.
+  const pf = document.getElementById('pb-pfind');
+  if (pf && q && document.activeElement !== document.getElementById('pb-find')) { pf.focus(); pf.setSelectionRange(pf.value.length, pf.value.length); }
+}
+
+/** Hỏi từ thanh: mở trợ lý rồi gửi câu y như gõ trong khung (luồng tự đổi sang khách được gọi tên). */
+function pbarAsk(ev) {
+  if (ev) ev.preventDefault();
+  const v = (document.getElementById('pb-ask-in') || {}).value || '';
+  pbarToggle(false);
+  if (typeof aiOpen !== 'function') return;
+  aiOpen('general');
+  const inp = document.getElementById('ai-in');
+  if (v.trim() && inp) { inp.value = v.trim(); aiSend(null); }
 }
 
 function renderDashboard() {
@@ -17733,6 +17919,84 @@ button.cd-av:focus-visible{outline:2px solid #8FDBFF;outline-offset:2px;}
 #ai-fab:focus-visible{ outline: 2px solid var(--ai-acc); outline-offset: 3px; }
 body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-events: none; }
 
+/* ── Thanh Pulse (pbarMount) — thiết kế claude.ai/artifact/K77Ya2HeZ5iDhGFbHLnfi2 ── */
+body.has-pbar{ padding-bottom: calc(104px + env(safe-area-inset-bottom)); }
+body.has-pbar #ai-fab{ display: none; }
+/* Toast nằm ở đáy — nhấc lên trên thanh, không thì bị che. */
+body.has-pbar #workout-toast, body.has-pbar .quote-toast{ bottom: calc(108px + env(safe-area-inset-bottom)); }
+body:has(#ai-sheet.open) #pbar, body:has(#ai-sheet.open) #pb-panel{ display: none; }
+#pbar{ position: fixed; z-index: 850; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+  display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 22px; max-width: calc(100vw - 24px); box-sizing: border-box;
+  background: rgba(33,30,29,.94); border: 1px solid #3F3A37; box-shadow: 0 16px 40px rgba(0,0,0,.5);
+  font-family: 'Figtree', system-ui, sans-serif; color: #F4F1EE; }
+#pbar [hidden]{ display: none !important; }
+.pb-sr{ position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.pb-logo{ flex: none; width: 48px; height: 48px; border-radius: 14px; background: #161111; border: 1px solid #3F3A37; display: grid; place-items: center; color: #8FDBFF; }
+.pb-find, .pb-pfind{ display: flex; align-items: center; gap: 8px; height: 48px; box-sizing: border-box; padding: 0 12px 0 14px;
+  border-radius: 14px; background: rgba(0,0,0,.3); border: 1px solid #3F3A37; color: #BDB8B4; }
+.pb-find{ width: 230px; }
+.pb-find:focus-within, .pb-pfind:focus-within{ border-color: #8FDBFF; }
+.pb-find input, .pb-pfind input{ flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: #F4F1EE; font: 600 16px 'Figtree', sans-serif; }
+.pb-kbd{ font: 700 12px 'Figtree', sans-serif; color: #9C9692; padding: 2px 6px; border: 1px solid #4A4441; border-radius: 6px; }
+.pb-sep{ flex: none; width: 1px; height: 28px; background: #3F3A37; }
+.pb-chip{ flex: none; display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 14px; border-radius: 14px; border: none;
+  background: rgba(255,255,255,.06); color: #F4F1EE; font: 700 14px 'Figtree', sans-serif; cursor: pointer; white-space: nowrap; }
+.pb-chip:hover{ background: rgba(255,255,255,.11); }
+.pb-alert{ background: rgba(238,90,79,.14); color: #FFA59C; font-weight: 800; }
+.pb-alert:hover{ background: rgba(238,90,79,.22); }
+.pb-dot{ width: 8px; height: 8px; border-radius: 50%; background: #EE5A4F; }
+.pb-go{ flex: none; display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 18px; border-radius: 14px; border: none;
+  background: #8FDBFF; color: #161111; font: 800 15px 'Figtree', sans-serif; cursor: pointer; }
+.pb-go:hover{ background: #BFEAFF; }
+.pb-tab{ display: none; }
+#pbar button:focus-visible, #pb-panel button:focus-visible{ outline: 2px solid #8FDBFF; outline-offset: 2px; }
+
+#pb-panel{ position: fixed; z-index: 851; bottom: calc(96px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
+  width: min(440px, calc(100vw - 24px)); max-height: min(560px, calc(100vh - 140px)); box-sizing: border-box; padding: 18px;
+  display: flex; flex-direction: column; gap: 12px; border-radius: 22px; background: rgba(42,37,35,.97);
+  border: 1px solid rgba(143,219,255,.35); box-shadow: 0 24px 60px rgba(0,0,0,.55); font-family: 'Figtree', system-ui, sans-serif; color: #F4F1EE; }
+#pb-panel[hidden]{ display: none; }
+.pb-ph{ display: flex; align-items: baseline; gap: 10px; }
+.pb-ph h2{ flex: 1; margin: 0; font-size: 17px; font-weight: 800; }
+.pb-ph span{ font-size: 13px; color: #BDB8B4; }
+.pb-list{ flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin: 0 -6px; padding: 0 6px; }
+.pb-h{ margin: 8px 0 4px; font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: #BDB8B4; }
+.pb-row{ display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 8px 10px; border: none; border-radius: 12px;
+  background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.pb-row:hover{ background: rgba(255,255,255,.06); }
+.pb-av{ flex: none; width: 36px; height: 36px; border-radius: 50%; background: #3A3330; display: grid; place-items: center; font-weight: 800; font-size: 14px; overflow: hidden; }
+.pb-av img{ width: 100%; height: 100%; object-fit: cover; }
+.pb-rt{ flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pb-rt b{ font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pb-rt span{ font-size: 13px; }
+.pb-red{ color: #FFA59C; } .pb-amber{ color: #FFD08A; } .pb-mute{ color: #BDB8B4; }
+.pb-act{ flex: none; font-size: 13px; font-weight: 700; color: #8FDBFF; }
+.pb-empty{ margin: 4px 10px 8px; font-size: 14px; color: #BDB8B4; }
+.pb-more{ align-self: flex-start; margin: 4px 10px; min-height: 40px; padding: 0; border: none; background: none; color: #8FDBFF; font: 700 14px 'Figtree', sans-serif; cursor: pointer; }
+.pb-ask{ display: flex; gap: 8px; margin: 0; }
+.pb-ask input{ flex: 1; min-width: 0; min-height: 44px; padding: 0 14px; border-radius: 12px; border: 1px solid rgba(255,255,255,.22);
+  background: rgba(0,0,0,.3); color: #F4F1EE; font: 600 16px 'Figtree', sans-serif; outline: none; }
+.pb-ask input:focus{ border-color: #8FDBFF; }
+.pb-ask button{ min-height: 44px; padding: 0 18px; border: none; border-radius: 12px; background: #8FDBFF; color: #161111; font: 800 14px 'Figtree', sans-serif; cursor: pointer; }
+/* Laptop: ô tìm ở thanh đã có, khung không cần ô thứ hai. */
+@media (min-width: 900px){ .pb-pfind{ display: none; } #pb-panel{ left: auto; right: max(12px, calc(50% - 470px)); transform: none; } }
+
+/* Điện thoại / máy tính bảng dọc: 5 nút, Pulse nổi ở giữa. */
+@media (max-width: 899px){
+  #pbar{ left: 12px; right: 12px; transform: none; max-width: none; height: 68px; padding: 0 6px; border-radius: 24px;
+    display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); align-items: center; gap: 0; }
+  .pb-logo, .pb-find, .pb-sep, .pb-chip{ display: none !important; }
+  .pb-tab{ position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; height: 56px;
+    border: none; background: transparent; color: #BDB8B4; font: 700 11px 'Figtree', sans-serif; cursor: pointer; }
+  .pb-tab span{ max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pb-badge{ position: absolute; top: 4px; left: calc(50% + 6px); min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box;
+    border-radius: 999px; background: #EE5A4F; color: #fff; font-size: 10px; font-weight: 800; display: grid; place-items: center; }
+  .pb-go{ justify-self: center; width: 60px; height: 60px; padding: 0; margin-top: -26px; border: 4px solid #161111; border-radius: 50%;
+    justify-content: center; box-shadow: 0 8px 20px rgba(143,219,255,.35); }
+  .pb-go span{ position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  #pb-panel{ left: 12px; right: 12px; width: auto; transform: none; bottom: calc(100px + env(safe-area-inset-bottom)); max-height: calc(100vh - 160px); }
+}
+
 /* ── Khung ───────────────────────────────────────────────────── */
 #ai-sheet{
   position: fixed; z-index: 1000;
@@ -19355,6 +19619,9 @@ Object.assign(I18N_VI_EN, {
   'cần chú ý': 'needs attention', 'Chi tiết, tempo, video': 'Details, tempo, video',
   // Dashboard coach
   'Bảng điều khiển': 'Dashboard', 'Tải lại dữ liệu cũ': 'Reload older data', 'Cài Pulse lên máy': 'Install Pulse',
+  'Lịch': 'Schedule', 'Chưa log': 'To log', 'Kết quả': 'Results', 'Mở': 'Open', 'Hỏi': 'Ask', 'Hỏi Pulse': 'Ask Pulse', 'Log': 'Log',
+  'Hỏi Pulse về khách…': 'Ask Pulse about a client…', 'Không ai cần chú ý.': 'Nobody needs attention.',
+  'Không có khách nào tên như vậy.': 'No client by that name.',
   'iPhone / iPad: bấm nút Chia sẻ (ô vuông có mũi tên) ở Safari → "Thêm vào MH chính". Icon Pulse sẽ nằm trên màn hình chính.': 'iPhone / iPad: in Safari tap Share (the square with an arrow) → "Add to Home Screen". The Pulse icon will sit on your home screen.',
   'Safari trên Mac: menu Tệp → "Thêm vào Dock". Pulse sẽ nằm trên thanh Dock như một app.': 'Safari on Mac: File menu → "Add to Dock". Pulse will sit in the Dock like an app.',
   'Chrome / Edge: bấm biểu tượng Cài đặt ở cuối thanh địa chỉ (hoặc menu ⋮ → "Cài đặt Pulse"). Sau đó chuột phải icon trên taskbar / Dock → Ghim. Chuột phải icon còn có lối tắt Ask Pulse, Dashboard, Schedule.': 'Chrome / Edge: click the Install icon at the end of the address bar (or menu ⋮ → "Install Pulse"). Then right-click the icon on the taskbar / Dock → Pin. Right-clicking the icon also gives shortcuts: Ask Pulse, Dashboard, Schedule.', 'Ổn': 'OK', 'Hoạt động gần đây': 'Recent activity',
@@ -19461,6 +19728,8 @@ const I18N_FULL = {
   'Tập {0} · {1}/{2} bài · {3} kg': 'Trained {0} · {1}/{2} exercises · {3} kg', 'Tập {0} · {1}/{2} bài': 'Trained {0} · {1}/{2} exercises',
   '{0} · {1}/{2} bài · {3} kg': '{0} · {1}/{2} exercises · {3} kg', '{0} · {1}/{2} bài': '{0} · {1}/{2} exercises',
   'Buổi {0}': 'Session {0}', 'Buổi {0} · {1}': 'Session {0} · {1}',
+  '{0#} cần chú ý': '{0} need attention', '{0#} chưa log': '{0} to log', 'Hôm nay · {0}': 'Today · {0}', '{0#} khách': '{0} clients',
+  'Xem cả {0#} khách trên Dashboard': 'See all {0} clients on Dashboard', 'Buổi {0} · chưa log': 'Session {0} · not logged',
   'Nộp {0}? Chưa bài nào được đánh dấu xong — OK sẽ tính cả {1#} bài là đã tập.': 'Submit {0}? No exercise is marked done yet — OK counts all {1} exercises as done.',
   'Nộp {0} với {1#}/{2#} bài đã đánh dấu xong?': 'Submit {0} with {1}/{2} exercises marked done?',
   '{0}, xem bài và nhập tạ': '{0}, view exercises & log weights', '{0}, xem chi tiết': '{0}, view details',
