@@ -940,14 +940,16 @@ async function loadApp() {
  */
 async function _applyDeepLink() {
   const q = new URLSearchParams(window.location.search);
-  const cid = q.get('client'), tab = q.get('tab');
-  if (!cid && !tab) return;
+  const cid = q.get('client'), tab = q.get('tab'), pulse = q.get('pulse') === '1';
+  if (!cid && !tab && !pulse) return;
   window.history.replaceState({}, '', window.location.pathname);
   try {
     if (cid && userRole === 'coach' && clientsData.some((c) => c.id === cid) && (!activeClient || activeClient.id !== cid)) {
       await switchClient(cid);
     }
     if (tab && /^[a-z]+$/.test(tab) && document.querySelector('.nav-tab[data-page="' + tab + '"]')) showPage(tab);
+    // Lối tắt "Ask Pulse" của app đã cài (manifest shortcuts — chuột phải icon trên taskbar/dock, giữ icon trên điện thoại).
+    if (pulse && typeof aiOpen === 'function') aiOpen(cid ? 'client' : 'general');
   } catch (e) { console.warn('[deeplink]', e); }
 }
 
@@ -2320,7 +2322,8 @@ function renderDashboard() {
         <p class="dsh-sub">${new Date().toLocaleDateString('vi-VN',
           { weekday:'long', day:'2-digit', month:'2-digit', year:'numeric' })}
           · ${st.total} khách · ${rows.length ? rows.length + ' cần chú ý' : 'không ai cần chú ý'}</p></div>
-      <button class="dsh-refill" onclick="backfillDashboard(this)">Tải lại dữ liệu cũ</button>
+      <div class="dsh-acts">${pwaInstalled() ? '' : '<button class="dsh-refill" onclick="pwaInstallHelp()">Cài Pulse lên máy</button>'}
+      <button class="dsh-refill" onclick="backfillDashboard(this)">Tải lại dữ liệu cũ</button></div>
     </div>
     <div id="dsh-unlogged"></div>
     <div class="dcs dcs-strip">${dshChipsHTML(clientsData || [], rows)}</div>
@@ -8423,6 +8426,32 @@ function pwaTapAdd() {
     const tip = document.getElementById('pwa-ios-tip');
     if (tip) tip.classList.toggle('visible');
   }
+}
+
+/** Đang chạy như app đã cài (icon màn hình chính / taskbar), không phải tab trình duyệt. */
+function pwaInstalled() {
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+
+/**
+ * Nút "Cài Pulse lên máy" trên Dashboard. Màn hướng dẫn cài lúc mới đăng nhập chỉ hiện
+ * một lần — bấm "bỏ qua" là mất luôn, nên coach cần một chỗ cài lại bất cứ lúc nào.
+ * Chrome / Edge (laptop, Android) có hộp cài thật; Safari không có API, chỉ hướng dẫn được.
+ */
+function pwaInstallHelp() {
+  if (_deferredInstallPrompt) {
+    const p = _deferredInstallPrompt;
+    _deferredInstallPrompt = null;               // mỗi sự kiện chỉ prompt() được một lần
+    p.prompt();
+    p.userChoice.then((r) => { if (r.outcome === 'accepted' && typeof renderDashboard === 'function') renderDashboard(); }).catch(() => {});
+    return;
+  }
+  const ua = navigator.userAgent;
+  const ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  const safariMac = !ios && /Macintosh/.test(ua) && /Safari\//.test(ua) && !/Chrome|Chromium|Edg\//.test(ua);
+  alert(T(ios ? 'iPhone / iPad: bấm nút Chia sẻ (ô vuông có mũi tên) ở Safari → "Thêm vào MH chính". Icon Pulse sẽ nằm trên màn hình chính.'
+    : safariMac ? 'Safari trên Mac: menu Tệp → "Thêm vào Dock". Pulse sẽ nằm trên thanh Dock như một app.'
+    : 'Chrome / Edge: bấm biểu tượng Cài đặt ở cuối thanh địa chỉ (hoặc menu ⋮ → "Cài đặt Pulse"). Sau đó chuột phải icon trên taskbar / Dock → Ghim. Chuột phải icon còn có lối tắt Ask Pulse, Dashboard, Schedule.'));
 }
 
 function pwaDismiss(save = true) {
@@ -17027,6 +17056,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 #dash-page .dsh-sub{margin:4px 0 0;font-size:12.5px;font-weight:500;color:rgba(255,255,255,.55)}
 #dash-page .dsh-refill{min-height:44px;padding:0 16px;border-radius:999px;border:1px solid var(--dsh-edge);background:rgba(33,30,29,.55);color:rgba(255,255,255,.75);font:600 13px 'Figtree',sans-serif;cursor:pointer;transition:background-color .15s,color .15s}
 #dash-page .dsh-refill:hover{background:var(--dsh-item-hover);color:#fff}
+.dsh-acts{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
 /* 21 chips: no blur, no entrance. Plain dark tint straight over the sky. */
 #dash-page .dcs-chip{flex:none;display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:0 14px 0 12px;border-radius:999px;border:1px solid var(--dsh-hair);background:rgba(33,30,29,.55);color:#fff;font-family:'Figtree',sans-serif;cursor:pointer;transition:background-color .15s,border-color .15s}
 #dash-page .dcs-chip:hover{background:var(--dsh-item-hover);border-color:var(--dsh-edge)}
@@ -19324,7 +19354,10 @@ Object.assign(I18N_VI_EN, {
   'Xoá tìm kiếm': 'Clear search', 'Danh sách khách': 'Client list', 'Khách đang xem: chưa chọn': 'Viewing: no client selected',
   'cần chú ý': 'needs attention', 'Chi tiết, tempo, video': 'Details, tempo, video',
   // Dashboard coach
-  'Bảng điều khiển': 'Dashboard', 'Tải lại dữ liệu cũ': 'Reload older data', 'Ổn': 'OK', 'Hoạt động gần đây': 'Recent activity',
+  'Bảng điều khiển': 'Dashboard', 'Tải lại dữ liệu cũ': 'Reload older data', 'Cài Pulse lên máy': 'Install Pulse',
+  'iPhone / iPad: bấm nút Chia sẻ (ô vuông có mũi tên) ở Safari → "Thêm vào MH chính". Icon Pulse sẽ nằm trên màn hình chính.': 'iPhone / iPad: in Safari tap Share (the square with an arrow) → "Add to Home Screen". The Pulse icon will sit on your home screen.',
+  'Safari trên Mac: menu Tệp → "Thêm vào Dock". Pulse sẽ nằm trên thanh Dock như một app.': 'Safari on Mac: File menu → "Add to Dock". Pulse will sit in the Dock like an app.',
+  'Chrome / Edge: bấm biểu tượng Cài đặt ở cuối thanh địa chỉ (hoặc menu ⋮ → "Cài đặt Pulse"). Sau đó chuột phải icon trên taskbar / Dock → Ghim. Chuột phải icon còn có lối tắt Ask Pulse, Dashboard, Schedule.': 'Chrome / Edge: click the Install icon at the end of the address bar (or menu ⋮ → "Install Pulse"). Then right-click the icon on the taskbar / Dock → Pin. Right-clicking the icon also gives shortcuts: Ask Pulse, Dashboard, Schedule.', 'Ổn': 'OK', 'Hoạt động gần đây': 'Recent activity',
   'Ăn': 'Meal', 'Ảnh': 'Photo', 'Tập': 'Workout', 'Đo': 'Scan', 'Số liệu': 'Numbers', 'Buổi tập tuần này': 'Workouts this week',
   'Gói dịch vụ': 'Plans', 'khách chưa có gói': 'clients without a plan', 'InBody quá hạn': 'InBody overdue',
   'quá 8 tuần chưa đo lại': 'over 8 weeks since last scan', 'Hôm nay chưa log': 'Not logged today',

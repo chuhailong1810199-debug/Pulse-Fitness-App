@@ -1,8 +1,10 @@
 {
+  "id": "/index.html",
   "name": "Pulse – Train with Precision",
   "short_name": "Pulse",
   "description": "Hybrid coaching for high-performers",
   "start_url": "/index.html",
+  "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#161111",
@@ -19,6 +21,47 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Ask Pulse",
+      "short_name": "Pulse",
+      "description": "Open the Pulse assistant",
+      "url": "/index.html?pulse=1",
+      "icons": [
+        {
+          "src": "images/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Dashboard",
+      "short_name": "Dashboard",
+      "description": "Clients that need attention",
+      "url": "/index.html?tab=dash",
+      "icons": [
+        {
+          "src": "images/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Schedule",
+      "short_name": "Schedule",
+      "description": "Today's sessions",
+      "url": "/index.html?tab=schedule",
+      "icons": [
+        {
+          "src": "images/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
     }
   ]
 }
