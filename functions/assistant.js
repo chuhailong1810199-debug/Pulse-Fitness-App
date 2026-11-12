@@ -901,7 +901,11 @@ async function execTool(db, name, a, role, ctx) {
         youth: chk.youth || null,
         waived: chk.waived,
         warnings: [...chk.warnings, ...inherited.map((m) => "Có sẵn từ giáo án cũ: " + m)].slice(0, 12),
-        table: compactProgram(program),
+        // Lớp nhóm soạn 1 buổi mỗi lệnh: thẻ chỉ vẽ ĐÚNG buổi đổi. Vẽ cả giáo án đã ghép thì buổi cũ giữ nguyên
+        // nằm chung bảng, coach tưởng Pulse vừa soạn lại nó (2026-11-12, Lớp · Long Chu class: thấy Buổi B cũ).
+        // Buổi giữ nguyên vẫn liệt kê ở dòng "Giữ nguyên".
+        table: compactProgram(isGroup ? r.program : program),
+        isGroup,
       },
       note: "Đã gửi cho coach duyệt"
         + (kept.length ? ` (đổi ${Object.keys(r.program).sort().join(", ")}; GIỮ NGUYÊN ${kept.join(", ")})` : "")
@@ -1392,7 +1396,9 @@ Mục tiêu: kỹ năng vận động, sức mạnh nền, sức bật an toàn,
 const GROUP_METHOD = `LỚP NHÓM (hồ sơ có isGroup, hoặc coach nói "lớp", "group class")
 - MỖI LỆNH ĐÚNG 1 BUỔI. Coach chỉnh lớp liên tục: chỉ soạn buổi coach yêu cầu (một khoá SessionX), KHÔNG soạn cả
   tuần, KHÔNG đụng buổi khác của lớp (server chặn đề xuất lớp có > 1 buổi). Coach không nói buổi nào → buổi mới
-  = khoá trống kế tiếp; "làm lại / sửa buổi B" → đúng khoá đó.
+  = khoá trống kế tiếp; "làm lại / sửa buổi B" → đúng khoá đó. Coach kể NHIỀU buổi trong một câu ("session 1 …,
+  session 2 …") → soạn ĐÚNG buổi đầu tiên coach nhắc, rồi cuối câu trả lời chép sẵn yêu cầu của buổi kế để coach gửi
+  lệnh tiếp — KHÔNG gộp nhiều buổi vào một đề xuất (sẽ bị chặn, tốn lượt).
 - Tạo lớp mới: propose_new_client với isGroup:true, groupFormat, groupSize, durationMin, equipment,
   level "Mixed" nếu trình độ trộn, KHÔNG email, kèm ĐÚNG 1 buổi (SessionA). Thêm / sửa buổi: propose_program
   (chỉ cần get_client + get_program trước — lớp không có mức tạ chung).

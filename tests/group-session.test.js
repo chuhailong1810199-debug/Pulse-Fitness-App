@@ -108,3 +108,12 @@ test('app: form lop dang mo -> 1 buoi, khoa trong ke tiep hoac lam lai dung khoa
   assert.doesNotMatch(api._aiGroupForm(full), /Buổi mới/);
   assert.match(api.aiBuildGroupPrompt({ slot: '' }, full).error, /đủ 7 buổi/);
 });
+
+test('the duyet lop chi ve buoi DOI — buoi cu giu nguyen khong lan vao bang (2026-11-12)', () => {
+  const fs2 = require('fs');
+  const a = fs2.readFileSync(require('path').join(__dirname, '..', 'functions', 'assistant.js'), 'utf8');
+  assert.match(a, /table: compactProgram\(isGroup \? r\.program : program\)/);
+  assert.match(A.GROUP_METHOD, /Coach kể NHIỀU buổi trong một câu/);
+  const html = fs2.readFileSync(require('path').join(__dirname, '..', 'index.html'), 'utf8');
+  assert.match(html, /_grpCard && Array\.isArray\(p\.changed\) && p\.table/);
+});

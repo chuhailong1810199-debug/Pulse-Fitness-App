@@ -35,6 +35,6 @@ test('bang giao an: mot hang moi bai, mau theo pha, bam vao de hoi', () => {
 test('may khach hien bang tu displays va tu the duyet; luong luu lai van con bang', () => {
   assert.match(s, /for \(const dsp of \(d\.displays \|\| \[\]\)\) thread\.push\(\{ role: 'program', display: dsp \}\);/);
   assert.match(s, /if \(m\.role === 'program'\) return/);
-  assert.match(s, /p\.table && Object\.keys\(p\.table\)\.length/);
+  assert.match(s, /_tbl && Object\.keys\(_tbl\)\.length/);
   assert.match(s, /\(m\.displays \|\| \[\]\)\.forEach\(\(dsp\) => old\.push\(\{ role: 'program', display: dsp \}\)\)/);
 });

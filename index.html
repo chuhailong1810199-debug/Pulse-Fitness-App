@@ -10902,8 +10902,13 @@ function _aiCard(m, i) {
       + '<button type="button" class="ai-cf-yes" onclick="aiApprove(' + i + ')">Đồng ý</button>'
       + '<button type="button" class="ai-cf-cancel" onclick="aiReject(' + i + ')">Bỏ qua</button></div>';
   }
-  const table = p.table && Object.keys(p.table).length
-    ? '<details class="ai-cf-tb" open><summary>Xem giáo án</summary>' + _aiProgramHTML(p.table) + '</details>' : '';
+  // Lớp nhóm (soạn 1 buổi mỗi lệnh): chỉ vẽ buổi ĐỔI — buổi giữ nguyên đã nằm ở dòng "Giữ nguyên".
+  // Vẽ cả giáo án ghép thì coach tưởng Pulse vừa soạn lại buổi cũ (2026-11-12).
+  const _grpCard = p.isGroup || !!(a.clientId && (clientsData.find((c) => c.id === a.clientId) || {}).isGroup);
+  const _tbl = _grpCard && Array.isArray(p.changed) && p.table
+    ? Object.fromEntries(Object.entries(p.table).filter(([k]) => p.changed.includes(k))) : p.table;
+  const table = _tbl && Object.keys(_tbl).length
+    ? '<details class="ai-cf-tb" open><summary>Xem giáo án</summary>' + _aiProgramHTML(_tbl) + '</details>' : '';
   // Đẩy vào khách KHÁC khách đang mở → cảnh báo đỏ ngay trên thẻ (2026-10-16: giáo án soạn
   // khi đang xem Anh Đạo bị đẩy vào hồ sơ Long Chu; thẻ chỉ ghi tên ở một dòng nhỏ).
   const warn = _aiOtherClient(a)
