@@ -275,6 +275,11 @@ Key routing rules:
   interval trước tạ phải có block recovery chen giữa; tạ sau interval > RPE 7 chỉ nhắc. App: `sortPhases` GIỮ thứ tự pha khi
   buổi soạn theo block (không thì EMOM đầu buổi bị đẩy xuống cuối); tab Workout hiện tổng phút (đỏ khi lệch), ghi chú coach,
   nhãn block, B1/Phút 1, RPE · nghỉ · bài dễ hơn (`exRest` đọc từ cue khi thiếu `rest`).
+- **Tab Lớp nhóm** (2026-11-12, thiết kế Claude Design "Pulse · Tab Lớp nhóm"): `renderGroups()` — danh sách lớp →
+  trang lớp (ô Buổi A–G) → chi tiết buổi (thanh thời gian theo block, Dễ/Chuẩn/Khó đọc `regression` + "Dễ:/Khó:" trong
+  cue) → **Dạy lớp** (`grpTeach`, toàn màn hình, đồng hồ theo `durationMin` từng block, lưới EMOM, giữ màn hình sáng).
+  Chỉ ĐỌC; soạn / làm lại = `grpPulse(cid, key)` mở form lớp với khoá chọn sẵn. `coachApply` đóng `pushedAt` cho buổi lớp
+  vừa duyệt (trước khi ghép) → nhãn "Mới" 24h + `grpAfterPush` hiện "Đã lưu Buổi X vào lớp". Màu block: `GRP_COLORS`.
 - **Lớp Hybrid / HYROX** (`groupFormat: hyrox`, 2026-10-19): label mỗi buổi bắt đầu bằng loại buổi
   (Compromised / Strength Endurance / Engine / Foundation / Race Sim / Partner); số buổi/tuần quyết định loại
   (form tự gán). Buổi Compromised / Engine / Race Sim: phút CHẠY ≥ phút TRẠM — `hybridIssues()` trong

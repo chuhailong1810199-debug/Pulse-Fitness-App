@@ -3662,6 +3662,14 @@ exports.coachApply = onCall(
       const ref = db.collection("clients").doc(String(act.clientId || ""));
       const cur = await ref.get();
       if (!cur.exists) throw new HttpsError("not-found", `Không có khách '${act.clientId}'.`);
+      // Lớp nhóm: đóng dấu giờ đẩy cho các buổi ĐỔI — tab Lớp nhóm hiện "Buổi D · vừa đẩy" + nhãn "Mới".
+      // Đóng TRƯỚC khi ghép (act.program lúc này chỉ có buổi đổi) để buổi cũ giữ nguyên giờ của nó.
+      if ((cur.data() || {}).isGroup === true && act.program && typeof act.program === "object") {
+        const at = new Date().toISOString();
+        for (const k of Object.keys(act.program)) {
+          if (act.program[k] && typeof act.program[k] === "object") act.program[k] = { ...act.program[k], pushedAt: at };
+        }
+      }
       // merge: đề xuất chỉ mang những buổi ĐỔI → ghép lên giáo án HIỆN TẠI lúc bấm duyệt
       // (không phải lúc đề xuất): hai thẻ duyệt nối tiếp nhau không đè mất buổi của nhau.
       if (act.merge === true) act.program = mergeProgram((cur.data() || {}).program || {}, act.program, act.dropSessions);
@@ -3739,7 +3747,10 @@ exports.coachApply = onCall(
         goal: act.goal || "",
         sessionsPerWeek: Number(act.sessionsPerWeek) || 3,
         notes: act.notes || "",
-        program: act.program && Object.keys(act.program).length ? act.program : {},
+        program: act.program && Object.keys(act.program).length
+          ? (act.isGroup === true ? Object.fromEntries(Object.entries(act.program).map(([k, d]) =>
+            [k, d && typeof d === "object" ? { ...d, pushedAt: new Date().toISOString() } : d])) : act.program)
+          : {},
         coachUid: (request.auth && request.auth.uid) || null,
         createdAt: new Date().toISOString(),
         createdBy: "coachAssistant",

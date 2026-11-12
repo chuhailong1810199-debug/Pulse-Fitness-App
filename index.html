@@ -814,6 +814,8 @@ async function loadApp() {
     if (schTab) schTab.style.display = '';
     const dashTab = document.getElementById('dash-nav-tab');
     if (dashTab) dashTab.style.display = '';
+    const grpTab = document.getElementById('groups-nav-tab');   // tab Lớp nhóm — dashboard riêng của lớp
+    if (grpTab) grpTab.style.display = '';
     if (userIsAdmin) loadCoachNames();       // tên coach cho biển "đang quan sát"
     afterClientChange();
     // Youth là công cụ của coach: khách không cần thấy pin test này.
@@ -2377,6 +2379,365 @@ async function dshOpenLog(id) {
 // mà không phải vào Dashboard. Thay nút trợ lý tròn (#ai-fab) khi đang hiện.
 // Số liệu đọc từ clientsData (miễn phí) + MỘT lượt đọc bookings hôm nay.
 // ═══════════════════════════════════════════════════════════════════════════
+// ── TAB LỚP NHÓM (2026-11-12) — thiết kế Claude Design "Pulse · Tab Lớp nhóm" ───────────────
+//
+// Lớp = hồ sơ clients có isGroup. Tab này là dashboard riêng của lớp: danh sách → trang lớp (ô Buổi
+// A–G) → chi tiết buổi (thanh thời gian theo block) → dạy lớp (đồng hồ theo block, toàn màn hình).
+// Soạn / làm lại buổi đi qua Pulse (form lớp, MỖI LỆNH 1 BUỔI); bấm "Đồng ý" thì buổi hiện ngay ở đây
+// kèm nhãn "Mới" (pushedAt do coachApply đóng). Chỉ ĐỌC dữ liệu — mọi lần ghi vẫn qua thẻ duyệt.
+const GRP_COLORS = { mobility: '#9FD9B4', emom: '#FFB86B', recovery: '#8A8580', straight: '#C9B8FF', superset: '#F2D16B', circuit: '#7FB2FF' };
+const GRP_FMT_LABEL = { mobility: 'Mobility', emom: 'EMOM', recovery: 'Hồi phục', straight: 'Set thẳng', superset: 'Superset', circuit: 'Circuit' };
+const GRP_TYPE_VI = { hyrox: 'Hybrid/HYROX', strength: 'Strength nhóm nhỏ', circuit: 'Circuit giảm mỡ' };
+const GRP_KEYS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((x) => 'Session' + x);
+let _grp = { view: 'list', cid: null, key: null, filter: 'all', lvl: 'std', justPushed: null };
+
+/** Kiểu block của một pha: format coach ghi, không có thì suy từ tag (giáo án cũ). */
+function grpFmt(ph) {
+  const f = String((ph && ph.format) || '');
+  if (GRP_COLORS[f]) return f;
+  const t = normPhaseTag(ph || {});
+  return t === 'warmup' ? 'mobility' : t === 'circuit' ? 'circuit' : t === 'accessories' ? 'superset' : 'straight';
+}
+function grpClasses() {
+  return clientsData.filter((c) => c && c.isGroup && (userIsAdmin || !currentUser || c.coachUid === currentUser.uid));
+}
+function grpSessions(c) { return GRP_KEYS.filter((k) => c && c.program && c.program[k]); }
+function grpLetter(k) { return String(k || '').replace('Session', ''); }
+function grpMins(d) { return ((d && d.phases) || []).reduce((t, p) => t + (Number(p && p.durationMin) || 0), 0); }
+function grpTimed(d) { return ((d && d.phases) || []).some((p) => Number(p && p.durationMin) > 0); }
+function grpTarget(c, d) { return Number(d && d.durationMin) > 0 ? Number(d.durationMin) : Number(c && c.durationMin) || 0; }
+/** Giờ đẩy gần nhất của lớp → { key, ms }. */
+function grpLastPush(c) {
+  let best = null;
+  for (const k of grpSessions(c)) { const ms = _toMs(c.program[k].pushedAt); if (ms && (!best || ms > best.ms)) best = { key: k, ms }; }
+  return best;
+}
+function grpIsNew(d) { const ms = _toMs(d && d.pushedAt); return !!ms && Date.now() - ms < 24 * 3600e3; }
+function grpAgo(ms) {
+  if (!ms) return '';
+  const m = Math.round((Date.now() - ms) / 60000);
+  if (m < 2) return T('vừa xong');
+  if (m < 60) return T(m + ' phút trước');
+  const h = Math.round(m / 60);
+  if (h < 24) return T(h + ' giờ trước');
+  const d = Math.round(h / 24);
+  if (d === 1) return T('hôm qua');
+  if (d < 14) return T(d + ' ngày trước');
+  return T(Math.round(d / 7) + ' tuần trước');
+}
+/** Tên ngắn trong ô thanh thời gian: "A. Lower — squat" → "A · Lower". */
+function grpShort(ph) {
+  const f = grpFmt(ph);
+  if (f === 'emom') return 'EMOM' + (Number(ph.rounds) > 0 ? ' · ' + T(ph.rounds + ' vòng') : '');
+  if (f === 'recovery') return T('Nghỉ');
+  const n = String(ph.name || '').replace(/\s*[—(].*$/, '').trim();
+  const m = n.match(/^([A-Z])[.)]\s*(.+)$/);
+  return m ? m[1] + ' · ' + m[2] : n;
+}
+/** "Dễ: … / Chuẩn: … / Khó: …" trong cue → đoạn của một mức. */
+function grpCueLevel(cue, label) {
+  const re = new RegExp(label + '\\s*[:：-]\\s*(.+?)(?=\\s*[|/;·]?\\s*(?:Dễ|Chuẩn|Khó)\\s*[:：-]|$)', 'i');
+  const m = String(cue || '').match(re);
+  return m ? m[1].trim() : '';
+}
+// Tách ở dấu phẩy CÓ khoảng trắng sau — "5–22,5kg" là số thập phân, không phải hai món.
+function grpEquip(c) { return String((c && c.equipment) || '').split(/\s*[;\n]\s*|,\s+/).map((x) => x.trim()).filter(Boolean); }
+
+// ── vẽ ──────────────────────────────────────────────────────────────────
+function renderGroups() {
+  const el = document.getElementById('groups-body');
+  if (!el) return;
+  if (userRole !== 'coach') { el.innerHTML = ''; return; }
+  const c = _grp.cid ? clientsData.find((x) => x.id === _grp.cid) : null;
+  if (_grp.view !== 'list' && !c) _grp.view = 'list';
+  if (_grp.view === 'session' && !(c.program || {})[_grp.key]) _grp.view = 'class';
+  el.innerHTML = (_grp.justPushed && _grp.justPushed.cid === (c && c.id) ? grpToastHTML(c) : '')
+    + (_grp.view === 'list' ? grpListHTML() : _grp.view === 'class' ? grpClassHTML(c) : grpSessionHTML(c, _grp.key));
+  el.onclick = grpOpenFromCard;
+  window.scrollTo(0, 0);
+}
+function grpGo(view, cid, key) {
+  _grp.view = view; if (cid !== undefined) _grp.cid = cid; if (key !== undefined) _grp.key = key;
+  renderGroups();
+}
+
+function grpSlotsMini(c) {
+  return '<div class="gp-mini">' + GRP_KEYS.map((k) => '<span class="' + ((c.program || {})[k] ? 'on' : '') + '">' + grpLetter(k) + '</span>').join('') + '</div>';
+}
+function grpListHTML() {
+  const all = grpClasses();
+  const F = [['all', T('Tất cả') + ' · ' + all.length]].concat(Object.keys(GRP_TYPE_VI)
+    .map((f) => [f, GRP_TYPE_VI[f] + ' · ' + all.filter((c) => c.groupFormat === f).length]));
+  const list = all.filter((c) => _grp.filter === 'all' || c.groupFormat === _grp.filter)
+    .sort((a, b) => ((grpLastPush(b) || {}).ms || 0) - ((grpLastPush(a) || {}).ms || 0) || String(a.name).localeCompare(String(b.name), 'vi'));
+  const head = '<header class="gp-head"><div><h1>' + escHtml(T('Lớp nhóm')) + '</h1>'
+    + (all.length ? '<p>' + escHtml(T(all.length + ' lớp · buổi bạn bấm "Đồng ý" trong Pulse sẽ hiện ngay ở đây')) + '</p>' : '') + '</div>'
+    + '<button type="button" class="gp-btn gp-p" onclick="grpNewClass()">+ ' + escHtml(T('Lớp mới')) + '</button></header>';
+  if (!all.length) {
+    return head + '<section class="gp-card gp-empty"><div class="gp-mini gp-mini-lg">' + GRP_KEYS.map((k) => '<span>' + grpLetter(k) + '</span>').join('') + '</div>'
+      + '<h2>' + escHtml(T('Chưa có lớp nhóm nào')) + '</h2><p>' + escHtml(T('Tạo hồ sơ lớp rồi nhờ Pulse soạn từng buổi — tối đa 7 buổi (A–G).')) + '</p>'
+      + '<ol class="gp-steps"><li><b>1</b>' + escHtml(T('Tạo lớp — kiểu lớp, số người, độ dài, dụng cụ')) + '</li><li><b>2</b>' + escHtml(T('Soạn 1 buổi với Pulse'))
+      + '</li><li><b>3</b>' + escHtml(T('Bấm "Đồng ý" — buổi hiện ngay trong lớp')) + '</li></ol>'
+      + '<button type="button" class="gp-btn gp-p" onclick="grpNewClass()">' + escHtml(T('Lớp mới')) + '</button></section>';
+  }
+  return head + '<div class="gp-filters" role="group" aria-label="' + escHtml(T('Lọc theo kiểu lớp')) + '">'
+    + F.map(([v, t]) => '<button type="button" class="gp-chip' + (_grp.filter === v ? ' on' : '') + '" aria-pressed="' + (_grp.filter === v) + '" onclick="_grp.filter=\'' + v + '\';renderGroups()">' + escHtml(t) + '</button>').join('') + '</div>'
+    + '<div class="gp-grid">' + list.map((c) => {
+      const n = grpSessions(c).length, last = grpLastPush(c), fresh = last && grpIsNew(c.program[last.key]);
+      const meta = [c.groupSize ? T(c.groupSize + ' người') : '', c.durationMin ? T(c.durationMin + ' phút') : '', c.level || ''].filter(Boolean).join(' · ');
+      return '<button type="button" class="gp-card gp-cls" data-gcid="' + escHtml(c.id) + '">'
+        + '<span class="gp-cls-top"><span class="gp-kind">' + escHtml(GRP_TYPE_VI[c.groupFormat] || c.groupFormat || '') + '</span>'
+        + (fresh ? '<span class="gp-new">' + escHtml(T('Mới')) + '</span>' : n >= 7 ? '<span class="gp-kind">' + escHtml(T('Đủ 7 buổi')) + '</span>' : '') + '</span>'
+        + '<b class="gp-cls-n" data-i18n-skip>' + escHtml(c.name || c.id) + '</b>'
+        + '<span class="gp-sub">' + escHtml(meta) + '</span>'
+        + '<span class="gp-cls-row">' + grpSlotsMini(c) + '<b>' + n + '/7</b></span>'
+        + '<span class="gp-sub gp-last">' + escHtml(last ? T('Buổi ' + grpLetter(last.key) + ' · đẩy ' + grpAgo(last.ms))
+          : n ? T(n + ' buổi · chưa có giờ đẩy') : T('Chưa có buổi nào — soạn buổi đầu với Pulse')) + '</span></button>';
+    }).join('') + '</div>';
+}
+
+function grpTimeline(c, d, big) {
+  const ph = d.phases || [];
+  const sum = grpMins(d), target = grpTarget(c, d), missing = ph.filter((p) => !(Number(p.durationMin) > 0));
+  const off = missing.length > 0 || (target > 0 && Math.abs(sum - target) > 3);
+  const total = sum + (missing.length ? '+?' : '') + (target ? ' / ' + target : '') + ' ' + T('phút');
+  const segs = ph.map((p) => {
+    const m = Number(p.durationMin) > 0 ? Number(p.durationMin) : 0;
+    const f = grpFmt(p);
+    return '<div class="gp-seg' + (m ? '' : ' unk') + '" style="flex:' + (m || Math.max(2, (target || 50) * 0.06)) + ' 1 0;background:' + (m ? GRP_COLORS[f] : 'transparent') + '" title="' + escHtml((p.name || '') + ' · ' + (m ? m + "'" : '?')) + '">'
+      + '<b>' + (m ? m + '′' : '?') + '</b>' + (big ? '<span>' + escHtml(grpShort(p)) + '</span>' : '') + '</div>';
+  }).join('');
+  const scale = Math.max(sum, target || 0);
+  const ticks = big && scale ? '<div class="gp-ticks">' + Array.from({ length: Math.floor(scale / 10) + 1 }, (_, i) => '<span style="left:' + (i * 10 / scale * 100) + '%">' + (i * 10) + '′</span>').join('') + '</div>' : '';
+  const used = [...new Set(ph.map(grpFmt))];
+  const legend = big ? '<div class="gp-legend">' + used.map((f) => '<span><i style="background:' + GRP_COLORS[f] + '"></i>' + escHtml(T(GRP_FMT_LABEL[f])) + '</span>').join('') + '</div>' : '';
+  let warn = '';
+  if (off && big) {
+    const lines = [];
+    if (target > 0 && Math.abs(sum - target) > 3) lines.push(T((sum > target ? 'Dư ' : 'Thiếu ') + Math.abs(sum - target) + ' phút so với độ dài lớp (cho phép lệch ±3′)'));
+    if (missing.length) lines.push(T(missing.length + ' block chưa ghi số phút') + ': ' + missing.map((p) => p.name || '?').join(', '));
+    warn = '<div class="gp-warn" role="alert"><ul>' + lines.map((l) => '<li>' + escHtml(l) + '</li>').join('') + '</ul>'
+      + '<button type="button" class="gp-btn gp-s" onclick="grpPulse(\'' + escHtml(c.id) + '\',\'' + escHtml(_grp.key || '') + '\',\'Cân lại tổng phút cho khớp ' + target + ' phút\')">'
+      + escHtml(T('Nhờ Pulse cân lại về ' + target + '′')) + '</button></div>';
+  }
+  return { html: '<div class="gp-bar' + (big ? ' big' : '') + '">' + segs + '</div>' + ticks + legend + warn, off, total };
+}
+
+function grpToastHTML(c) {
+  const k = _grp.justPushed.key;
+  return '<div class="gp-toast" role="status"><span>✓ ' + escHtml(T('Đã lưu Buổi ' + grpLetter(k) + ' vào lớp')) + '</span>'
+    + '<button type="button" onclick="_grp.justPushed=null;grpGo(\'session\',\'' + escHtml(c.id) + '\',\'' + k + '\')">' + escHtml(T('Xem buổi')) + '</button></div>';
+}
+
+function grpClassHTML(c) {
+  const prog = c.program || {}, have = grpSessions(c), full = have.length >= 7;
+  if (!_grp.key || !prog[_grp.key]) _grp.key = (grpLastPush(c) || {}).key || have[have.length - 1] || null;
+  const chips = [GRP_TYPE_VI[c.groupFormat] || c.groupFormat, c.groupSize ? T(c.groupSize + ' người') : '', c.durationMin ? T(c.durationMin + ' phút / buổi') : '', c.level].filter(Boolean);
+  const eq = grpEquip(c);
+  const nextKey = GRP_KEYS.find((k) => !prog[k]);
+  let h = '<a class="gp-back" href="#" onclick="event.preventDefault();grpGo(\'list\')">‹ ' + escHtml(T('Lớp nhóm')) + '</a>'
+    + '<header class="gp-card gp-ch"><div class="gp-ch-t"><h1 data-i18n-skip>' + escHtml(c.name || c.id) + '</h1>'
+    + '<div class="gp-chips">' + chips.map((x) => '<span class="gp-tag">' + escHtml(x) + '</span>').join('') + '</div>'
+    + (eq.length ? '<div class="gp-eq"><span class="gp-k">' + escHtml(T('Dụng cụ')) + '</span>' + eq.map((x) => '<span class="gp-tag sm" data-i18n-skip>' + escHtml(x) + '</span>').join('') + '</div>' : '')
+    + '</div><button type="button" class="gp-btn gp-s" onclick="grpEditClass(\'' + escHtml(c.id) + '\')">' + escHtml(T('Sửa lớp')) + '</button></header>';
+  h += '<div class="gp-sec"><h2>' + escHtml(T('Buổi')) + ' <span>· ' + have.length + '/7' + (full ? ' — ' + escHtml(T('đã đủ')) : '') + '</span></h2>'
+    + (nextKey ? '<button type="button" class="gp-btn gp-p" onclick="grpPulse(\'' + escHtml(c.id) + '\',\'' + nextKey + '\')">✦ ' + escHtml(T('Soạn buổi mới')) + '</button>' : '') + '</div>'
+    + (full ? '<p class="gp-note">' + escHtml(T('Lớp đủ 7 buổi — chọn một buổi để làm lại')) + '</p>' : '');
+  h += '<div class="gp-slots">' + GRP_KEYS.map((k) => {
+    const d = prog[k];
+    if (!d) return '<button type="button" class="gp-slot empty" onclick="grpPulse(\'' + escHtml(c.id) + '\',\'' + k + '\')"><b>' + grpLetter(k) + '</b><span>+ ' + escHtml(T('Buổi mới')) + '</span></button>';
+    const miss = (d.phases || []).some((p) => !(Number(p && p.durationMin) > 0));
+    const tgt = grpTarget(c, d), offS = grpTimed(d) && (miss || (tgt > 0 && Math.abs(grpMins(d) - tgt) > 3));
+    const t = grpTimed(d) ? grpMins(d) + (miss ? '+?' : '') + '′' + (offS ? ' ⚠' : '') : T('Chưa ghi phút block');
+    return '<button type="button" class="gp-slot' + (k === _grp.key ? ' on' : '') + '" aria-pressed="' + (k === _grp.key) + '" onclick="_grp.key=\'' + k + '\';renderGroups()">'
+      + '<b>' + grpLetter(k) + (grpIsNew(d) ? '<i class="gp-new">' + escHtml(T('Mới')) + '</i>' : '') + '</b>'
+      + '<span class="gp-slot-n" data-i18n-skip>' + escHtml(d.label || k) + '</span><span class="gp-sub">' + escHtml(t) + '</span>'
+      + (grpTimed(d) ? '<span class="gp-bar mini">' + (d.phases || []).map((p) => '<i style="flex:' + (Number(p.durationMin) || 1) + ' 1 0;background:' + GRP_COLORS[grpFmt(p)] + '"></i>').join('') + '</span>' : '')
+      + '</button>';
+  }).join('') + '</div>';
+  if (!have.length) {
+    h += '<section class="gp-card gp-empty"><h2>' + escHtml(T('Lớp chưa có buổi nào')) + '</h2><p>'
+      + escHtml(T('Pulse soạn từng buổi một, theo dụng cụ và trình độ của lớp. Bấm "Đồng ý" trên thẻ duyệt là buổi vào ô A.')) + '</p>'
+      + '<button type="button" class="gp-btn gp-p" onclick="grpPulse(\'' + escHtml(c.id) + '\',\'SessionA\')">✦ ' + escHtml(T('Soạn Buổi A với Pulse')) + '</button></section>';
+    return h;
+  }
+  const k = _grp.key, d = prog[k], tl = grpTimed(d) ? grpTimeline(c, d, true) : null;
+  h += '<section class="gp-card gp-prev"><div class="gp-prev-h"><div><div class="gp-eyebrow">' + escHtml(T('Buổi ' + grpLetter(k)) + (d.pushedAt ? ' · ' + T('đẩy ' + grpAgo(_toMs(d.pushedAt))) : '')) + '</div>'
+    + '<h2 data-i18n-skip>' + escHtml(d.label || k) + '</h2>' + (d.focus ? '<p data-i18n-skip>' + escHtml(d.focus) + '</p>' : '') + '</div>'
+    + '<div class="gp-acts"><button type="button" class="gp-btn gp-s" onclick="grpPulse(\'' + escHtml(c.id) + '\',\'' + k + '\')">↻ ' + escHtml(T('Làm lại buổi này')) + '</button>'
+    + '<button type="button" class="gp-btn gp-p" onclick="grpGo(\'session\',\'' + escHtml(c.id) + '\',\'' + k + '\')">' + escHtml(T('Mở chi tiết')) + '</button></div></div>'
+    + (tl ? tl.html + '<div class="gp-total' + (tl.off ? ' off' : '') + '">' + escHtml(tl.total) + '</div>' : '<p class="gp-note">' + escHtml(T('Chưa ghi phút block')) + '</p>')
+    + '<ul class="gp-plist">' + (d.phases || []).map((p) => {
+      const f = grpFmt(p);
+      return '<li><i style="background:' + GRP_COLORS[f] + '"></i><span class="gp-pl-f">' + escHtml(T(GRP_FMT_LABEL[f])) + '</span><b data-i18n-skip>' + escHtml(p.name || '') + '</b>'
+        + '<span class="gp-pl-x" data-i18n-skip>' + escHtml((p.exercises || []).map((x) => x.name).join(' · ')) + '</span><span class="gp-pl-m">' + (Number(p.durationMin) > 0 ? p.durationMin + '′' : '') + '</span></li>';
+    }).join('') + '</ul></section>';
+  return h;
+}
+
+function grpExRow(x, i, fmt) {
+  const lab = x.group || (fmt === 'straight' ? String.fromCharCode(65 + i) : String(i + 1));
+  const lv = _grp.lvl === 'easy' ? (x.regression || grpCueLevel(x.cue, 'Dễ')) : _grp.lvl === 'hard' ? grpCueLevel(x.cue, 'Khó') : '';
+  const rest = exRest(x);
+  return '<div class="gp-ex"><span class="gp-lab">' + escHtml(lab) + '</span><div class="gp-ex-m"><div class="gp-en" data-i18n-skip>' + escHtml(x.name)
+    + (x.tempo ? ' <span class="gp-sub">' + escHtml(x.tempo) + '</span>' : '') + '</div>'
+    + (lv ? '<div class="gp-lv" data-i18n-skip>' + escHtml((_grp.lvl === 'easy' ? T('Dễ') : T('Khó')) + ': ' + lv) + '</div>'
+      : x.regression ? '<div class="gp-es" data-i18n-skip>' + escHtml(T('Dễ hơn') + ': ' + x.regression) + '</div>' : '')
+    + '<div class="gp-pills">' + (x.intensity ? '<span class="gp-rpe" data-i18n-skip>' + escHtml(x.intensity) + '</span>' : '')
+    + (rest ? '<span class="gp-rest">⏱ ' + escHtml(T('Nghỉ') + ' ' + rest) + '</span>' : '') + '</div></div>'
+    + '<span class="gp-sr" data-i18n-skip>' + escHtml(x.setsReps || '') + '</span></div>';
+}
+function grpBlockHTML(p, timed) {
+  const f = grpFmt(p), ex = p.exercises || [];
+  let body;
+  if (f === 'mobility' || f === 'recovery') {
+    body = '<div class="gp-chips">' + ex.map((x) => '<span class="gp-mv" data-i18n-skip>' + escHtml(x.name) + (x.setsReps && !/^1\s*vòng$/i.test(x.setsReps) ? ' · ' + escHtml(x.setsReps) : '') + '</span>'
+      + (x.intensity ? '<span class="gp-rpe" data-i18n-skip>' + escHtml(x.intensity) + '</span>' : '')).join('') + '</div>';
+  } else if (f === 'emom') {
+    const R = Number(p.rounds) > 0 ? Number(p.rounds) : 0, M = ex.length;
+    body = '<div class="gp-emom" style="--r:' + (R || 1) + '">' + (R ? '<span></span>' + Array.from({ length: R }, (_, r) => '<span class="gp-rh">' + escHtml(T('Vòng ' + (r + 1))) + '</span>').join('') : '')
+      + ex.map((x, m) => '<div class="gp-em-x"><span class="gp-lab w">' + escHtml(T('Phút ' + (Number(x.minute) > 0 ? x.minute : m + 1))) + '</span><span data-i18n-skip><b>' + escHtml(x.name) + '</b> ' + escHtml(x.setsReps || '') + '</span>'
+        + (x.intensity ? '<span class="gp-rpe" data-i18n-skip>' + escHtml(x.intensity) + '</span>' : '') + '</div>'
+        + (R ? Array.from({ length: R }, (_, r) => '<span class="gp-cell">' + (r * M + m + 1) + '</span>').join('') : '')).join('') + '</div>';
+  } else {
+    body = ex.map((x, i) => grpExRow(x, i, f)).join('');
+  }
+  return '<section class="gp-card gp-blk"><div class="gp-bh"><span class="gp-tp" style="background:' + GRP_COLORS[f] + '">' + escHtml(T(GRP_FMT_LABEL[f])) + '</span>'
+    + '<b class="gp-bn" data-i18n-skip>' + escHtml(p.name || '') + '</b>' + (Number(p.rounds) > 0 ? '<span class="gp-tag sm">' + escHtml(T(p.rounds + ' vòng')) + '</span>' : '')
+    + '<span class="gp-bm">' + (Number(p.durationMin) > 0 ? p.durationMin + '′' : timed ? '<span class="gp-unk" title="' + escHtml(T('Chưa ghi phút')) + '">?</span>' : '') + '</span></div>'
+    + (p.notes ? '<p class="gp-bnote" data-i18n-skip>' + escHtml(p.notes) + '</p>' : '') + body + '</section>';
+}
+function grpSessionHTML(c, k) {
+  const d = c.program[k], ph = d.phases || [], timed = grpTimed(d), tl = timed ? grpTimeline(c, d, true) : null;
+  const chips = [grpTarget(c, d) ? T(grpTarget(c, d) + ' phút') : '', d.level || c.level, T(ph.length + ' block')].filter(Boolean);
+  const notes = Array.isArray(d.coachNotes) ? d.coachNotes.filter(Boolean) : [];
+  const eq = grpEquip(c);
+  const side = (notes.length ? '<section class="gp-card gp-notes"><h3>💬 ' + escHtml(T('Ghi chú coach')) + '</h3><ul data-i18n-skip>' + notes.map((n) => '<li>' + escHtml(n) + '</li>').join('') + '</ul></section>' : '')
+    + (eq.length ? '<section class="gp-card gp-setup"><h3>' + escHtml(T('Setup')) + (c.groupSize ? ' · ' + escHtml(T(c.groupSize + ' người')) : '') + '</h3><ul data-i18n-skip>'
+      + eq.map((x) => '<li>' + escHtml(x) + '</li>').join('') + '</ul><p class="gp-sub">' + escHtml(T('Dụng cụ khai báo của lớp.')) + '</p></section>' : '');
+  return '<a class="gp-back" href="#" onclick="event.preventDefault();grpGo(\'class\')">‹ <span data-i18n-skip>' + escHtml(c.name || c.id) + '</span></a>'
+    + '<header class="gp-sh"><div><div class="gp-eyebrow">' + escHtml(T('Buổi ' + grpLetter(k)) + (d.pushedAt ? ' · ' + T('đẩy ' + grpAgo(_toMs(d.pushedAt))) : '')) + '</div>'
+    + '<h1 data-i18n-skip>' + escHtml(d.label || k) + '</h1>' + (d.focus ? '<p data-i18n-skip>' + escHtml(d.focus) + '</p>' : '')
+    + '<div class="gp-chips">' + chips.map((x) => '<span class="gp-tag">' + escHtml(x) + '</span>').join('') + '</div></div>'
+    + '<div class="gp-acts"><button type="button" class="gp-btn gp-s" onclick="grpPulse(\'' + escHtml(c.id) + '\',\'' + k + '\')">↻ ' + escHtml(T('Làm lại')) + '</button>'
+    + '<button type="button" class="gp-btn gp-p" onclick="grpTeach(\'' + escHtml(c.id) + '\',\'' + k + '\')">▶ ' + escHtml(T('Dạy lớp')) + '</button></div></header>'
+    + '<section class="gp-card gp-tl"><div class="gp-tl-h"><h3>' + escHtml(T('Thời gian theo block')) + '</h3>'
+    + (tl ? '<span class="gp-total' + (tl.off ? ' off' : '') + '">' + (tl.off ? '⚠ ' : '✓ ') + escHtml(tl.total) + '</span>' : '')
+    + '<div class="gp-seg-ctl" role="group" aria-label="' + escHtml(T('Mức')) + '">' + [['easy', 'Dễ'], ['std', 'Chuẩn'], ['hard', 'Khó']].map(([v, t]) =>
+      '<button type="button" class="' + (_grp.lvl === v ? 'on' : '') + '" aria-pressed="' + (_grp.lvl === v) + '" onclick="_grp.lvl=\'' + v + '\';renderGroups()">' + escHtml(T(t)) + '</button>').join('') + '</div></div>'
+    + (tl ? tl.html : '<p class="gp-note">' + escHtml(T('Buổi soạn trước khi có phút cho từng block, nên không có thanh thời gian. Chế độ dạy lớp sẽ dùng đồng hồ bấm giờ tự do.')) + '</p>') + '</section>'
+    + '<div class="gp-cols"><div class="gp-main">' + ph.map((p) => grpBlockHTML(p, timed)).join('') + '</div><aside class="gp-side">' + side + '</aside></div>';
+}
+
+// ── hành động ───────────────────────────────────────────────────────────
+function grpOpenFromCard(e) {
+  const b = e.target.closest('[data-gcid]');
+  if (b) { _grp.key = null; grpGo('class', b.getAttribute('data-gcid')); }
+}
+/** Mở Pulse ở luồng của lớp, form "Soạn 1 buổi" chọn sẵn khoá (buổi mới / làm lại). */
+async function grpPulse(cid, key, note) {
+  if (!activeClient || activeClient.id !== cid) await switchClient(cid);
+  _aiGroupSlot = key || null;
+  _aiGroupNote = note || '';
+  aiOpen('client');
+  aiFormOpen('group');
+}
+function grpNewClass() { _aiGroupSlot = null; _aiGroupNote = ''; aiOpen('general'); aiFormOpen('group'); }
+async function grpEditClass(cid) {
+  if (!activeClient || activeClient.id !== cid) await switchClient(cid);
+  openEditClientModal();
+}
+/** Gọi sau khi coach bấm Đồng ý trên thẻ duyệt — buổi vừa đẩy hiện ngay trong tab. */
+function grpAfterPush(cid, program, changed) {
+  const c = clientsData.find((x) => x.id === cid);
+  if (!c || !c.isGroup) return;
+  c.program = program;
+  const k = (changed || []).find((x) => program[x]) || (grpLastPush(c) || {}).key;
+  if (!k) return;
+  _grp.justPushed = { cid, key: k };
+  _grp.cid = cid; _grp.key = k; _grp.view = 'class';
+  const p = document.getElementById('groups-page');
+  if (p && p.classList.contains('active')) renderGroups();
+  setTimeout(() => { if (_grp.justPushed && _grp.justPushed.key === k) { _grp.justPushed = null; const q = document.getElementById('groups-page'); if (q && q.classList.contains('active')) renderGroups(); } }, 12000);
+}
+
+// ── Dạy lớp: toàn màn hình, đồng hồ theo block ───────────────────────────
+let _gt = null;
+function grpTeach(cid, k) {
+  const c = clientsData.find((x) => x.id === cid);
+  if (!c || !c.program[k]) return;
+  const d = c.program[k];
+  _gt = { c, k, d, i: 0, left: 0, elapsed: 0, run: true, timed: grpTimed(d), tick: null, lock: null };
+  grpTeachSet(0);
+  let ov = document.getElementById('gp-teach');
+  if (!ov) { ov = document.createElement('div'); ov.id = 'gp-teach'; ov.setAttribute('role', 'dialog'); ov.setAttribute('aria-modal', 'true'); document.body.appendChild(ov); }
+  ov.hidden = false;
+  document.body.classList.add('gp-teaching');
+  try { if (navigator.wakeLock) navigator.wakeLock.request('screen').then((l) => { if (_gt) _gt.lock = l; }).catch(() => {}); } catch (_e) {}
+  _gt.tick = setInterval(grpTeachTick, 1000);
+  grpTeachPaint();
+}
+function grpTeachSet(i) {
+  const ph = _gt.d.phases || [];
+  _gt.i = Math.max(0, Math.min(ph.length - 1, i));
+  const m = Number(ph[_gt.i] && ph[_gt.i].durationMin) || 0;
+  _gt.left = m * 60; _gt.total = m * 60; _gt.elapsed = 0;
+}
+function grpTeachTick() {
+  if (!_gt || !_gt.run) return;
+  _gt.elapsed++;
+  if (_gt.total > 0) {
+    _gt.left = Math.max(0, _gt.left - 1);
+    if (_gt.left === 0 && _gt.elapsed === _gt.total) { try { navigator.vibrate && navigator.vibrate([300, 150, 300]); } catch (_e) {} }
+  }
+  grpTeachPaint();
+}
+function grpTeachNav(dir) { grpTeachSet(_gt.i + dir); grpTeachPaint(); }
+function grpTeachToggle() { _gt.run = !_gt.run; grpTeachPaint(); }
+function grpTeachClose() {
+  if (!_gt) return;
+  clearInterval(_gt.tick);
+  try { _gt.lock && _gt.lock.release(); } catch (_e) {}
+  _gt = null;
+  const ov = document.getElementById('gp-teach'); if (ov) { ov.hidden = true; ov.innerHTML = ''; }
+  document.body.classList.remove('gp-teaching');
+}
+function _gtClock(s) { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+function grpTeachPaint() {
+  const ov = document.getElementById('gp-teach');
+  if (!ov || !_gt) return;
+  const ph = _gt.d.phases || [], p = ph[_gt.i] || {}, f = grpFmt(p), ex = p.exercises || [], nx = ph[_gt.i + 1];
+  const timed = _gt.total > 0;
+  const shown = timed ? _gt.left : _gt.elapsed;
+  const prog = timed ? (1 - _gt.left / _gt.total) : 0;
+  let body;
+  if (f === 'emom' && timed && ex.length) {
+    const M = ex.length, el = _gt.total - _gt.left, R = Number(p.rounds) > 0 ? Number(p.rounds) : Math.ceil(_gt.total / 60 / M);
+    const minIdx = Math.min(Math.floor(el / 60), R * M - 1), r = Math.floor(minIdx / M), m = minIdx % M, x = ex[m];
+    body = '<div class="gt-now" style="border-color:' + GRP_COLORS.emom + '"><div class="gt-k">' + escHtml(T('Vòng ' + (r + 1) + ' / ' + R + ' · Phút ' + (m + 1))) + '</div>'
+      + '<div class="gt-x"><b data-i18n-skip>' + escHtml(x.name) + '</b><span data-i18n-skip>× ' + escHtml(x.setsReps || '') + '</span></div>'
+      + '<div class="gt-sub">' + escHtml(T('Còn ' + (60 - (el % 60)) + 's trong phút này')) + '</div></div>'
+      + '<div class="gp-emom gt-grid" style="--r:' + R + '">' + ex.map((y, mi) => '<span class="gt-gn" data-i18n-skip>' + escHtml(y.name) + '</span>'
+        + Array.from({ length: R }, (_, ri) => { const n = ri * M + mi; return '<span class="gp-cell' + (n < minIdx ? ' done' : n === minIdx ? ' now' : '') + '">' + (n + 1) + '</span>'; }).join('')).join('') + '</div>';
+  } else {
+    body = '<div class="gt-list">' + ex.map((x, i) => grpExRow(x, i, f)).join('') + '</div>';
+  }
+  const notes = Array.isArray(_gt.d.coachNotes) ? _gt.d.coachNotes : [];
+  const note = p.notes || (f === 'emom' ? notes.find((n) => /emom|cardio|vòng/i.test(n)) : _gt.i > 0 && grpFmt(ph[_gt.i - 1]) === 'recovery' ? notes.find((n) => /nhịp|interval|block/i.test(n)) : '') || '';
+  ov.innerHTML = '<div class="gt-top"><button type="button" class="gt-x-btn" onclick="grpTeachClose()" aria-label="' + escHtml(T('Thoát dạy lớp')) + '">✕</button>'
+    + '<span class="gt-title" data-i18n-skip>' + escHtml(T('Buổi ' + grpLetter(_gt.k)) + ' · ' + (_gt.d.label || '')) + '</span><span class="gt-n">' + (_gt.i + 1) + '/' + ph.length + '</span></div>'
+    + '<div class="gt-steps">' + ph.map((q, i) => '<i class="' + (i < _gt.i ? 'done' : i === _gt.i ? 'now' : '') + '" style="flex:' + (Number(q.durationMin) || 1) + ' 1 0;background:' + GRP_COLORS[grpFmt(q)] + '"></i>').join('') + '</div>'
+    + '<div class="gt-body"><span class="gp-tp" style="background:' + GRP_COLORS[f] + '">' + escHtml(T(GRP_FMT_LABEL[f]) + (Number(p.rounds) > 0 ? ' · ' + T(p.rounds + ' vòng') : '')) + '</span>'
+    + '<h2 data-i18n-skip>' + escHtml(p.name || '') + '</h2>'
+    + '<div class="gt-clock' + (timed && _gt.left === 0 ? ' end' : '') + '" role="timer" aria-live="off"><b>' + _gtClock(shown) + '</b>' + (timed ? '<span>/ ' + _gtClock(_gt.total) + '</span>' : '<span>' + escHtml(T('bấm giờ tự do')) + '</span>') + '</div>'
+    + (timed ? '<div class="gt-prog"><i style="width:' + (prog * 100).toFixed(1) + '%;background:' + GRP_COLORS[f] + '"></i></div>' : '')
+    + body + (note ? '<div class="gt-note" data-i18n-skip>💬 ' + escHtml(note) + '</div>' : '') + '</div>'
+    + '<div class="gt-foot">' + (nx ? '<div class="gt-next">' + escHtml(T('Tiếp theo')) + ': <b data-i18n-skip>' + escHtml(grpShort(nx)) + (Number(nx.durationMin) > 0 ? ' · ' + nx.durationMin + '′' : '') + '</b></div>' : '<div class="gt-next">' + escHtml(T('Block cuối')) + '</div>')
+    + '<div class="gt-btns"><button type="button" class="gt-b" onclick="grpTeachNav(-1)"' + (_gt.i === 0 ? ' disabled' : '') + '>‹ ' + escHtml(T('Trước')) + '</button>'
+    + '<button type="button" class="gt-play" onclick="grpTeachToggle()" aria-label="' + escHtml(_gt.run ? T('Tạm dừng') : T('Chạy tiếp')) + '">' + (_gt.run ? '❚❚' : '▶') + '</button>'
+    + (nx ? '<button type="button" class="gt-b gt-b-p" onclick="grpTeachNav(1)">' + escHtml(T('Block kế')) + ' ›</button>' : '<button type="button" class="gt-b gt-b-p" onclick="grpTeachClose()">' + escHtml(T('Xong')) + '</button>') + '</div></div>';
+}
+
 // ── TIN NHẮN coach ↔ khách (2026-11-07) ─────────────────────────────
 //
 //   clients/{id}/messages/{auto}  { from: 'coach'|'client', uid, text, t }
@@ -8877,6 +9238,7 @@ function showPage(page) {
   // đây, vì showPage còn gọi được từ console, từ nút cũ hay từ link sâu.
   if (page === 'youth' && userRole !== 'coach') return;
   if (page === 'platform' && !userIsAdmin) return;
+  if (page === 'groups' && userRole !== 'coach') return;
   // Thu tiền chỉ bật cho khách của admin nền tảng — xem billingOn().
   if (page === 'billing' && !billingOn()) return;
   document.querySelectorAll('.nav-tab').forEach(t => {
@@ -8897,6 +9259,8 @@ function showPage(page) {
   document.getElementById('cdash-page').classList.toggle('active', page === 'cdash');
   document.getElementById('platform-page').classList.toggle('active', page === 'platform');
   document.getElementById('chat-page').classList.toggle('active', page === 'chat');
+  document.getElementById('groups-page').classList.toggle('active', page === 'groups');
+  if (page === 'groups') renderGroups();
   if (page === 'chat') chatPageOpen(); else chatPageClose();
   if (page === 'platform') renderPlatform();
   if (page === 'dash') renderDashboard();
@@ -10595,6 +10959,7 @@ async function aiApprove(i) {
   try {
     const fn = firebase.app().functions('asia-southeast1')
       .httpsCallable('coachApply', { timeout: 60000 });
+    const _changedKeys = Object.keys((m.action && m.action.program) || {});
     const res = await fn({ action: m.action });
     // Đề xuất vài buổi được ghép lên giáo án hiện tại ở server — lấy bản ĐÃ GHÉP để vẽ.
     if (m.action.kind === 'apply_program' && res && res.data && res.data.program) m.action.program = res.data.program;
@@ -10613,6 +10978,14 @@ async function aiApprove(i) {
       renderExercises();
     }
     if (m.action.kind === 'create_client') await loadAllClients();
+    // Lớp nhóm: buổi vừa đẩy hiện ngay ở tab Lớp nhóm (nhãn "Mới" + thông báo "Đã lưu Buổi X vào lớp").
+    if (typeof grpAfterPush === 'function') {
+      if (m.action.kind === 'apply_program') grpAfterPush(m.action.clientId, m.action.program, _changedKeys);
+      if (m.action.kind === 'create_client' && m.action.isGroup) {
+        const nc = clientsData.find((c) => c.id === m.action.clientId);
+        if (nc) grpAfterPush(nc.id, nc.program || {}, _changedKeys);
+      }
+    }
   } catch (e) {
     console.warn('[aiApprove]', e);
     m.state = 'lỗi: ' + String(e.message || e).slice(0, 60);
@@ -10682,6 +11055,8 @@ const _AI_GF_RUN = [['outdoor', 'Chạy ngoài trời / sân'], ['treadmill', 'M
   ['none', 'Không có chỗ chạy — thay bằng Row / Bike / SkiErg']];
 /** Loại buổi của lớp Hybrid (GROUP_METHOD) — coach chọn mỗi lệnh. */
 const _AI_GF_TYPES = ['Compromised', 'Strength Endurance', 'Engine', 'Foundation', 'Race Sim', 'Partner'];
+/** Tab Lớp nhóm mở form với khoá chọn sẵn (buổi mới / làm lại) và lời nhắn sẵn (VD "cân lại tổng phút"). */
+let _aiGroupSlot = null, _aiGroupNote = '';
 /** Lớp đang mở ở chế độ theo khách → soạn 1 buổi cho lớp đó; không thì tạo lớp mới (1 buổi). */
 function _aiGroupClass() {
   return (typeof _aiMode !== 'undefined' && _aiMode === 'client' && activeClient && activeClient.isGroup) ? activeClient : null;
@@ -10704,8 +11079,9 @@ function _aiGroupForm(cls) {
   if (cls) {
     const prog = cls.program || {}, next = _aiNextKey(prog);
     const keys = Object.keys(prog).sort();
-    const opts = (next ? ['<option value="' + next + '">Buổi mới (' + next.replace('Session', 'Buổi ') + ')</option>'] : [])
-      .concat(keys.map((k) => '<option value="' + k + '">Làm lại ' + escHtml(k.replace('Session', 'Buổi ')) + (prog[k] && prog[k].label ? ' · ' + escHtml(prog[k].label) : '') + '</option>'));
+    const pick = typeof _aiGroupSlot === 'string' ? _aiGroupSlot : null;
+    const opts = (next ? ['<option value="' + next + '"' + (pick === next ? ' selected' : '') + '>Buổi mới (' + next.replace('Session', 'Buổi ') + ')</option>'] : [])
+      .concat(keys.map((k) => '<option value="' + k + '"' + (pick === k ? ' selected' : '') + '>Làm lại ' + escHtml(k.replace('Session', 'Buổi ')) + (prog[k] && prog[k].label ? ' · ' + escHtml(prog[k].label) : '') + '</option>'));
     head = '<input type="hidden" name="cid" value="' + escHtml(cls.id) + '">'
       + '<div class="ai-nf-h">Soạn 1 buổi cho ' + escHtml(cls.name || cls.id) + '</div>'
       + '<p class="ai-nf-sub">Mỗi lần soạn ĐÚNG 1 buổi — các buổi khác của lớp giữ nguyên.' + (next ? '' : ' Lớp đã đủ 7 buổi: chọn buổi để làm lại.') + '</p>';
@@ -10728,7 +11104,7 @@ function _aiGroupForm(cls) {
         + f('Chỗ chạy (lớp Hybrid)', '<select name="run">' + _AI_GF_RUN.map(([v, t]) => '<option value="' + v + '">' + escHtml(t) + '</option>').join('') + '</select>', true) : '')
       + f('Dụng cụ có sẵn *', '<textarea name="equipment" rows="3" required placeholder="VD: 3 SkiErg, 2 Row, 1 sled, 10 cặp tạ đơn 5–20 kg, 8 wall ball 6/9 kg, 6 KB 12–24 kg">' + (cls ? escHtml(cls.equipment || '') : '') + '</textarea>', true)
       + (cls ? '' : f('Mục tiêu lớp', '<textarea name="goal" rows="2" placeholder="VD: chuẩn bị giải HYROX tháng 12, thể lực chung"></textarea>', true))
-      + f(cls ? 'Điều chỉnh cho buổi này' : 'Ghi chú / hạn chế', '<textarea name="notes" rows="3" placeholder="' + (cls ? 'VD: buổi trước EMOM quá nặng, giảm còn 3 vòng; tuần này ưu tiên kéo; 2 người đau gối' : 'VD: phòng không có chỗ chạy — dùng máy chạy; nhiều học viên đau gối') + '"></textarea>', true)
+      + f(cls ? 'Điều chỉnh cho buổi này' : 'Ghi chú / hạn chế', '<textarea name="notes" rows="3" placeholder="' + (cls ? 'VD: buổi trước EMOM quá nặng, giảm còn 3 vòng; tuần này ưu tiên kéo; 2 người đau gối' : 'VD: phòng không có chỗ chạy — dùng máy chạy; nhiều học viên đau gối') + '">' + (cls && typeof _aiGroupNote === 'string' ? escHtml(_aiGroupNote) : '') + '</textarea>', true)
     + '</div>'
     + '<div class="ai-nf-err" id="ai-nf-err" role="alert"></div>'
     + '<div class="ai-nf-btns">'
@@ -15425,6 +15801,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <div class="nav-tab" id="cdash-nav-tab" data-page="cdash" style="display:none" onclick="showPage('cdash')">Profile</div>
     <div class="nav-tab" id="dash-nav-tab" data-page="dash" style="display:none" onclick="showPage('dash')">Dashboard</div>
     <div class="nav-tab active" data-page="workout" onclick="showPage('workout')">Workout</div>
+    <div class="nav-tab" id="groups-nav-tab" data-page="groups" style="display:none" onclick="showPage('groups')">Lớp nhóm</div>
     <div class="nav-tab" data-page="progress" onclick="showPage('progress')">Progress</div>
     <div class="nav-tab" id="recovery-nav-tab" data-page="recovery" style="display:none" onclick="showPage('recovery')">Recovery</div>
     <div class="nav-tab" id="health-nav-tab" data-page="health" style="display:none" onclick="showPage('health')">Health</div>
@@ -15488,6 +15865,9 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     </div>
     <div id="workout-log-list"><div class="loading">Loading sessions...</div></div>
   </div>
+
+  <!-- LỚP NHÓM — dashboard riêng của lớp (coach) -->
+  <div id="groups-page"><div id="groups-body"></div></div>
 
   <!-- CHAT PAGE — tin nhắn coach ↔ khách -->
   <div id="chat-page"><div id="chat-body"></div></div>
@@ -18387,6 +18767,199 @@ button.cd-av:focus-visible{outline:2px solid #8FDBFF;outline-offset:2px;}
 #ai-fab:focus-visible{ outline: 2px solid var(--ai-acc); outline-offset: 3px; }
 body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-events: none; }
 
+/* ── Tab Lớp nhóm (renderGroups) — thiết kế Claude Design "Pulse · Tab Lớp nhóm" ── */
+#groups-page{display:none;padding:16px 16px 140px;max-width:1180px;margin:0 auto;color:#fff;font-family:'Figtree',system-ui,sans-serif;}
+#groups-page.active{display:block;}
+#groups-page *{box-sizing:border-box;}
+.gp-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin:4px 0 18px;}
+.gp-head h1,.gp-ch h1,.gp-sh h1{margin:0;font-size:30px;font-weight:800;letter-spacing:-.5px;line-height:1.2;}
+.gp-head p{margin:6px 0 0;font-size:14px;color:rgba(255,255,255,.75);}
+.gp-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border-radius:12px;font:700 15px/1 'Figtree',sans-serif;border:0;cursor:pointer;white-space:nowrap;}
+.gp-p{background:#1C90FF;color:#161111;}
+.gp-s{background:transparent;color:#fff;border:1px solid rgba(255,255,255,.22);}
+.gp-btn:focus-visible,.gp-chip:focus-visible,.gp-cls:focus-visible,.gp-slot:focus-visible,.gp-seg-ctl button:focus-visible{outline:2px solid #8FDBFF;outline-offset:2px;}
+.gp-card{background:#211E1D;border:1px solid rgba(255,255,255,.12);border-radius:20px;}
+.gp-filters{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;margin-bottom:16px;scrollbar-width:none;}
+.gp-chip{flex:none;min-height:36px;padding:0 14px;border-radius:999px;border:1px solid rgba(255,255,255,.12);background:transparent;color:rgba(255,255,255,.75);font:600 14px 'Figtree',sans-serif;cursor:pointer;}
+.gp-chip.on{background:#8FDBFF;border-color:#8FDBFF;color:#161111;font-weight:800;}
+.gp-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;}
+.gp-cls{display:flex;flex-direction:column;gap:8px;padding:18px;text-align:left;color:#fff;font:inherit;cursor:pointer;}
+.gp-cls:hover{border-color:rgba(143,219,255,.45);}
+.gp-cls-top{display:flex;justify-content:space-between;align-items:center;gap:8px;}
+.gp-kind{display:inline-flex;align-items:center;height:26px;padding:0 10px;border-radius:999px;background:#2C2826;font-size:12px;font-weight:700;color:rgba(255,255,255,.75);}
+.gp-new{display:inline-flex;align-items:center;height:22px;padding:0 9px;border-radius:999px;background:rgba(143,219,255,.18);color:#8FDBFF;font-size:12px;font-style:normal;font-weight:800;}
+.gp-cls-n{font-size:20px;font-weight:800;}
+.gp-sub{font-size:13.5px;color:rgba(255,255,255,.62);font-weight:500;}
+.gp-cls-row{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+.gp-cls-row>b{font-size:15px;}
+.gp-last{padding-top:8px;border-top:1px solid rgba(255,255,255,.08);}
+.gp-mini{display:flex;gap:5px;}
+.gp-mini span{width:26px;height:26px;border-radius:7px;display:grid;place-items:center;font-size:12px;font-weight:800;border:1px dashed rgba(255,255,255,.22);color:rgba(255,255,255,.45);}
+.gp-mini span.on{border:0;background:#C9B8FF;color:#161111;}
+.gp-mini-lg span{width:36px;height:36px;font-size:14px;}
+.gp-empty{display:flex;flex-direction:column;align-items:center;text-align:center;gap:12px;padding:36px 20px;}
+.gp-empty h2{margin:0;font-size:20px;font-weight:800;}
+.gp-empty p{margin:0;max-width:420px;font-size:15px;line-height:1.5;color:rgba(255,255,255,.75);}
+.gp-steps{list-style:none;margin:4px 0;padding:0;display:flex;flex-direction:column;gap:8px;text-align:left;font-size:14px;color:rgba(255,255,255,.85);}
+.gp-steps b{display:inline-grid;place-items:center;width:24px;height:24px;margin-right:10px;border-radius:50%;background:#2C2826;font-size:12px;}
+.gp-back{display:inline-flex;align-items:center;gap:4px;min-height:36px;margin-bottom:8px;font-size:14px;font-weight:700;color:rgba(255,255,255,.75);text-decoration:none;}
+.gp-ch{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:20px;}
+.gp-ch-t{display:flex;flex-direction:column;gap:12px;min-width:0;}
+.gp-chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
+.gp-tag{display:inline-flex;align-items:center;min-height:30px;padding:0 12px;border-radius:999px;border:1px solid rgba(255,255,255,.12);font-size:14px;font-weight:600;color:rgba(255,255,255,.75);}
+.gp-tag.sm{min-height:26px;font-size:13px;}
+.gp-eq{display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+.gp-k{font-size:12px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:rgba(255,255,255,.55);margin-right:4px;}
+.gp-sec{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:24px 0 12px;}
+.gp-sec h2{margin:0;font-size:22px;font-weight:800;}
+.gp-sec h2 span{color:rgba(255,255,255,.55);font-weight:700;}
+.gp-note{margin:0 0 12px;font-size:14px;line-height:1.5;color:rgba(255,255,255,.7);}
+.gp-slots{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;margin-bottom:16px;}
+.gp-slot{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-height:128px;padding:12px;border-radius:16px;background:#211E1D;border:1px solid rgba(255,255,255,.12);color:#fff;font:inherit;text-align:left;cursor:pointer;}
+.gp-slot>b{display:flex;align-items:center;gap:6px;font-size:22px;font-weight:800;}
+.gp-slot.on{border:2px solid #8FDBFF;background:rgba(143,219,255,.08);}
+.gp-slot.empty{border-style:dashed;justify-content:center;align-items:center;color:rgba(255,255,255,.6);}
+.gp-slot.empty span{font-size:13px;font-weight:700;}
+.gp-slot-n{font-size:14px;font-weight:700;line-height:1.3;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+.gp-bar{display:flex;gap:3px;height:44px;margin-top:6px;}
+.gp-bar.big{height:64px;}
+.gp-bar.mini{height:6px;gap:2px;width:100%;margin-top:auto;}
+.gp-bar.mini i{border-radius:2px;}
+.gp-seg{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-width:0;border-radius:8px;color:#161111;overflow:hidden;white-space:nowrap;}
+.gp-seg b{font-size:17px;font-weight:800;line-height:1;}
+.gp-seg span{font-size:12px;font-weight:700;max-width:100%;overflow:hidden;text-overflow:ellipsis;padding:0 4px;}
+.gp-seg.unk{border:2px dashed #EE5A4F;color:#FFB3B3;}
+.gp-ticks{position:relative;height:18px;margin-top:6px;font-size:11px;color:rgba(255,255,255,.5);}
+.gp-ticks span{position:absolute;transform:translateX(-50%);}
+.gp-ticks span:first-child{transform:none;}
+.gp-legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:10px;font-size:13px;color:rgba(255,255,255,.75);}
+.gp-legend span{display:inline-flex;align-items:center;gap:6px;}
+.gp-legend i{width:12px;height:12px;border-radius:3px;}
+.gp-warn{margin-top:12px;padding:12px 14px;border-radius:14px;background:rgba(238,90,79,.12);border:1px solid rgba(238,90,79,.5);color:#FFB3B3;font-size:14px;}
+.gp-warn ul{margin:0 0 10px;padding-left:18px;}
+.gp-total{display:inline-flex;align-items:center;height:30px;padding:0 12px;border-radius:999px;background:rgba(159,217,180,.16);color:#9FD9B4;font-size:14px;font-weight:800;white-space:nowrap;}
+.gp-total.off{background:rgba(238,90,79,.16);color:#FFB3B3;}
+.gp-prev{padding:20px;display:flex;flex-direction:column;gap:12px;}
+.gp-prev-h,.gp-sh{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;}
+.gp-prev-h h2{margin:2px 0 0;font-size:24px;font-weight:800;}
+.gp-prev-h p,.gp-sh p{margin:6px 0 0;font-size:15px;line-height:1.5;color:rgba(255,255,255,.75);max-width:620px;}
+.gp-eyebrow{font-size:12.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:#8FDBFF;}
+.gp-acts{display:flex;gap:8px;flex-wrap:wrap;flex-shrink:0;}
+.gp-prev .gp-total{align-self:flex-end;}
+.gp-plist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;}
+.gp-plist li{display:grid;grid-template-columns:12px 92px 150px minmax(0,1fr) 44px;align-items:center;gap:12px;min-height:44px;border-top:1px solid rgba(255,255,255,.08);font-size:14px;}
+.gp-plist i{width:10px;height:10px;border-radius:3px;}
+.gp-pl-f{color:rgba(255,255,255,.6);font-size:13px;}
+.gp-pl-x{color:rgba(255,255,255,.75);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.gp-pl-m{text-align:right;font-weight:800;}
+.gp-sh{margin-bottom:16px;}
+.gp-sh .gp-chips{margin-top:12px;}
+.gp-tl{padding:18px 20px;margin-bottom:16px;}
+.gp-tl-h{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;}
+.gp-tl-h h3{margin:0;font-size:17px;font-weight:800;}
+.gp-seg-ctl{display:flex;padding:3px;border-radius:12px;background:#2C2826;margin-left:auto;}
+.gp-seg-ctl button{min-height:38px;min-width:64px;padding:0 12px;border-radius:9px;border:0;background:transparent;color:rgba(255,255,255,.75);font:700 14px 'Figtree',sans-serif;cursor:pointer;}
+.gp-seg-ctl .on{background:#8FDBFF;color:#161111;}
+.gp-cols{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px;align-items:start;}
+.gp-main{display:flex;flex-direction:column;gap:12px;min-width:0;}
+.gp-side{display:flex;flex-direction:column;gap:12px;position:sticky;top:16px;}
+.gp-blk{padding:16px 18px;display:flex;flex-direction:column;gap:10px;}
+.gp-bh{display:flex;align-items:center;gap:10px;}
+.gp-tp{display:inline-flex;align-items:center;height:26px;padding:0 10px;border-radius:999px;font-size:13px;font-weight:800;color:#161111;white-space:nowrap;}
+.gp-bn{flex:1;min-width:0;font-size:19px;font-weight:800;}
+.gp-bm{font-size:28px;font-weight:800;line-height:1;}
+.gp-unk{color:#FFB3B3;}
+.gp-bnote{margin:0;font-size:14px;color:rgba(255,255,255,.72);line-height:1.45;}
+.gp-mv{display:inline-flex;align-items:center;min-height:32px;padding:0 12px;border-radius:10px;background:#2C2826;font-size:14px;font-weight:600;}
+.gp-ex{display:flex;align-items:flex-start;gap:14px;min-height:56px;padding:8px 0;border-top:1px solid rgba(255,255,255,.06);}
+.gp-ex:first-of-type{border-top:0;}
+.gp-lab{flex:none;min-width:36px;height:36px;padding:0 6px;border-radius:10px;background:#3A3533;display:grid;place-items:center;font-size:14px;font-weight:800;}
+.gp-lab.w{min-width:64px;font-size:12.5px;}
+.gp-ex-m{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;}
+.gp-en{font-size:17px;font-weight:700;}
+.gp-es{font-size:14px;color:rgba(255,255,255,.72);}
+.gp-lv{font-size:14px;font-weight:700;color:#8FDBFF;}
+.gp-pills{display:flex;flex-wrap:wrap;gap:6px;margin-top:3px;}
+.gp-pills:empty{display:none;}
+.gp-rpe{display:inline-flex;align-items:center;height:28px;padding:0 10px;border-radius:999px;border:1px solid rgba(255,255,255,.22);font-size:13px;font-weight:700;white-space:nowrap;}
+.gp-rest{display:inline-flex;align-items:center;height:28px;padding:0 12px;border-radius:999px;background:#2C2826;font-size:13px;font-weight:800;white-space:nowrap;}
+.gp-sr{flex:none;font-size:21px;font-weight:800;white-space:nowrap;text-align:right;min-width:72px;}
+.gp-emom{display:grid;grid-template-columns:minmax(0,1fr) repeat(var(--r),minmax(40px,56px));gap:6px;align-items:center;}
+.gp-rh{font-size:12px;color:rgba(255,255,255,.55);text-align:center;}
+.gp-em-x{display:flex;align-items:center;gap:10px;min-width:0;font-size:15px;flex-wrap:wrap;}
+.gp-cell{height:36px;border-radius:8px;display:grid;place-items:center;font-size:13px;font-weight:800;background:rgba(255,184,107,.16);color:#FFD4A3;}
+.gp-notes,.gp-setup{padding:16px 18px;}
+.gp-notes h3,.gp-setup h3{margin:0 0 10px;font-size:16px;font-weight:800;}
+.gp-notes ul,.gp-setup ul{margin:0;padding-left:18px;font-size:14.5px;line-height:1.5;color:rgba(255,255,255,.85);display:flex;flex-direction:column;gap:6px;}
+.gp-notes{border-color:rgba(143,219,255,.35);}
+.gp-setup p{margin:10px 0 0;}
+.gp-toast{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;padding:12px 14px 12px 16px;border-radius:14px;background:rgba(143,219,255,.14);border:1px solid rgba(143,219,255,.45);font-weight:700;}
+.gp-toast button{min-height:36px;padding:0 14px;border-radius:10px;border:0;background:#8FDBFF;color:#161111;font:800 14px 'Figtree',sans-serif;cursor:pointer;}
+@media (max-width:899px){
+  #groups-page{padding:12px 16px 150px;}
+  .gp-head h1,.gp-ch h1,.gp-sh h1{font-size:26px;}
+  .gp-grid{grid-template-columns:minmax(0,1fr);}
+  .gp-ch,.gp-prev-h,.gp-sh{flex-direction:column;}
+  .gp-ch .gp-btn{align-self:flex-start;}
+  .gp-slots{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;padding-bottom:4px;}
+  .gp-slot{flex:0 0 116px;scroll-snap-align:start;min-height:120px;}
+  .gp-sec .gp-btn{padding:0 14px;}
+  .gp-plist li{grid-template-columns:12px minmax(0,1fr) 40px;}
+  .gp-pl-f,.gp-pl-x{display:none;}
+  .gp-acts{width:100%;}
+  .gp-acts .gp-btn{flex:1;}
+  .gp-bar.big{height:56px;}
+  .gp-seg span{display:none;}
+  .gp-seg-ctl{margin-left:0;width:100%;}
+  .gp-seg-ctl button{flex:1;}
+  .gp-cols{grid-template-columns:minmax(0,1fr);}
+  .gp-side{position:static;order:-1;}
+  .gp-sr{font-size:18px;min-width:56px;}
+  .gp-emom{grid-template-columns:minmax(0,1fr) repeat(var(--r),minmax(30px,40px));gap:4px;}
+}
+/* ── Dạy lớp: toàn màn hình ── */
+body.gp-teaching{overflow:hidden;}
+body.gp-teaching #pbar,body.gp-teaching #pb-panel,body.gp-teaching #ai-fab{display:none !important;}
+#gp-teach{position:fixed;inset:0;z-index:2000;background:#161111;color:#fff;font-family:'Figtree',system-ui,sans-serif;display:flex;flex-direction:column;
+  padding:calc(12px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom));max-width:760px;margin:0 auto;}
+#gp-teach[hidden]{display:none;}
+#gp-teach *{box-sizing:border-box;}
+.gt-top{display:flex;align-items:center;gap:12px;min-height:44px;}
+.gt-x-btn{width:44px;height:44px;border:0;border-radius:12px;background:#2C2826;color:#fff;font-size:18px;cursor:pointer;}
+.gt-title{flex:1;min-width:0;font-size:14px;font-weight:700;color:rgba(255,255,255,.75);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.gt-n{font-weight:800;}
+.gt-steps{display:flex;gap:3px;height:8px;margin:10px 0 16px;}
+.gt-steps i{border-radius:3px;opacity:.35;}
+.gt-steps i.done{opacity:.7;}
+.gt-steps i.now{opacity:1;outline:2px solid #fff;outline-offset:2px;}
+.gt-body{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
+.gt-body h2{margin:0;font-size:30px;font-weight:800;}
+.gt-clock{display:flex;align-items:baseline;gap:10px;}
+.gt-clock b{font-size:84px;font-weight:800;line-height:1;letter-spacing:-2px;font-variant-numeric:tabular-nums;}
+.gt-clock span{font-size:18px;color:rgba(255,255,255,.6);font-weight:700;}
+.gt-clock.end b{color:#FFB86B;}
+.gt-prog{height:6px;border-radius:3px;background:#2C2826;overflow:hidden;}
+.gt-prog i{display:block;height:100%;}
+.gt-list{background:#211E1D;border:1px solid rgba(255,255,255,.12);border-radius:20px;padding:6px 16px;}
+.gt-now{padding:16px;border-radius:18px;border:2px solid;background:rgba(255,184,107,.08);}
+.gt-k{font-size:14px;font-weight:800;color:#FFD4A3;}
+.gt-x{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-top:6px;}
+.gt-x b{font-size:28px;font-weight:800;}
+.gt-x span{font-size:24px;font-weight:800;}
+.gt-sub{margin-top:4px;font-size:14px;color:rgba(255,255,255,.7);}
+.gt-gn{font-size:13px;color:rgba(255,255,255,.75);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.gt-grid .gp-cell{opacity:.5;}
+.gt-grid .gp-cell.done{opacity:.3;}
+.gt-grid .gp-cell.now{opacity:1;background:#FFB86B;color:#161111;}
+.gt-note{padding:12px 14px;border-radius:14px;background:rgba(143,219,255,.08);border:1px solid rgba(143,219,255,.3);font-size:14.5px;line-height:1.45;}
+.gt-foot{display:flex;flex-direction:column;gap:12px;padding-top:12px;}
+.gt-next{font-size:14px;color:rgba(255,255,255,.7);}
+.gt-next b{color:#fff;}
+.gt-btns{display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center;}
+.gt-b{min-height:56px;border-radius:16px;border:1px solid rgba(255,255,255,.22);background:transparent;color:#fff;font:800 16px 'Figtree',sans-serif;cursor:pointer;}
+.gt-b:disabled{opacity:.35;cursor:default;}
+.gt-b-p{background:#fff;color:#161111;border:0;}
+.gt-play{width:72px;height:72px;border-radius:50%;border:0;background:#1C90FF;color:#161111;font-size:22px;font-weight:800;cursor:pointer;}
 /* ── Chat coach ↔ khách (chatRender) ── */
 #chat-page{display:none;padding:12px 16px 0;--ch-bot:calc(16px + env(safe-area-inset-bottom));}
 #chat-page.active{display:block;}
@@ -20152,6 +20725,19 @@ Object.assign(I18N_VI_EN, {
   // Dashboard coach
   'Bảng điều khiển': 'Dashboard', 'Tải lại dữ liệu cũ': 'Reload older data', 'Cài Pulse lên máy': 'Install Pulse',
   // Lớp nhóm — mỗi lệnh 1 buổi, block có đồng hồ
+  'Lớp mới': 'New class', 'Chưa có lớp nhóm nào': 'No group classes yet', 'Tạo hồ sơ lớp rồi nhờ Pulse soạn từng buổi — tối đa 7 buổi (A–G).': 'Create a class profile, then have Pulse design one session at a time — up to 7 sessions (A–G).',
+  'Tạo lớp — kiểu lớp, số người, độ dài, dụng cụ': 'Create the class — type, size, length, equipment', 'Soạn 1 buổi với Pulse': 'Design 1 session with Pulse',
+  'Bấm "Đồng ý" — buổi hiện ngay trong lớp': 'Tap "Approve" — the session shows up in the class right away', 'Lọc theo kiểu lớp': 'Filter by class type', 'Tất cả': 'All',
+  'Đủ 7 buổi': '7 sessions — full', 'Chưa có buổi nào — soạn buổi đầu với Pulse': 'No sessions yet — design the first with Pulse', 'Dụng cụ': 'Equipment', 'Sửa lớp': 'Edit class',
+  'Buổi': 'Sessions', 'đã đủ': 'full', 'Soạn buổi mới': 'Design new session', 'Lớp đủ 7 buổi — chọn một buổi để làm lại': 'Class has 7 sessions — pick one to redo',
+  'Buổi mới': 'New session', 'Chưa ghi phút block': 'No block minutes', 'Lớp chưa có buổi nào': 'This class has no sessions yet',
+  'Pulse soạn từng buổi một, theo dụng cụ và trình độ của lớp. Bấm "Đồng ý" trên thẻ duyệt là buổi vào ô A.': 'Pulse designs one session at a time, for this class\'s equipment and level. Approve the card and it lands in slot A.',
+  'Soạn Buổi A với Pulse': 'Design Session A with Pulse', 'Làm lại buổi này': 'Redo this session', 'Mở chi tiết': 'Open details', 'Làm lại': 'Redo', 'Dạy lớp': 'Teach',
+  'Thời gian theo block': 'Time by block', 'Mức': 'Level', 'Dễ': 'Easy', 'Chuẩn': 'Standard', 'Khó': 'Hard', 'Dễ hơn': 'Easier', 'Nghỉ': 'Rest', 'Setup': 'Setup',
+  'Dụng cụ khai báo của lớp.': "From the class's equipment list.", 'Xem buổi': 'View session', 'vừa xong': 'just now', 'hôm qua': 'yesterday', 'Chưa ghi phút': 'No minutes yet',
+  'Buổi soạn trước khi có phút cho từng block, nên không có thanh thời gian. Chế độ dạy lớp sẽ dùng đồng hồ bấm giờ tự do.': 'This session predates per-block minutes, so there is no timeline. Teach mode uses a free-running stopwatch.',
+  'Thoát dạy lớp': 'Exit teach mode', 'bấm giờ tự do': 'free stopwatch', 'Tiếp theo': 'Up next', 'Block cuối': 'Last block', 'Trước': 'Back', 'Block kế': 'Next block',
+  'Tạm dừng': 'Pause', 'Chạy tiếp': 'Resume', 'Xong': 'Done', 'Mobility': 'Mobility', 'Superset': 'Superset', 'Circuit': 'Circuit', 'EMOM': 'EMOM',
   'Lớp nhóm mới — soạn buổi đầu': 'New group class — first session', 'Mỗi lần 1 buổi · HYROX · Strength nhóm nhỏ · Circuit': 'One session at a time · HYROX · Small-group strength · Circuit',
   'Soạn 1 buổi cho lớp này': 'Design one session for this class', 'Buổi mới hoặc làm lại một buổi — các buổi khác giữ nguyên': 'A new session or redo one — the others stay as they are',
   'Lớp nhóm mới · buổi đầu tiên': 'New group class · first session', 'Buổi *': 'Session *', 'Kiểu buổi này': 'This session type',
@@ -20285,7 +20871,11 @@ const I18N_FULL = {
   'Tập {0} · {1}/{2} bài · {3} kg': 'Trained {0} · {1}/{2} exercises · {3} kg', 'Tập {0} · {1}/{2} bài': 'Trained {0} · {1}/{2} exercises',
   '{0} · {1}/{2} bài · {3} kg': '{0} · {1}/{2} exercises · {3} kg', '{0} · {1}/{2} bài': '{0} · {1}/{2} exercises',
   'Buổi {0}': 'Session {0}', 'Buổi {0} · {1}': 'Session {0} · {1}',
-  'Phút {0#}': 'Min {0}', '{0#} vòng': '{0} rounds', 'Tổng {0#} phút': 'Total {0} min', 'buổi {0#} phút': 'session {0} min',
+  'Phút {0#}': 'Min {0}', 'Vòng {0#}': 'Round {0}', '{0#} người': '{0} people', '{0#} phút / buổi': '{0} min / session', '{0#} block': '{0} blocks',
+  '{0#} phút trước': '{0} min ago', '{0#} giờ trước': '{0} h ago', '{0#} ngày trước': '{0} days ago', '{0#} tuần trước': '{0} weeks ago',
+  'Đã lưu Buổi {0} vào lớp': 'Saved Session {0} to the class', 'Còn {0#}s trong phút này': '{0}s left in this minute',
+  'Nhờ Pulse cân lại về {0#}′': 'Ask Pulse to rebalance to {0}′', '{0#} block chưa ghi số phút': '{0} blocks without minutes',
+ '{0#} vòng': '{0} rounds', 'Tổng {0#} phút': 'Total {0} min', 'buổi {0#} phút': 'session {0} min',
   '{0#} block chưa ghi phút': '{0} blocks without minutes', 'lệch {0#} phút': 'off by {0} min',
   'Nhắn cho {0}…': 'Message {0}…', 'Chat · {0#} tin chưa đọc': 'Chat · {0} unread',
   '{0#} cần chú ý': '{0} need attention', '{0#} chưa log': '{0} to log', 'Hôm nay · {0}': 'Today · {0}', '{0#} khách': '{0} clients',
