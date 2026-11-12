@@ -57,17 +57,15 @@ test('khung lop hybrid trong prompt: loai buoi, chay > tram, block 12 tuan, test
   assert.match(g, /You go, I go/);
 });
 
-test('form lop: giai doan + cho chay; prompt gan loai buoi theo so buoi/tuan', () => {
+test('form lop: giai doan + cho chay; loai buoi do coach chon moi lenh', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   const a = html.indexOf('const _AI_GF_FORMATS'), b = html.indexOf('function aiFormSend');
-  const api = new Function('escHtml', html.slice(a, b) + '; return { aiBuildGroupPrompt, _aiGroupForm };')((x) => x);
-  const r = api.aiBuildGroupPrompt({ name: 'HYROX sáng', format: 'hyrox', equipment: '3 SkiErg, 2 Row', spw: '3', dur: '60 phút', phase: 'build', run: 'none', size: '10' });
-  assert.match(r.prompt, /SessionA = Compromised, SessionB = Strength Endurance, SessionC = Engine/);
+  const api = new Function('escHtml', 'var _aiMode = "general", activeClient = null;' + html.slice(a, b) + '; return { aiBuildGroupPrompt, _aiGroupForm };')((x) => x);
+  const r = api.aiBuildGroupPrompt({ name: 'HYROX sáng', format: 'hyrox', equipment: '3 SkiErg, 2 Row', stype: 'Compromised', dur: '60 phút', phase: 'build', run: 'none', size: '10' });
+  assert.match(r.prompt, /label BẮT ĐẦU bằng loại buổi \("Compromised — …"\)/);
   assert.match(r.prompt, /tuần 5–8/);
   assert.match(r.prompt, /\(thay chạy\)/);
-  const peak = api.aiBuildGroupPrompt({ name: 'X', format: 'hyrox', equipment: 'y', spw: '2', phase: 'peak' });
-  assert.match(peak.prompt, /SessionB = Race Sim/);
-  const circ = api.aiBuildGroupPrompt({ name: 'X', format: 'circuit', equipment: 'y', spw: '2' });
+  const circ = api.aiBuildGroupPrompt({ name: 'X', format: 'circuit', equipment: 'y' });
   assert.doesNotMatch(circ.prompt, /Compromised/);
   assert.match(api._aiGroupForm(), /name="phase"/);
   assert.match(api._aiGroupForm(), /name="run"/);

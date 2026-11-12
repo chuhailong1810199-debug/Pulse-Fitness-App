@@ -20,7 +20,7 @@ test('_aiClean: dung doan chu trong anh coach gui', () => {
 });
 
 test('bang giao an: mot hang moi bai, mau theo pha, bam vao de hoi', () => {
-  const r = new Function('escHtml', slice('const _AI_PH', '\nfunction aiQuick') + '; return _aiProgramHTML;')(escHtml);
+  const r = new Function('escHtml', 'var activeClient = null; function T(x){return x}' + slice('const BLOCK_FORMAT_VI', '\n// Whether a checkpoint') + slice('const _AI_PH', '\nfunction aiQuick') + '; return _aiProgramHTML;')(escHtml);
   const html = r({ SessionA: { label: 'Anterior', focus: 'squat nặng', phases: [
     { name: 'Warm-up', tag: 'warmup', exercises: [{ name: 'CARs', setsReps: '2 × 5' }] },
     { name: 'Main', tag: 'strength', exercises: [{ name: 'Squat <x>', setsReps: '4 × 4-6' }, { name: 'Press', setsReps: '4 × 6' }] }] } });

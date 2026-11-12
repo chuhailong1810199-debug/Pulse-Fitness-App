@@ -26,11 +26,27 @@ const EXERCISE_SCHEMA = { type: "object", properties: {
   name: { type: "string" }, setsReps: { type: "string", description: "VD \"3 × 8-10\", \"3 × 10/bên\", \"5 × 3 phút\"" },
   tempo: { type: "string" }, cue: { type: "string", description: "nghỉ bao lâu | kỹ thuật ngắn | Last load nếu có" },
   why: { type: "string", description: "1 câu vì sao bài này cho CHÍNH khách này (bắt buộc ở strength/accessories)" },
+  // Trường BLOCK (2026-11-12, bắt buộc với lớp nhóm, tuỳ chọn với 1-1). Giáo án cũ không có → app vẽ như cũ.
+  group: { type: "string", description: "nhãn superset/cặp, VD \"B1\", \"B2\" — nghỉ tính sau CẢ cặp" },
+  intensity: { type: "string", description: "cường độ, VD \"RPE 7\", \"RPE 4–5\", \"Nổ hông\" — khách phổ thông dùng RPE, không %1RM" },
+  rest: { type: "string", description: "nghỉ RIÊNG của bài, VD \"75s\", \"60s sau cặp\"" },
+  minute: { type: "integer", description: "CHỈ pha EMOM: phút thứ mấy trong mỗi vòng (1, 2, 3…)" },
+  regression: { type: "string", description: "bài thay ĐƠN GIẢN hơn, VD bench → \"Push-up\", trap bar → \"Goblet Squat\"" },
 }, required: ["name", "setsReps"] };
+/** Kiểu block của một pha (phase.format) — app vẽ nhãn theo đây; tag vẫn chỉ 4 loại cho volume/kiểm. */
+const PHASE_FORMATS = ["straight", "superset", "emom", "circuit", "recovery", "mobility"];
 const SESSION_SCHEMA = { type: "object", properties: {
   label: { type: "string" }, focus: { type: "string", description: "1–2 câu vì sao buổi này chia như vậy" },
+  durationMin: { type: "integer", description: "độ dài buổi (phút) — tổng durationMin các pha phải khớp" },
+  level: { type: "string", description: "trình độ buổi này nhắm tới, VD \"Phổ thông\", \"Mixed\"" },
+  coachNotes: { type: "array", items: { type: "string" },
+    description: "ghi chú coach cấp buổi: điều kiện chuyển block, cách scale xuống / lên" },
   phases: { type: "array", items: { type: "object", properties: {
     name: { type: "string" }, tag: { type: "string", enum: ["warmup", "strength", "accessories", "circuit"] },
+    durationMin: { type: "integer", description: "thời lượng block (phút)" },
+    format: { type: "string", enum: PHASE_FORMATS },
+    rounds: { type: "integer", description: "số vòng — EMOM / circuit" },
+    notes: { type: "string", description: "ghi chú ngắn của block" },
     exercises: { type: "array", items: EXERCISE_SCHEMA },
   }, required: ["name", "tag", "exercises"] } },
 }, required: ["label", "focus", "phases"] };
@@ -386,6 +402,16 @@ async function exerciseLibrary(db) {
  * bảng cần. Model chép giáo án thành chữ thì vừa dài vừa lỗi định dạng
  * (LaTeX "$3 \\times 5$", "####") — 2026-10-15 coach phàn nàn khó đọc.
  */
+/** Chỉ chép trường block CÓ giá trị — giáo án cũ không phình thêm null. */
+function blockFields(o, keys) {
+  const out = {};
+  for (const k of keys) {
+    const v = o && o[k];
+    if (v == null || v === "" || (Array.isArray(v) && !v.length)) continue;
+    out[k] = Array.isArray(v) ? v.map(String).slice(0, 8) : v;
+  }
+  return out;
+}
 function compactProgram(prog, days) {
   const want = Array.isArray(days) && days.length ? new Set(days.map(String)) : null;
   const out = {};
@@ -395,10 +421,13 @@ function compactProgram(prog, days) {
     out[k] = {
       label: str(d.label) || null,
       focus: str(d.focus) || null,
+      ...blockFields(d, ["durationMin", "level", "coachNotes"]),
       phases: (d.phases || []).map((ph) => ({
         name: str(ph && ph.name), tag: normalizePhaseTag(ph || {}),
+        ...blockFields(ph, ["durationMin", "format", "rounds", "notes"]),
         exercises: ((ph && ph.exercises) || []).map((x) => ({
           name: str(x && x.name), setsReps: str(x && x.setsReps), why: str(x && x.why) || null,
+          ...blockFields(x, ["group", "intensity", "rest", "minute", "regression"]),
         })),
       })),
     };
@@ -799,6 +828,10 @@ async function execTool(db, name, a, role, ctx) {
     liftProgramParams(a);
     const v = validateProgram(a.program);
     if (!v.ok) return { rejected: true, errors: v.errors, note: "Giáo án chưa hợp lệ, sửa rồi đề xuất lại." };
+    if (isGroup) {
+      const one = groupOneSession(a.program);
+      if (one) return { rejected: true, errors: [one] };
+    }
     const c = await db.collection("clients").doc(a.clientId).get();
     if (!c.exists) return { rejected: true, errors: [`Không có khách id '${a.clientId}'.`] };
     const old = (c.data() || {}).program || {};
@@ -833,7 +866,7 @@ async function execTool(db, name, a, role, ctx) {
     // Kiểm theo khung (volume, mẫu chuyển động, thời lượng) trên CẢ TUẦN sau khi ghép.
     const cd = c.data() || {};
     const minor = cd.isGroup === true ? false : await isMinorClient(db, a.clientId, cd);
-    const opts = { level: cd.level, isGroup: cd.isGroup === true, groupFormat: cd.groupFormat || null, minor, plyoLevel: a.plyoLevel,
+    const opts = { level: cd.level, isGroup: cd.isGroup === true, requireBlocks: cd.isGroup === true, groupFormat: cd.groupFormat || null, minor, plyoLevel: a.plyoLevel,
       minutes: Number(a.sessionMinutes) || Number(cd.durationMin) || null,
       volumeExceptions: a.volumeExceptions, coverageExceptions: a.coverageExceptions };
     const chk = PC.checkProgram(program, opts);
@@ -893,6 +926,10 @@ async function execTool(db, name, a, role, ctx) {
           + `hai người chung địa chỉ là đọc ghi được dữ liệu của nhau.`] };
       }
     }
+    if (a.isGroup === true && a.program && Object.keys(a.program).length) {
+      const one = groupOneSession(a.program);
+      if (one) return { rejected: true, errors: [one] };
+    }
     let program = a.program || {};
     let renamed = [];
     let chk = null;
@@ -906,7 +943,7 @@ async function execTool(db, name, a, role, ctx) {
       }
       const why = checkRationale(r.program);
       const minorNew = a.isGroup !== true && Number(a.age) > 0 && Number(a.age) < 18;
-      chk = PC.checkProgram(r.program, { level: a.level || "Beginner", isGroup: a.isGroup === true, groupFormat: a.groupFormat || null,
+      chk = PC.checkProgram(r.program, { level: a.level || "Beginner", isGroup: a.isGroup === true, requireBlocks: a.isGroup === true, groupFormat: a.groupFormat || null,
         minor: minorNew, plyoLevel: a.plyoLevel,
         minutes: Number(a.sessionMinutes) || Number(a.durationMin) || null,
         volumeExceptions: a.volumeExceptions, coverageExceptions: a.coverageExceptions });
@@ -973,6 +1010,17 @@ async function execTool(db, name, a, role, ctx) {
 //
 // Model sinh ra JSON, và model thì sai được. Mấy hàm này là chỗ chặn: không
 // qua được đây thì không có gì chạm tới Firestore. Thuần, không I/O, test được.
+
+/**
+ * Lớp nhóm: MỖI LỆNH ĐÚNG MỘT BUỔI (coach chốt 2026-11-12 — coach chỉnh lớp liên tục, soạn cả tuần một lượt là
+ * phí công và khó duyệt). Trả câu lỗi, hoặc null nếu hợp lệ.
+ */
+function groupOneSession(prog) {
+  const keys = Object.keys(prog || {});
+  if (keys.length === 1) return null;
+  return `Lớp nhóm: mỗi lệnh soạn ĐÚNG 1 buổi — đề xuất này có ${keys.length} buổi (${keys.join(", ")}). `
+    + "Chỉ gửi buổi coach yêu cầu; các buổi khác của lớp giữ nguyên.";
+}
 
 const LEVELS = ["Beginner", "Intermediate", "Advanced"];
 /** Lớp nhóm: trình độ trộn lẫn là chuyện thường. */
@@ -1342,9 +1390,35 @@ Mục tiêu: kỹ năng vận động, sức mạnh nền, sức bật an toàn,
 // Một hồ sơ clients có isGroup:true = MỘT LỚP. Giáo án dùng chung cho mọi
 // học viên có mặt, trình độ trộn lẫn, dụng cụ có hạn — khác hẳn soạn 1-1.
 const GROUP_METHOD = `LỚP NHÓM (hồ sơ có isGroup, hoặc coach nói "lớp", "group class")
+- MỖI LỆNH ĐÚNG 1 BUỔI. Coach chỉnh lớp liên tục: chỉ soạn buổi coach yêu cầu (một khoá SessionX), KHÔNG soạn cả
+  tuần, KHÔNG đụng buổi khác của lớp (server chặn đề xuất lớp có > 1 buổi). Coach không nói buổi nào → buổi mới
+  = khoá trống kế tiếp; "làm lại / sửa buổi B" → đúng khoá đó.
 - Tạo lớp mới: propose_new_client với isGroup:true, groupFormat, groupSize, durationMin, equipment,
-  level "Mixed" nếu trình độ trộn. KHÔNG email. Sửa giáo án lớp: propose_program như khách (chỉ cần
-  get_client + get_program trước — lớp không có mức tạ chung).
+  level "Mixed" nếu trình độ trộn, KHÔNG email, kèm ĐÚNG 1 buổi (SessionA). Thêm / sửa buổi: propose_program
+  (chỉ cần get_client + get_program trước — lớp không có mức tạ chung).
+- THIẾT KẾ THEO BLOCK CÓ ĐỒNG HỒ (server kiểm). Mỗi buổi: durationMin, level, coachNotes[]; MỖI pha: durationMin,
+  format (straight | superset | emom | circuit | recovery | mobility), rounds (EMOM/circuit), notes; mỗi bài khi có:
+  intensity ("RPE 7"), rest ("75s"), group ("B1","B2" cho superset), minute (EMOM: phút 1/2/3), regression (bài
+  thay đơn giản hơn). TỔNG durationMin các pha = durationMin buổi (lệch ≤ 3').
+  · tag vẫn chỉ 4 loại — map: khởi động → warmup/mobility · interval/EMOM → circuit/emom · hồi phục giữa buổi →
+    warmup/recovery · bài chính → strength/straight · superset → accessories (hoặc strength)/superset · giãn cơ
+    cuối → warmup/mobility. App giữ ĐÚNG thứ tự pha bạn gửi khi pha có format/durationMin.
+  · THỨ TỰ mẫu: Warm-up → Conditioning (interval) → Recovery → Strength chính → Superset → Posterior / Carry →
+    Cool-down. Interval đặt ĐẦU buổi thì strength sau đó giới hạn RPE ≤ 7, và BẮT BUỘC có block recovery 2–3'
+    giữa conditioning và strength (server chặn nếu thiếu).
+  · CÂN BẰNG MẪU: squat/hinge, push, pull, hinge, carry — không dồn một mẫu.
+  · KHÁCH PHỔ THÔNG: RPE thay vì %1RM; mỗi bài chính có regression (bench → push-up, trap bar → goblet squat).
+  · SUPERSET (B1/B2, C1/C2): nghỉ tính sau CẢ cặp — ghi rest ở bài cuối cặp ("60s sau cặp").
+  · EMOM: rounds = số vòng, mỗi bài một minute; setsReps theo phút ("12–15 cal", "12", "30s"), intensity ghi
+    "dư thời gian thì nghỉ" khi cần.
+  · coachNotes 2–4 câu: điều kiện chuyển block (VD hồi đủ nhịp sau interval mới vào block A), cách scale xuống
+    (EMOM còn 3 vòng / 40s làm – 20s nghỉ) và lên (còn sức sau block C thì thêm plank 2 × 30s).
+  · MẪU 50' Strength + Interval: [warmup/mobility 5'] Hip 90/90, cat-cow, world's greatest stretch 1 vòng · Row nhẹ 2'
+    RPE 4–5 → [circuit/emom 12', rounds 4] phút 1 Row 12–15 cal RPE 8 · phút 2 KB Swing 12 · phút 3 Mountain
+    Climber 30s → [warmup/recovery 3'] đi bộ, uống nước → [strength/straight 9'] Goblet Squat 4 × 6 RPE 7 nghỉ 75s
+    (regression Box Squat) → [accessories/superset 9'] B1 DB Bench Press 3 × 8 RPE 7 (Push-up) · B2 1-arm DB Row
+    3 × 8/bên, 60s sau cặp → [accessories/superset 8'] C1 DB RDL 3 × 10 xuống 3s · C2 Farmer Carry 3 × 30m, 60s →
+    [warmup/mobility 4'] hip flexor, hamstring, ngực 30s/bài.
 - MỘT giáo án cho cả lớp, trình độ trộn: CÙNG động tác cho mọi người, chỉ khác tải/quãng — mỗi bài chính
   ghi trong cue 3 mức "Dễ / Chuẩn / Khó" (tạ, biên độ, tốc độ, bài thay). Không ghi tạ cố định.
 - DỤNG CỤ THEO SỐ NGƯỜI: trạm có ÍT dụng cụ nhất quyết định số người làm cùng lúc. Dụng cụ ít hơn số người
@@ -1384,8 +1458,8 @@ LỚP HYBRID / HYROX (groupFormat hyrox) — theo cách các training club đang
     · Wall Ball 2 × 20 (vòng 2, 4) — chạy là DÒNG BÀI, trạm xoay vòng, ≥ 2 trạm trong khối
   · [circuit] "Finisher — EMOM 7'": Burpee Broad Jump 7 × 6 · (giãn 5' ghi trong focus)
   Buổi Compromised / Race Sim: ≥ 3 trạm thi khác nhau cả buổi, có pha chạy xen ≥ 2 trạm, tổng ≥ 75% thời lượng lớp.
-- CHỌN LOẠI BUỔI theo số buổi/tuần: 1 buổi → Compromised. 2 → Compromised + Strength Endurance (cặp các gym hay
-  dùng). 3 → + Engine. 4 → + Foundation (hoặc Partner nếu lớp đông). 5 → + Partner. Coach nói khác thì theo coach.
+- LOẠI BUỔI: coach chọn mỗi lệnh. Không nói thì xoay theo buổi đã có của lớp: Compromised → Strength Endurance →
+  Engine → Foundation / Partner (đừng lặp loại của buổi gần nhất).
 - BLOCK 12 TUẦN (coach ghi giai đoạn): tuần 1–4 NỀN (kỹ thuật, cường độ vừa, tăng dần quãng chạy) · tuần 5–8
   COMPROMISED (cặp chạy–trạm dài hơn, nghỉ ít hơn) · tuần 9 nửa giải, tuần 10 trọn giải (một buổi đổi thành Race
   Sim) · tuần 11–12 TAPER (giảm khối lượng ~40%, giữ cường độ). Không có giải: xoay vòng nền ↔ compromised.
@@ -1830,5 +1904,5 @@ function buildMorningPush({ bookings, rec }) {
   return { title, body: lines.join("\n") };
 }
 
-module.exports = { CLIENT_TOOLS, CLIENT_TOOL_NAMES, CLIENT_SYSTEM, runClientTool, TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, METHOD, GROUP_METHOD, EXPLAIN_METHOD, FORMAT_RULES, compactProgram, checkRationale, GROUP_FORMATS, groupName, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, THINK_DESIGN, designIntent, runTool, runAssistant, progSummary, shapeReply,
+module.exports = { groupOneSession, blockFields, PHASE_FORMATS, CLIENT_TOOLS, CLIENT_TOOL_NAMES, CLIENT_SYSTEM, runClientTool, TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, METHOD, GROUP_METHOD, EXPLAIN_METHOD, FORMAT_RULES, compactProgram, checkRationale, GROUP_FORMATS, groupName, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, THINK_DESIGN, designIntent, runTool, runAssistant, progSummary, shapeReply,
   validateProgram, validateNewClient, makeClientId, LEVELS, CHECK_PARAMS, PROGRAM_SCHEMA, liftProgramParams, PLAYBOOK, EDIT_METHOD, YOUTH_METHOD, CORE_METHOD, isMinorClient, namedClientId, fillMuscles, programDiff, MAX_STEPS_DESIGN, TIME_BUDGET_MS, HARD_STOP_MS, mergeProgram, exerciseHit, targetMismatch, nameInText };

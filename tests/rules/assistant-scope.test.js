@@ -33,9 +33,17 @@ function fillProgram(prog) {
   }
   return out;
 }
+// Lớp nhóm soạn theo BLOCK (2026-11-12): mọi pha phải có durationMin — gắn sẵn cho đề xuất lớp, các ca ở đây
+// kiểm quyền / trường lớp chứ không kiểm đồng hồ (đồng hồ kiểm ở tests/group-session.test.js).
+const withBlocks = (prog) => Object.fromEntries(Object.entries(prog || {}).map(([k, d]) =>
+  [k, { ...d, phases: ((d && d.phases) || []).map((ph) => ({ durationMin: 8, ...ph })) }]));
 const _runTool = A.runTool;
-A.runTool = (name, args, ...rest) => _runTool(name,
-  /^propose_/.test(name) ? { coverageExceptions: ALL_PATTERNS, ...(args || {}), program: fillProgram(args && args.program) } : args, ...rest);
+A.runTool = (name, args, ...rest) => {
+  if (!/^propose_/.test(name)) return _runTool(name, args, ...rest);
+  const isGroupCall = (args && args.isGroup === true) || /^lop_/.test(String((args && args.clientId) || ""));
+  const program = fillProgram(args && args.program);
+  return _runTool(name, { coverageExceptions: ALL_PATTERNS, ...(args || {}), program: isGroupCall ? withBlocks(program) : program }, ...rest);
+};
 
 const RA = { coach: true, admin: false, uid: "coachA" };
 const RB = { coach: true, admin: false, uid: "coachB" };
@@ -150,6 +158,13 @@ const ok = (n, f) => cases.push([n, f]);
     assert(r0.rejected && /get_client/.test(r0.errors[0]) && !/get_exercise_loads/.test(r0.errors[0]), JSON.stringify(r0));
     const r = await A.runTool("propose_program", { clientId: "lop_hyrox", program: newProg("Lat Pulldown") }, RA, { read: { "get_client:lop_hyrox": true } });
     assert(r.needsConfirm, JSON.stringify(r));
+  });
+  ok("lop nhom: MOI LENH DUNG 1 BUOI — de xuat 2 buoi bi tu choi (2026-11-12)", async () => {
+    const two = { ...newProg("Lat Pulldown"), SessionB: newProg("Lat Pulldown").SessionA };
+    const r = await A.runTool("propose_program", { clientId: "lop_hyrox", program: two }, RA, { read: { "get_client:lop_hyrox": true } });
+    assert(r.rejected && /ĐÚNG 1 buổi/.test(r.errors[0]), JSON.stringify(r));
+    const r2 = await A.runTool("propose_new_client", { name: "Lop 2 buoi", isGroup: true, groupFormat: "circuit", equipment: "x", program: two }, RA);
+    assert(r2.rejected && /ĐÚNG 1 buổi/.test(r2.errors[0]), JSON.stringify(r2));
   });
   ok("tao lop: action mang isGroup + thong tin lop, ten co tien to, khong email", async () => {
     // Ca này kiểm TRƯỜNG của lớp, không kiểm mẫu buổi: bỏ durationMin để giáo án 1 bài không bị luật

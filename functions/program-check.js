@@ -188,6 +188,9 @@ const TIMED = /\d\s*(km|m|s|sec|giây|min|mins|phút|')(?![a-zà-ỹ])/i;
 
 /** Phút ước tính một buổi: khởi động 5–10 phút; set làm việc ~2,5 phút (gồm nghỉ), superset ~1,75. */
 function estimateMinutes(day) {
+  // Buổi soạn theo BLOCK có đồng hồ (mọi pha có durationMin): đồng hồ coach đặt là thật, khỏi ước tính.
+  const blk = blockMinutes(day);
+  if (blk != null) return blk;
   let total = 0;
   for (const ph of (day && day.phases) || []) {
     const before = total;
@@ -212,6 +215,61 @@ function estimateMinutes(day) {
       else total += parseSets(x && x.setsReps) * (paired ? 1.75 : 2.5);
     }
   }
+}
+
+/** Tổng durationMin các pha nếu MỌI pha đều có; thiếu một pha → null (vẽ / ước tính như cũ). */
+function blockMinutes(day) {
+  const ph = (day && day.phases) || [];
+  if (!ph.length || !ph.every((p) => Number(p && p.durationMin) > 0)) return null;
+  return ph.reduce((t, p) => t + Number(p.durationMin), 0);
+}
+
+/** Pha conditioning: interval/EMOM/circuit. Pha hồi phục: format recovery. */
+const isConditioning = (ph) => /^(emom|circuit)$/.test(String((ph && ph.format) || "")) || normalizePhaseTag(ph || {}) === "circuit";
+const isRecovery = (ph) => String((ph && ph.format) || "") === "recovery";
+const isLift = (ph) => { const t = normalizePhaseTag(ph || {}); return (t === "strength" || t === "accessories") && !isConditioning(ph); };
+
+/**
+ * Buổi lớp nhóm soạn theo block (2026-11-12): mọi pha có durationMin, tổng khớp buổi (±3'), và conditioning
+ * đặt TRƯỚC tạ thì phải có block recovery chen giữa — không thì form squat/deadlift hỏng. Tạ sau interval
+ * vượt RPE 7 chỉ nhắc.
+ */
+function blockIssues(program, minutes, require) {
+  const errors = [], warnings = [];
+  for (const [k, d] of Object.entries(program || {})) {
+    const phases = (d && d.phases) || [];
+    // Buổi cũ (chưa soạn theo block) chỉ bị kiểm khi đề xuất MỚI bắt buộc block (requireBlocks).
+    if (!require && !phases.some((p) => p && (p.format || Number(p.durationMin) > 0))) continue;
+    const miss = phases.filter((p) => !(Number(p && p.durationMin) > 0)).map((p) => `"${(p && p.name) || "?"}"`);
+    if (miss.length) {
+      errors.push({ k: "blk:" + k, m: `${k}: pha ${miss.join(", ")} thiếu durationMin — lớp nhóm soạn theo block có đồng hồ, mỗi pha ghi số phút.` });
+    } else {
+      const sum = blockMinutes(d), target = Number(d.durationMin) > 0 ? Number(d.durationMin) : Number(minutes);
+      if (target > 0 && Math.abs(sum - target) > 3) {
+        errors.push({ k: "blksum:" + k, m: `${k}: tổng các block ${sum} phút, buổi ${target} phút — chỉnh durationMin các pha cho khớp (lệch ≤ 3').` });
+      }
+    }
+    let condAt = -1;
+    phases.forEach((p, i) => {
+      if (isConditioning(p)) { condAt = i; return; }
+      if (isRecovery(p)) { condAt = -1; return; }
+      if (condAt >= 0 && isLift(p)) {
+        errors.push({ k: "rec:" + k, m: `${k}: pha "${p.name || "?"}" vào tạ ngay sau interval — chèn block recovery 2–3' (format "recovery") giữa hai khối.` });
+        condAt = -1;
+      }
+    });
+    let afterCond = false;
+    for (const p of phases) {
+      if (isConditioning(p)) { afterCond = true; continue; }
+      if (!afterCond || !isLift(p)) continue;
+      for (const x of p.exercises || []) {
+        const m = String((x && x.intensity) || "").match(/RPE\s*(\d+(?:[.,]\d)?)\s*(?:[-–]\s*(\d+(?:[.,]\d)?))?/i);
+        const hi = m ? parseFloat((m[2] || m[1]).replace(",", ".")) : 0;
+        if (hi > 7) warnings.push(`${k}: "${x.name}" RPE ${hi} sau interval — nên giữ RPE ≤ 7.`);
+      }
+    }
+  }
+  return { errors, warnings };
 }
 
 /** Mục 4. Dài quá 30% (+5 phút) → lỗi; ngắn hơn 60% → nhắc. Không có thời lượng đích thì bỏ qua. */
@@ -538,7 +596,8 @@ function checkProgram(program, o = {}) {
   if (o.isGroup) {
     const d = durationIssues(program, o.minutes);
     const h = o.groupFormat === "hyrox" ? hybridIssues(program, o.minutes) : { errors: [], warnings: [], split: {} };
-    return { errors: [...d.errors, ...h.errors], warnings: [...d.warnings, ...h.warnings], volume: {}, est: d.est,
+    const b = blockIssues(program, o.minutes, o.requireBlocks === true);
+    return { errors: [...d.errors, ...h.errors, ...b.errors], warnings: [...d.warnings, ...h.warnings, ...b.warnings], volume: {}, est: d.est,
       waived: [], runSplit: h.split };
   }
   const v = volumeIssues(program, o.level, o.volumeExceptions);
@@ -563,5 +622,5 @@ function parseMinutes(v) {
   return m ? +m[0] : null;
 }
 
-module.exports = { CORE_KEYS, canonMuscle, parseSets, muscleSets, volumeIssues, patternsCovered, coverageIssues, estimateMinutes,
+module.exports = { blockMinutes, blockIssues, CORE_KEYS, canonMuscle, parseSets, muscleSets, volumeIssues, patternsCovered, coverageIssues, estimateMinutes,
   durationIssues, pushPullWarning, checkProgram, newErrors, structureIssues, youthIssues, contacts, PLYO_CAP, hybridIssues, stationKeys, runStationMinutes, exerciseMinutes, SESSION_TYPES, parseMinutes, VOLUME, PATTERN_KEYS, PER_SESSION_MAX };

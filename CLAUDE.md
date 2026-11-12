@@ -266,6 +266,15 @@ Key routing rules:
   `groupSize`, `durationMin`, `equipment`; `email: ''`, tên bắt đầu "Lớp ·". Tạo qua trợ lý (form "Soạn giáo án
   lớp nhóm" → `propose_new_client` isGroup → `coachApply`). Luật soạn ở `GROUP_METHOD` (assistant.js). Lớp không
   báo "chưa tập/InBody/gói" (`clientAlert`), không bật billing; `propose_program` cho lớp chỉ đòi `get_client`.
+- **Lớp nhóm — MỖI LỆNH ĐÚNG 1 BUỔI + block có đồng hồ** (2026-11-12): `groupOneSession()` chặn đề xuất lớp > 1 buổi
+  (propose_program + propose_new_client). Form lớp: lớp đang mở (chế độ theo khách) → "Buổi mới (khoá trống kế tiếp)" hoặc
+  "Làm lại SessionX"; không có lớp → tạo lớp với SessionA. Trường mới, TUỲ CHỌN (giáo án cũ vẽ như cũ): buổi `durationMin`,
+  `level`, `coachNotes[]`; pha `durationMin`, `format` (straight|superset|emom|circuit|recovery|mobility), `rounds`, `notes`;
+  bài `group` (B1/B2), `intensity` (RPE), `rest`, `minute` (EMOM), `regression`. Tag VẪN 4 loại — recovery/cool-down = tag
+  warmup + format. `blockIssues()` (program-check, chỉ đề xuất mới — `requireBlocks`): mọi pha có phút, tổng khớp buổi ±3',
+  interval trước tạ phải có block recovery chen giữa; tạ sau interval > RPE 7 chỉ nhắc. App: `sortPhases` GIỮ thứ tự pha khi
+  buổi soạn theo block (không thì EMOM đầu buổi bị đẩy xuống cuối); tab Workout hiện tổng phút (đỏ khi lệch), ghi chú coach,
+  nhãn block, B1/Phút 1, RPE · nghỉ · bài dễ hơn (`exRest` đọc từ cue khi thiếu `rest`).
 - **Lớp Hybrid / HYROX** (`groupFormat: hyrox`, 2026-10-19): label mỗi buổi bắt đầu bằng loại buổi
   (Compromised / Strength Endurance / Engine / Foundation / Race Sim / Partner); số buổi/tuần quyết định loại
   (form tự gán). Buổi Compromised / Engine / Race Sim: phút CHẠY ≥ phút TRẠM — `hybridIssues()` trong

@@ -7,7 +7,7 @@ const assert = require('node:assert');
 const s = require('fs').readFileSync(require('path').join(__dirname, '..', 'index.html'), 'utf8');
 const slice = (a, b) => s.slice(s.indexOf(a), s.indexOf(b, s.indexOf(a)));
 
-const build = new Function('escHtml', slice('const _AI_GF_FORMATS', 'function aiFormOpen(') + '; return { aiBuildGroupPrompt, _aiGroupForm };')(String);
+const build = new Function('escHtml', 'var _aiMode = "general", activeClient = null;' + slice('const _AI_GF_FORMATS', 'function aiFormOpen(') + '; return { aiBuildGroupPrompt, _aiGroupForm };')(String);
 
 test('form lop: thieu ten / kieu lop / dung cu thi bao loi', () => {
   assert.ok(build.aiBuildGroupPrompt({ format: 'hyrox', equipment: 'x' }).error);
@@ -15,12 +15,14 @@ test('form lop: thieu ten / kieu lop / dung cu thi bao loi', () => {
   assert.ok(build.aiBuildGroupPrompt({ name: 'A', format: 'hyrox' }).error);
 });
 
-test('prompt lop: isGroup, groupFormat, khoa buoi, khong email, dung cu nguyen van', () => {
+test('prompt lop moi: isGroup, groupFormat, DUNG 1 buoi SessionA, khong email, dung cu nguyen van', () => {
   const r = build.aiBuildGroupPrompt({ name: 'HYROX sáng', format: 'hyrox', size: '10', dur: '60 phút', spw: '3', level: 'Mixed', equipment: '3 SkiErg, 1 sled' });
   assert.ok(!r.error);
   assert.match(r.prompt, /isGroup: true/);
   assert.match(r.prompt, /groupFormat "hyrox"/);
-  assert.match(r.prompt, /SessionA, SessionB, SessionC\./);
+  assert.match(r.prompt, /program CHỈ có SessionA/);
+  assert.match(r.prompt, /Soạn ĐÚNG 1 BUỔI \(khoá SessionA\)/);
+  assert.doesNotMatch(r.prompt, /SessionB/);
   assert.match(r.prompt, /KHÔNG email/);
   assert.match(r.prompt, /3 SkiErg, 1 sled/);
   assert.match(r.prompt, /groupSize 10/);
@@ -29,7 +31,7 @@ test('prompt lop: isGroup, groupFormat, khoa buoi, khong email, dung cu nguyen v
 
 test('form lop co o an kind=group de aiFormSend chon dung bo dung prompt', () => {
   assert.match(build._aiGroupForm(), /name="kind" value="group"/);
-  assert.match(s, /data\.kind === 'group' \? aiBuildGroupPrompt\(data\)\s*: data\.kind === 'ready' \? aiBuildReadyPrompt\(/);
+  assert.match(s, /data\.kind === 'group' \? aiBuildGroupPrompt\(data, data\.cid \? \(clientsData\.find\(\(c\) => c\.id === data\.cid\) \|\| null\) : null\)\s*: data\.kind === 'ready' \? aiBuildReadyPrompt\(/);
 });
 
 test('canh bao dashboard: lop chi bao khi chua co giao an', () => {

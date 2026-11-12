@@ -326,7 +326,40 @@ const phaseTagClass = {warmup:'phase-warmup',core:'phase-core',strength:'phase-s
 const PHASE_ORDER = PHASE_TAGS;
 function phaseRank(phase) { return PHASE_ORDER.indexOf(normPhaseTag(phase || {})); }
 function sortPhases(phases) {
+  // Buổi soạn theo BLOCK (pha có format / durationMin — lớp nhóm 2026-11-12): thứ tự là chủ ý của coach
+  // (interval ĐẦU buổi, rồi hồi phục, rồi tạ). Xếp lại theo tag sẽ đẩy EMOM xuống cuối — giữ nguyên.
+  if (isBlockSession(phases)) return [...phases];
   return [...phases].sort((a, b) => phaseRank(a) - phaseRank(b));
+}
+function isBlockSession(phases) {
+  return (phases || []).some((p) => p && (p.format || Number(p.durationMin) > 0));
+}
+
+// ── Trường BLOCK của giáo án (2026-11-12) — tuỳ chọn, giáo án cũ không có thì không vẽ gì thêm ──
+const BLOCK_FORMAT_VI = { straight: 'Set thẳng', superset: 'Superset', emom: 'EMOM', circuit: 'Circuit', recovery: 'Hồi phục', mobility: 'Mobility' };
+/** "EMOM · 4 vòng · 12'" cho đầu pha; rỗng nếu pha không có trường block. */
+function blockPhaseMeta(ph) {
+  const bits = [];
+  if (ph && ph.format) bits.push(BLOCK_FORMAT_VI[ph.format] || String(ph.format));
+  if (ph && Number(ph.rounds) > 0) bits.push(T(ph.rounds + ' vòng'));
+  if (ph && Number(ph.durationMin) > 0) bits.push(Number(ph.durationMin) + "'");
+  return bits.join(' · ');
+}
+/** Nghỉ của một bài: trường rest, không có thì đọc từ cue ("nghỉ 75s", "rest 90s", "nghỉ 2 phút"). */
+function exRest(ex) {
+  if (ex && ex.rest) return String(ex.rest);
+  const m = String((ex && ex.cue) || '').match(/(?:nghỉ|rest)\s*:?\s*(\d+(?:[.,]\d+)?\s*(?:s|giây|sec|phút|min|')(?:\s*sau cặp)?)/i);
+  return m ? m[1] : '';
+}
+/** Tổng phút các block + đích của buổi → { sum, target, off } ; null nếu buổi không soạn theo block. */
+function blockTotals(day) {
+  const ph = (day && day.phases) || [];
+  if (!ph.length || !ph.some((p) => Number(p && p.durationMin) > 0)) return null;
+  const sum = ph.reduce((t, p) => t + (Number(p && p.durationMin) || 0), 0);
+  const target = Number(day.durationMin) > 0 ? Number(day.durationMin)
+    : (activeClient && Number(activeClient.durationMin) > 0 ? Number(activeClient.durationMin) : 0);
+  const missing = ph.filter((p) => !(Number(p && p.durationMin) > 0)).length;
+  return { sum, target, missing, off: (target > 0 && Math.abs(sum - target) > 3) || missing > 0 };
 }
 // Whether a checkpoint is good news depends on what the client is training for.
 // Read from the goal the coach wrote, because there is no structured field for
@@ -5587,7 +5620,10 @@ function renderExercises() {
       </div></div>`;
     } else {
       const exCount = phase.exercises?.length || 0;
-      html += `<span class="phase-tag ${phaseTagClass[normPhaseTag(phase)]}">${phase.name}</span><span class="phase-count">${exCount} exercise${exCount!==1?'s':''}</span></div>`;
+      const _bm = blockPhaseMeta(phase);
+      html += `<span class="phase-tag ${phaseTagClass[normPhaseTag(phase)] || 'phase-accessories'}">${phase.name}</span>`
+        + (_bm ? `<span class="blk-meta">${escHtml(_bm)}</span>` : `<span class="phase-count">${exCount} exercise${exCount!==1?'s':''}</span>`) + `</div>`;
+      if (phase.notes) html += `<div class="blk-note" data-i18n-skip>${escHtml(phase.notes)}</div>`;
     }
     // trainer-note-card removed (user request)
     if (!editMode) {
@@ -5605,8 +5641,9 @@ function renderExercises() {
           <div class="node-head">
             <span class="node-num">${String(ei+1).padStart(2,'0')}</span>
             <div class="node-title" onclick="openModal(${pi},${ei})">
-              <div class="node-name${done?' done':''}">${ex.name}</div>
+              <div class="node-name${done?' done':''}">${ex.group?`<span class="blk-grp">${escHtml(ex.group)}</span>`:''}${Number(ex.minute)>0?`<span class="blk-grp">${escHtml(T('Phút ' + ex.minute))}</span>`:''}${ex.name}</div>
               <div class="node-sets">${ex.setsReps}${ex.tempo?' · '+ex.tempo:''}${ex.bw?`<span class="bw-chip" title="Loads are entered as weight added to bodyweight">BW ${_clientBodyweight>0?_clientBodyweight+'kg':'—'}</span>`:''}${getStrengthBadge(key, ex.name)}</div>
+              ${(ex.intensity || exRest(ex) || ex.regression) ? `<div class="blk-ex" data-i18n-skip>${[ex.intensity ? escHtml(ex.intensity) : '', exRest(ex) ? escHtml(T('nghỉ') + ' ' + exRest(ex)) : '', ex.regression ? escHtml(T('dễ hơn') + ': ' + ex.regression) : ''].filter(Boolean).join(' · ')}</div>` : ''}
             </div>
             <div class="node-check${done?' done':''}" onclick="event.stopPropagation();toggleExercise('${key}')">${done?'✓':''}</div>
           </div>
@@ -5725,6 +5762,29 @@ function renderExercises() {
     // Ngay dưới tiêu đề buổi (div đầu tiên của html), trên danh sách pha.
     const cut = html.indexOf('</div>') + 6;
     html = html.slice(0, cut) + '<div class="day-focus"><span class="day-focus-k">Trọng tâm buổi</span><span data-i18n-skip>' + escHtml(_focus) + '</span></div>' + html.slice(cut);
+  }
+
+  // Buổi soạn theo block: tổng phút so với độ dài buổi + ghi chú coach (chuyển block, scale xuống / lên).
+  const _dayB = getProgram()[activeDay] || {};
+  const _bt = blockTotals(_dayB);
+  const _notes = Array.isArray(_dayB.coachNotes) ? _dayB.coachNotes.filter(Boolean) : [];
+  if (_bt || _notes.length) {
+    let extra = '';
+    if (_bt) {
+      extra += '<div class="blk-sum' + (_bt.off ? ' off' : '') + '" role="' + (_bt.off ? 'alert' : 'status') + '">'
+        + '<b>' + escHtml(T('Tổng ' + _bt.sum + ' phút')) + '</b>'
+        + (_bt.target ? '<span>' + escHtml(T('buổi ' + _bt.target + ' phút')) + '</span>' : '')
+        + (_bt.missing ? '<span>' + escHtml(T(_bt.missing + ' block chưa ghi phút')) + '</span>'
+          : _bt.off ? '<span>' + escHtml(T('lệch ' + Math.abs(_bt.sum - _bt.target) + ' phút')) + '</span>' : '')
+        + (_dayB.level ? '<span data-i18n-skip>' + escHtml(_dayB.level) + '</span>' : '')
+        + '</div>';
+    }
+    if (_notes.length) {
+      extra += '<div class="day-focus blk-notes"><span class="day-focus-k">' + escHtml(T('Ghi chú coach')) + '</span><ul data-i18n-skip>'
+        + _notes.map((n) => '<li>' + escHtml(n) + '</li>').join('') + '</ul></div>';
+    }
+    const cut2 = html.indexOf('<div class="phase-header">');
+    html = cut2 >= 0 ? html.slice(0, cut2) + extra + html.slice(cut2) : html + extra;
   }
 
   // Prepend "done strip" if there are done exercises being hidden
@@ -10309,14 +10369,19 @@ function _aiProgramHTML(prog) {
       return ex.map((x, j) => {
         const q = 'Vì sao chọn ' + x.name + ' ở ' + k + '? Có bài thay nào không?';
         return '<tr class="' + cls + '" data-q="' + escHtml(q) + '" onclick="aiQuick(this.dataset.q)" title="Bấm để hỏi về bài này">'
-          + (j === 0 ? '<td class="ai-pt-ph" rowspan="' + ex.length + '"><span title="' + escHtml(ph.name || '') + '">' + lab + '</span></td>' : '')
-          + '<td class="ai-pt-n" data-i18n-skip>' + escHtml(x.name) + '</td>'
-          + '<td class="ai-pt-sr" data-i18n-skip>' + escHtml(x.setsReps || '—') + '</td></tr>';
+          + (j === 0 ? '<td class="ai-pt-ph" rowspan="' + ex.length + '"><span title="' + escHtml(ph.name || '') + '">' + lab + '</span>'
+            + (blockPhaseMeta(ph) ? '<span class="ai-pt-x">' + escHtml(blockPhaseMeta(ph)) + '</span>' : '') + '</td>' : '')
+          + '<td class="ai-pt-n" data-i18n-skip>' + (x.group ? '<b>' + escHtml(x.group) + '</b> ' : '') + (Number(x.minute) > 0 ? '<b>' + escHtml(T('Phút ' + x.minute)) + '</b> ' : '') + escHtml(x.name)
+            + (x.regression ? '<span class="ai-pt-x">' + escHtml(T('dễ hơn') + ': ' + x.regression) + '</span>' : '') + '</td>'
+          + '<td class="ai-pt-sr" data-i18n-skip>' + escHtml(x.setsReps || '—')
+            + ((x.intensity || x.rest) ? '<span class="ai-pt-x">' + escHtml([x.intensity, x.rest ? T('nghỉ') + ' ' + x.rest : ''].filter(Boolean).join(' · ')) + '</span>' : '') + '</td></tr>';
       }).join('');
     }).join('');
     return '<div class="ai-pg">'
       + '<div class="ai-pg-h"><b>' + escHtml(k.replace(/^Session/, 'Buổi ')) + '</b>' + (d.label ? '<span data-i18n-skip> · ' + escHtml(d.label) + '</span>' : '') + '</div>'
       + (d.focus ? '<div class="ai-pg-f" data-i18n-skip>' + escHtml(d.focus) + '</div>' : '')
+      + (blockTotals(d) ? '<div class="ai-pg-f">' + escHtml(T('Tổng ' + blockTotals(d).sum + ' phút')) + (blockTotals(d).target ? ' / ' + escHtml(T('buổi ' + blockTotals(d).target + ' phút')) : '') + '</div>' : '')
+      + (Array.isArray(d.coachNotes) && d.coachNotes.length ? '<ul class="ai-pg-n" data-i18n-skip>' + d.coachNotes.map((n) => '<li>' + escHtml(n) + '</li>').join('') + '</ul>' : '')
       + '<table class="ai-pt"><thead><tr><th>Pha</th><th>Bài</th><th>Set × Rep</th></tr></thead><tbody>' + rows + '</tbody></table>'
       + '</div>';
   }).join('') + '<div class="ai-pg-tip">Bấm vào một bài để hỏi về bài đó.</div>';
@@ -10334,9 +10399,8 @@ function aiPaint() {
   if (!log) return;
   if (_aiForm === 'ready') { log.innerHTML = _aiReadyForm(); log.scrollTop = 0; return; }
   if (_aiForm === 'edit') { log.innerHTML = _aiEditForm(); log.scrollTop = 0; return; }
-  if (_aiForm && !_aiMsgs.length) {
-    log.innerHTML = _aiForm === 'group' ? _aiGroupForm() : _aiNewClientForm(); log.scrollTop = 0; return;
-  }
+  if (_aiForm === 'group') { log.innerHTML = _aiGroupForm(); log.scrollTop = 0; return; }
+  if (_aiForm && !_aiMsgs.length) { log.innerHTML = _aiNewClientForm(); log.scrollTop = 0; return; }
   if (_aiMode === 'self' && !_aiMsgs.length) {
     log.innerHTML = '<div class="ai-hi">'
       + '<p>Hỏi mình về <b>giáo án của bạn</b>: vì sao tập bài này, làm sao cho đúng kỹ thuật, nên tăng tạ chưa…</p>'
@@ -10356,6 +10420,9 @@ function aiPaint() {
     log.innerHTML = '<div class="ai-hi">'
       + '<p>Hỏi về <b>' + nm + '</b>. Tao đọc hồ sơ, giáo án, mức tạ và lịch sử tập của khách này trước khi trả lời.</p>'
       + '<p class="ai-hi-note">Luồng chat này được <b>lưu lại</b> — mở lại vẫn còn. Chỉ coach của khách (và admin) xem được, khách không thấy.</p>'
+      + (activeClient.isGroup ? '<button type="button" class="ai-eg ai-eg-main" onclick="aiFormOpen(\'group\')">'
+        + '<span class="ai-eg-t">Soạn 1 buổi cho lớp này</span>'
+        + '<span class="ai-eg-s">Buổi mới hoặc làm lại một buổi — các buổi khác giữ nguyên</span></button>' : '')
       + '<button type="button" class="ai-eg ai-eg-main" onclick="aiFormOpen(\'ready\')">'
         + '<span class="ai-eg-t">Hôm nay khách không khoẻ — chỉnh buổi</span>'
         + '<span class="ai-eg-s">Ngủ kém, mệt, ốm, đau ở đâu… → bảng chỉnh buổi hôm nay</span></button>'
@@ -10380,8 +10447,8 @@ function aiPaint() {
         + '<span class="ai-eg-t">Soạn giáo án cho khách mới</span>'
         + '<span class="ai-eg-s">Điền thông tin khách, không cần gõ prompt</span></button>'
       + '<button type="button" class="ai-eg ai-eg-main" onclick="aiFormOpen(\'group\')">'
-        + '<span class="ai-eg-t">Soạn giáo án lớp nhóm</span>'
-        + '<span class="ai-eg-s">HYROX · Strength nhóm nhỏ · Circuit — điền số người, dụng cụ</span></button>'
+        + '<span class="ai-eg-t">Lớp nhóm mới — soạn buổi đầu</span>'
+        + '<span class="ai-eg-s">Mỗi lần 1 buổi · HYROX · Strength nhóm nhỏ · Circuit</span></button>'
       + ['Giáo án của Kem có hợp trình độ không',
           'Khách nào lâu chưa tập nhất',
           'Gợi ý bài thay cho Romanian Deadlift']
@@ -10613,81 +10680,118 @@ const _AI_GF_PHASES = [['base', 'Nền — tuần 1–4 (kỹ thuật, tăng qu�
   ['peak', 'Mô phỏng thi — tuần 9–10'], ['taper', 'Giảm tải trước giải — tuần 11–12'], ['none', 'Không có giải — duy trì']];
 const _AI_GF_RUN = [['outdoor', 'Chạy ngoài trời / sân'], ['treadmill', 'Máy chạy (ghi số máy ở dụng cụ)'],
   ['none', 'Không có chỗ chạy — thay bằng Row / Bike / SkiErg']];
-function _aiGroupForm() {
+/** Loại buổi của lớp Hybrid (GROUP_METHOD) — coach chọn mỗi lệnh. */
+const _AI_GF_TYPES = ['Compromised', 'Strength Endurance', 'Engine', 'Foundation', 'Race Sim', 'Partner'];
+/** Lớp đang mở ở chế độ theo khách → soạn 1 buổi cho lớp đó; không thì tạo lớp mới (1 buổi). */
+function _aiGroupClass() {
+  return (typeof _aiMode !== 'undefined' && _aiMode === 'client' && activeClient && activeClient.isGroup) ? activeClient : null;
+}
+/** Khoá trống kế tiếp của lớp (SessionA…G); đủ 7 buổi → null. */
+function _aiNextKey(prog) {
+  for (let i = 0; i < 7; i++) { const k = 'Session' + String.fromCharCode(65 + i); if (!(prog || {})[k]) return k; }
+  return null;
+}
+function _aiGroupForm(cls) {
+  if (cls === undefined) cls = _aiGroupClass();
   const f = (label, ctrl, wide) => '<label class="ai-nf-f' + (wide ? ' wide' : '') + '">'
     + '<span>' + label + '</span>' + ctrl + '</label>';
   const opt = (arr, sel) => arr.map((v) => '<option' + (v === sel ? ' selected' : '') + '>' + escHtml(v) + '</option>').join('');
+  const dur0 = cls && cls.durationMin ? cls.durationMin + ' phút' : '60 phút';
+  const durs = ['30 phút', '45 phút', '50 phút', '60 phút', '75 phút'];
+  if (cls && !durs.includes(dur0)) durs.push(dur0);
+  const hybrid = cls ? cls.groupFormat === 'hyrox' : true;
+  let head, slot = '';
+  if (cls) {
+    const prog = cls.program || {}, next = _aiNextKey(prog);
+    const keys = Object.keys(prog).sort();
+    const opts = (next ? ['<option value="' + next + '">Buổi mới (' + next.replace('Session', 'Buổi ') + ')</option>'] : [])
+      .concat(keys.map((k) => '<option value="' + k + '">Làm lại ' + escHtml(k.replace('Session', 'Buổi ')) + (prog[k] && prog[k].label ? ' · ' + escHtml(prog[k].label) : '') + '</option>'));
+    head = '<input type="hidden" name="cid" value="' + escHtml(cls.id) + '">'
+      + '<div class="ai-nf-h">Soạn 1 buổi cho ' + escHtml(cls.name || cls.id) + '</div>'
+      + '<p class="ai-nf-sub">Mỗi lần soạn ĐÚNG 1 buổi — các buổi khác của lớp giữ nguyên.' + (next ? '' : ' Lớp đã đủ 7 buổi: chọn buổi để làm lại.') + '</p>';
+    slot = f('Buổi *', '<select name="slot">' + opts.join('') + '</select>', true);
+  } else {
+    head = '<div class="ai-nf-h">Lớp nhóm mới · buổi đầu tiên</div>'
+      + '<p class="ai-nf-sub">Một lớp = một hồ sơ. Mỗi lần soạn ĐÚNG 1 buổi — buổi sau soạn tiếp trong luồng của lớp. Dụng cụ ghi kèm SỐ LƯỢNG để chia trạm.</p>';
+  }
   return '<form class="ai-nf" id="ai-nf" onsubmit="aiFormSend(event)" novalidate>'
-    + '<input type="hidden" name="kind" value="group">'
-    + '<div class="ai-nf-h">Giáo án lớp nhóm</div>'
-    + '<p class="ai-nf-sub">Một lớp = một hồ sơ trong app. Dụng cụ ghi kèm SỐ LƯỢNG để trợ lý chia trạm.</p>'
+    + '<input type="hidden" name="kind" value="group">' + head
     + '<div class="ai-nf-g">'
-      + f('Tên lớp *', '<input name="name" required autocomplete="off" placeholder="VD: HYROX sáng T3-T5">', true)
-      + f('Kiểu lớp *', '<select name="format">' + _AI_GF_FORMATS.map(([v, t]) => '<option value="' + v + '">' + escHtml(t) + '</option>').join('') + '</select>', true)
-      + f('Số người / buổi', '<input name="size" type="number" inputmode="numeric" min="2" max="40" placeholder="VD: 10">')
-      + f('Mỗi buổi', '<select name="dur">' + opt(['45 phút', '60 phút', '75 phút'], '60 phút') + '</select>')
-      + f('Buổi / tuần', '<select name="spw">' + opt(['1', '2', '3', '4', '5'], '2') + '</select>')
-      + f('Trình độ', '<select name="level">' + opt(['Mixed', 'Beginner', 'Intermediate', 'Advanced'], 'Mixed') + '</select>')
-      + f('Giai đoạn (lớp Hybrid)', '<select name="phase">' + _AI_GF_PHASES.map(([v, t]) => '<option value="' + v + '"' + (v === 'none' ? ' selected' : '') + '>' + escHtml(t) + '</option>').join('') + '</select>', true)
-      + f('Chỗ chạy (lớp Hybrid)', '<select name="run">' + _AI_GF_RUN.map(([v, t]) => '<option value="' + v + '">' + escHtml(t) + '</option>').join('') + '</select>', true)
-      + f('Dụng cụ có sẵn *', '<textarea name="equipment" rows="3" required placeholder="VD: 3 SkiErg, 2 Row, 1 sled, 10 cặp tạ đơn 5–20 kg, 8 wall ball 6/9 kg, 6 KB 12–24 kg"></textarea>', true)
-      + f('Mục tiêu lớp', '<textarea name="goal" rows="2" placeholder="VD: chuẩn bị giải HYROX tháng 12, thể lực chung"></textarea>', true)
-      + f('Ghi chú / hạn chế', '<textarea name="notes" rows="2" placeholder="VD: phòng không có chỗ chạy — dùng máy chạy; nhiều học viên đau gối"></textarea>', true)
+      + (cls ? slot
+        : f('Tên lớp *', '<input name="name" required autocomplete="off" placeholder="VD: HYROX sáng T3-T5">', true)
+          + f('Kiểu lớp *', '<select name="format">' + _AI_GF_FORMATS.map(([v, t]) => '<option value="' + v + '">' + escHtml(t) + '</option>').join('') + '</select>', true))
+      + f('Kiểu buổi này', '<input name="stype" autocomplete="off" placeholder="VD: Strength + Interval · Compromised · Engine">', true)
+      + f('Số người', '<input name="size" type="number" inputmode="numeric" min="2" max="40" placeholder="VD: 10"' + (cls && cls.groupSize ? ' value="' + escHtml(cls.groupSize) + '"' : '') + '>')
+      + f('Độ dài buổi', '<select name="dur">' + opt(durs, dur0) + '</select>')
+      + f('Trình độ', '<select name="level">' + opt(['Mixed', 'Phổ thông', 'Beginner', 'Intermediate', 'Advanced'], (cls && cls.level) || 'Mixed') + '</select>', true)
+      + (hybrid ? f('Giai đoạn (lớp Hybrid)', '<select name="phase">' + _AI_GF_PHASES.map(([v, t]) => '<option value="' + v + '"' + (v === 'none' ? ' selected' : '') + '>' + escHtml(t) + '</option>').join('') + '</select>', true)
+        + f('Chỗ chạy (lớp Hybrid)', '<select name="run">' + _AI_GF_RUN.map(([v, t]) => '<option value="' + v + '">' + escHtml(t) + '</option>').join('') + '</select>', true) : '')
+      + f('Dụng cụ có sẵn *', '<textarea name="equipment" rows="3" required placeholder="VD: 3 SkiErg, 2 Row, 1 sled, 10 cặp tạ đơn 5–20 kg, 8 wall ball 6/9 kg, 6 KB 12–24 kg">' + (cls ? escHtml(cls.equipment || '') : '') + '</textarea>', true)
+      + (cls ? '' : f('Mục tiêu lớp', '<textarea name="goal" rows="2" placeholder="VD: chuẩn bị giải HYROX tháng 12, thể lực chung"></textarea>', true))
+      + f(cls ? 'Điều chỉnh cho buổi này' : 'Ghi chú / hạn chế', '<textarea name="notes" rows="3" placeholder="' + (cls ? 'VD: buổi trước EMOM quá nặng, giảm còn 3 vòng; tuần này ưu tiên kéo; 2 người đau gối' : 'VD: phòng không có chỗ chạy — dùng máy chạy; nhiều học viên đau gối') + '"></textarea>', true)
     + '</div>'
     + '<div class="ai-nf-err" id="ai-nf-err" role="alert"></div>'
     + '<div class="ai-nf-btns">'
       + '<button type="button" class="ai-cf-cancel" onclick="aiFormClose()">Huỷ</button>'
-      + '<button type="submit" class="ai-cf-yes">Soạn giáo án lớp</button>'
+      + '<button type="submit" class="ai-cf-yes">Soạn 1 buổi</button>'
     + '</div></form>';
 }
 
-/** Dữ liệu form lớp -> { prompt, show } hoặc { error }. Không đụng DOM, test được. */
-function aiBuildGroupPrompt(d) {
+/**
+ * Dữ liệu form lớp -> { prompt, show } hoặc { error }. Không đụng DOM, test được.
+ * MỖI LỆNH ĐÚNG 1 BUỔI (2026-11-12): cls = lớp đang có → propose_program một khoá; không có → tạo lớp với SessionA.
+ */
+function aiBuildGroupPrompt(d, cls) {
   const v = (k) => String(d[k] == null ? '' : d[k]).trim();
-  const name = v('name'), fmt = v('format'), equip = v('equipment');
+  const fmt = cls ? (cls.groupFormat || 'circuit') : v('format');
+  const name = cls ? (cls.name || cls.id) : v('name'), equip = v('equipment') || (cls ? String(cls.equipment || '').trim() : '');
   if (!name) return { error: 'Thiếu tên lớp.' };
   const F = Object.fromEntries(_AI_GF_FORMATS);
   if (!F[fmt]) return { error: 'Chọn kiểu lớp.' };
   if (!equip) return { error: 'Ghi dụng cụ có sẵn (kèm số lượng) để trợ lý chia trạm.' };
-  const spw = Math.min(5, Math.max(1, parseInt(v('spw'), 10) || 2));
+  let key = 'SessionA';
+  if (cls) {
+    key = v('slot') || _aiNextKey(cls.program || {});
+    if (!/^Session[A-G]$/.test(key || '')) return { error: 'Lớp đã đủ 7 buổi — chọn một buổi để làm lại.' };
+  }
+  const redo = !!(cls && (cls.program || {})[key]);
   const size = parseInt(v('size'), 10);
   const dur = parseInt(v('dur'), 10) || 60;
-  const keys = Array.from({ length: spw }, (_, i) => 'Session' + String.fromCharCode(65 + i)).join(', ');
+  const stype = v('stype');
   const info = [
-    ['Tên lớp', name],
+    ['Lớp', name + (cls ? ' (id ' + cls.id + ')' : '')],
     ['Kiểu lớp', F[fmt] + ' (groupFormat: ' + fmt + ')'],
-    ['Số người mỗi buổi', size > 0 ? String(size) : 'chưa rõ — giả định 8–10 và nói ra'],
-    ['Thời lượng', dur + ' phút'],
-    ['Số buổi/tuần', String(spw)],
+    ['Buổi soạn', key + (redo ? ' — LÀM LẠI buổi đang có' : ' — buổi MỚI')],
+    ['Kiểu buổi', stype || (fmt === 'hyrox' ? 'chưa nói — chọn loại khác buổi gần nhất của lớp' : 'chưa nói — tự chọn hợp lớp')],
+    ['Số người', size > 0 ? String(size) : 'chưa rõ — giả định 8–10 và nói ra'],
+    ['Độ dài buổi', dur + ' phút'],
     ['Trình độ', v('level') || 'Mixed'],
     ['Dụng cụ', equip],
-    ['Mục tiêu', v('goal')],
-    ['Ghi chú / hạn chế', v('notes')],
+    ['Mục tiêu lớp', v('goal')],
+    [cls ? 'Điều chỉnh cho buổi này' : 'Ghi chú / hạn chế', v('notes')],
   ].filter(([, x]) => x).map(([k, x]) => '- ' + k + ': ' + x).join('\n');
   const hybrid = fmt === 'hyrox';
   const P = Object.fromEntries(_AI_GF_PHASES), RN = Object.fromEntries(_AI_GF_RUN);
-  // Loại buổi theo số buổi/tuần — đúng bảng "CHỌN LOẠI BUỔI" trong GROUP_METHOD.
-  const TYPES = ['Compromised', 'Strength Endurance', 'Engine', 'Foundation', 'Partner'].slice(0, spw);
-  if (hybrid && v('phase') === 'peak' && spw >= 2) TYPES[spw - 1] = 'Race Sim';
   const rules = [
-    'Soạn giáo án LỚP NHÓM ' + spw + ' buổi/tuần theo mục LỚP NHÓM trong chỉ dẫn. Khoá buổi: ' + keys + '.',
+    'Soạn ĐÚNG 1 BUỔI (khoá ' + key + ') theo mục LỚP NHÓM — KHÔNG soạn buổi nào khác, KHÔNG đụng các buổi khác của lớp.',
+    'Thiết kế theo BLOCK có đồng hồ: buổi có durationMin ' + dur + ', level, coachNotes (chuyển block, scale xuống / lên); mỗi pha có durationMin, format, rounds (EMOM/circuit), notes; '
+      + 'bài có intensity (RPE), rest, group (B1/B2 cho superset), minute (EMOM), regression. Tổng durationMin các pha = ' + dur + ' phút.',
+    'Interval đặt trước tạ thì phải có block recovery 2–3\' xen giữa và tạ sau đó RPE ≤ 7. Cân bằng squat/hinge, push, pull, carry.',
     ...(hybrid ? [
-      'Lớp HYBRID: theo mục LỚP HYBRID / HYROX. Loại buổi: ' + TYPES.map((t, i) => 'Session' + String.fromCharCode(65 + i) + ' = ' + t).join(', ')
-        + '. Label mỗi buổi BẮT ĐẦU bằng đúng loại đó ("' + TYPES[0] + ' — …").',
+      'Lớp HYBRID: theo mục LỚP HYBRID / HYROX — label BẮT ĐẦU bằng loại buổi' + (stype ? ' ("' + stype + ' — …")' : '') + '.',
       'Giai đoạn block: ' + (P[v('phase')] || P.none) + '. Chỗ chạy: ' + (RN[v('run')] || RN.outdoor)
         + (v('run') === 'none' ? ' — bài thay chạy ghi kèm "(thay chạy)" trong tên.' : '.'),
-      'Buổi Compromised / Engine / Race Sim: tổng thời gian chạy NHIỀU HƠN tổng thời gian ở trạm (server kiểm). Chạy theo thời gian, không theo mét.',
-      'Trong tóm tắt nhắc bài test mỗi 4 tuần (1 km → 50 wall ball → 1 km) và cách thay dụng cụ đang thiếu.',
     ] : []),
-    'Chia trạm / theo cặp / theo lượt dựa đúng SỐ dụng cụ ở trên và số người; mỗi khối chạy bằng một đồng hồ.',
-    'Mỗi bài chính có 3 mức Dễ / Chuẩn / Khó trong cue. Tổng thời gian khớp ' + dur + ' phút, tính cả chuyển trạm.',
-    'Ghi một dòng Setup (dụng cụ chuẩn bị) cho mỗi buổi — không chép từng bài, thẻ duyệt tự vẽ bảng — rồi gọi propose_new_client MỘT lần với isGroup: true, '
-      + 'groupFormat "' + fmt + '"' + (size > 0 ? ', groupSize ' + size : '') + ', durationMin ' + dur
-      + ', equipment như trên, level "' + (v('level') || 'Mixed') + '", KHÔNG email, kèm giáo án.',
+    'Chia trạm / theo cặp / theo lượt dựa đúng SỐ dụng cụ và số người. Mỗi bài chính có 3 mức Dễ / Chuẩn / Khó trong cue.',
+    cls
+      ? (redo ? 'Gọi get_client + get_program của lớp \'' + cls.id + '\' trước (xem buổi cũ để điều chỉnh), ' : 'Gọi get_client + get_program của lớp \'' + cls.id + '\' trước (đừng lặp buổi gần nhất), ')
+        + 'rồi propose_program clientId "' + cls.id + '" với program CHỈ có ' + key + ', sessionMinutes ' + dur + '.'
+      : 'Gọi propose_new_client MỘT lần với isGroup: true, groupFormat "' + fmt + '"' + (size > 0 ? ', groupSize ' + size : '') + ', durationMin ' + dur
+        + ', equipment như trên, level "' + (v('level') || 'Mixed') + '", KHÔNG email, program CHỈ có SessionA.',
   ];
-  const prompt = 'Lớp nhóm mới:\n' + info + '\n\nYêu cầu:\n' + rules.map((r, i) => (i + 1) + '. ' + r).join('\n');
-  const show = 'Soạn giáo án lớp nhóm: ' + name + ' · ' + F[fmt] + (size > 0 ? ' · ' + size + ' người' : '')
-    + ' · ' + spw + ' buổi/tuần' + (hybrid && v('phase') && v('phase') !== 'none' ? ' · ' + (P[v('phase')] || '').split(' — ')[0] : '');
+  const prompt = (cls ? 'Soạn 1 buổi cho lớp nhóm:\n' : 'Lớp nhóm mới — buổi đầu tiên:\n') + info + '\n\nYêu cầu:\n' + rules.map((r, i) => (i + 1) + '. ' + r).join('\n');
+  const show = (cls ? (redo ? 'Làm lại ' : 'Soạn ') + key.replace('Session', 'Buổi ') + ' cho ' + name : 'Lớp nhóm mới: ' + name + ' · ' + F[fmt])
+    + (stype ? ' · ' + stype : '') + ' · ' + dur + "'" + (size > 0 ? ' · ' + size + ' người' : '');
   return { prompt, show, email: '' };
 }
 
@@ -10883,7 +10987,7 @@ function aiFormSend(ev) {
   const form = document.getElementById('ai-nf');
   if (!form) return;
   const data = Object.fromEntries(new FormData(form).entries());
-  const r = data.kind === 'group' ? aiBuildGroupPrompt(data)
+  const r = data.kind === 'group' ? aiBuildGroupPrompt(data, data.cid ? (clientsData.find((c) => c.id === data.cid) || null) : null)
     : data.kind === 'ready' ? aiBuildReadyPrompt(data, _aiMode === 'self' ? 'mình' : ((activeClient && (activeClient.name || activeClient.id)) || 'khách'))
     : data.kind === 'edit' ? aiBuildEditPrompt(data, (activeClient && (activeClient.name || activeClient.id)) || 'khách', Object.keys(getProgram() || {}).length)
     : aiBuildProgramPrompt(data);
@@ -17851,6 +17955,19 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   background: rgba(143,219,255,.06); color: rgba(255,255,255,.86); font-size: 13.5px; line-height: 1.45; }
 .ai-cf-warn{ margin: 6px 0 8px; padding: 8px 10px; border-radius: 10px; background: rgba(255,82,82,.14);
   border: 1px solid rgba(255,82,82,.55); color: #FFB3B3; font-size: 13px; font-weight: 700; line-height: 1.35; }
+.blk-meta{ font-size: 11.5px; font-weight: 800; letter-spacing: .04em; color: #8FDBFF; }
+.blk-note{ margin: -6px 2px 10px; font-size: 13px; line-height: 1.4; color: rgba(255,255,255,.72); }
+.blk-grp{ display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: 6px; background: rgba(143,219,255,.16);
+  color: #8FDBFF; font-size: 11px; font-weight: 800; vertical-align: 1px; }
+.blk-ex{ margin-top: 3px; font-size: 12.5px; line-height: 1.35; color: rgba(255,255,255,.66); }
+.blk-sum{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0 0 12px; padding: 10px 14px; border-radius: 14px;
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12); font-size: 13px; color: rgba(255,255,255,.75); }
+.blk-sum b{ color: #fff; font-weight: 800; }
+.blk-sum.off{ background: rgba(255,82,82,.12); border-color: rgba(255,82,82,.5); color: #FFB3B3; }
+.blk-notes ul, .ai-pg-n{ margin: 0; padding-left: 18px; }
+.blk-notes li, .ai-pg-n li{ margin: 2px 0; }
+.ai-pg-n{ margin: 4px 0 8px; font-size: 12.5px; line-height: 1.4; }
+.ai-pt-x{ display: block; margin-top: 2px; font-size: 11.5px; font-weight: 600; opacity: .72; }
 .day-focus-k{ display: block; margin-bottom: 4px; color: #8FDBFF; font-size: 10.5px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
 .modal-why{ color: rgba(255,255,255,.88); line-height: 1.45; }
 #cdash-page .cd-goto{flex:none;min-height:46px;padding:0 20px;border-radius:999px;border:0;background:var(--accent-strong,#1C90FF);color:var(--on-accent,#161111);font:800 14px 'Figtree',sans-serif;cursor:pointer}
@@ -20034,6 +20151,15 @@ Object.assign(I18N_VI_EN, {
   'cần chú ý': 'needs attention', 'Chi tiết, tempo, video': 'Details, tempo, video',
   // Dashboard coach
   'Bảng điều khiển': 'Dashboard', 'Tải lại dữ liệu cũ': 'Reload older data', 'Cài Pulse lên máy': 'Install Pulse',
+  // Lớp nhóm — mỗi lệnh 1 buổi, block có đồng hồ
+  'Lớp nhóm mới — soạn buổi đầu': 'New group class — first session', 'Mỗi lần 1 buổi · HYROX · Strength nhóm nhỏ · Circuit': 'One session at a time · HYROX · Small-group strength · Circuit',
+  'Soạn 1 buổi cho lớp này': 'Design one session for this class', 'Buổi mới hoặc làm lại một buổi — các buổi khác giữ nguyên': 'A new session or redo one — the others stay as they are',
+  'Lớp nhóm mới · buổi đầu tiên': 'New group class · first session', 'Buổi *': 'Session *', 'Kiểu buổi này': 'This session type',
+  'Độ dài buổi': 'Session length', 'Điều chỉnh cho buổi này': 'Adjustments for this session', 'Soạn 1 buổi': 'Design 1 session',
+  'Mỗi lần soạn ĐÚNG 1 buổi — các buổi khác của lớp giữ nguyên.': 'Designs exactly 1 session — the class\'s other sessions stay as they are.',
+  'Một lớp = một hồ sơ. Mỗi lần soạn ĐÚNG 1 buổi — buổi sau soạn tiếp trong luồng của lớp. Dụng cụ ghi kèm SỐ LƯỢNG để chia trạm.': 'One class = one profile. Each run designs exactly 1 session — design the next one from the class thread. List equipment WITH quantities so stations can be split.',
+  'Ghi chú coach': 'Coach notes', 'nghỉ': 'rest', 'dễ hơn': 'easier', 'Set thẳng': 'Straight sets',
+  'Lớp đã đủ 7 buổi — chọn một buổi để làm lại.': 'This class already has 7 sessions — pick one to redo.',
   // Chat coach ↔ khách
   'Hộp thư': 'Inbox', 'Tin nhắn': 'Messages', 'Chọn một khách để nhắn.': 'Pick a client to message.',
   'Trả lời thường trong ngày': 'Usually replies within the day', 'Bạn': 'You', 'Chưa đọc': 'Unread',
@@ -20159,6 +20285,8 @@ const I18N_FULL = {
   'Tập {0} · {1}/{2} bài · {3} kg': 'Trained {0} · {1}/{2} exercises · {3} kg', 'Tập {0} · {1}/{2} bài': 'Trained {0} · {1}/{2} exercises',
   '{0} · {1}/{2} bài · {3} kg': '{0} · {1}/{2} exercises · {3} kg', '{0} · {1}/{2} bài': '{0} · {1}/{2} exercises',
   'Buổi {0}': 'Session {0}', 'Buổi {0} · {1}': 'Session {0} · {1}',
+  'Phút {0#}': 'Min {0}', '{0#} vòng': '{0} rounds', 'Tổng {0#} phút': 'Total {0} min', 'buổi {0#} phút': 'session {0} min',
+  '{0#} block chưa ghi phút': '{0} blocks without minutes', 'lệch {0#} phút': 'off by {0} min',
   'Nhắn cho {0}…': 'Message {0}…', 'Chat · {0#} tin chưa đọc': 'Chat · {0} unread',
   '{0#} cần chú ý': '{0} need attention', '{0#} chưa log': '{0} to log', 'Hôm nay · {0}': 'Today · {0}', '{0#} khách': '{0} clients',
   'Xem cả {0#} khách trên Dashboard': 'See all {0} clients on Dashboard', 'Buổi {0} · chưa log': 'Session {0} · not logged',
