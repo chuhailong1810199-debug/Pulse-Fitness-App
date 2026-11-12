@@ -3736,15 +3736,16 @@ function cdDetailHTML(c, keys, isCoach) {
  * chưa tích, chỉ bài đã tích mới vào volume/lịch sử.
  *
  * finishWorkout chỉ biết activeDay, nên đổi sang buổi đó trước (setDay nạp lại
- * tạ từ sessionLoads — gồm cả số vừa gõ ở dashboard). Dashboard không có ô tích:
- * chưa bài nào được tích thì hỏi một lần rồi tính cả buổi là đã tập.
+ * tạ từ sessionLoads — gồm cả số vừa gõ ở dashboard).
+ *
+ * Bấm Nộp ở dashboard = CẢ BUỔI đã tập xong (coach chốt 2026-11-12): tích hết mọi
+ * bài rồi nộp, không hỏi lại. Muốn nộp thiếu bài thì tích tay ở tab Workout.
  */
 var _cdSubmitting = false;
 async function cdSubmitDay(k, btn) {
   if (!activeClient || _cdSubmitting) return;
   var d = getProgram()[k];
   if (!d) return;
-  var name = cdDayName(activeClient, k, Math.max(0, cdKeys(activeClient).indexOf(k)));
   _cdSubmitting = true;
   if (btn) { btn.disabled = true; btn.textContent = T('Đang nộp…'); }
   try {
@@ -3752,13 +3753,7 @@ async function cdSubmitDay(k, btn) {
     var st = exerciseState[activeClient.id] || (exerciseState[activeClient.id] = {});
     var all = [];
     (d.phases || []).forEach(function (ph, pi) { (ph.exercises || []).forEach(function (_, ei) { all.push(activeClient.id + '_' + k + '_' + pi + '_' + ei); }); });
-    var ticked = all.filter(function (x) { return st[x]; }).length;
-    if (!_sessionLogged) {
-      if (!ticked) {
-        if (!confirm(T('Nộp ' + name + '? Chưa bài nào được đánh dấu xong — OK sẽ tính cả ' + all.length + ' bài là đã tập.'))) return;
-        all.forEach(function (x) { st[x] = true; });
-      } else if (!confirm(T('Nộp ' + name + ' với ' + ticked + '/' + all.length + ' bài đã đánh dấu xong?'))) return;
-    }
+    if (!_sessionLogged) all.forEach(function (x) { st[x] = true; });
     await (window._finishWorkout || finishWorkout)();
     await loadClientDash(true);
   } catch (e) {
@@ -20167,8 +20162,6 @@ const I18N_FULL = {
   'Nhắn cho {0}…': 'Message {0}…', 'Chat · {0#} tin chưa đọc': 'Chat · {0} unread',
   '{0#} cần chú ý': '{0} need attention', '{0#} chưa log': '{0} to log', 'Hôm nay · {0}': 'Today · {0}', '{0#} khách': '{0} clients',
   'Xem cả {0#} khách trên Dashboard': 'See all {0} clients on Dashboard', 'Buổi {0} · chưa log': 'Session {0} · not logged',
-  'Nộp {0}? Chưa bài nào được đánh dấu xong — OK sẽ tính cả {1#} bài là đã tập.': 'Submit {0}? No exercise is marked done yet — OK counts all {1} exercises as done.',
-  'Nộp {0} với {1#}/{2#} bài đã đánh dấu xong?': 'Submit {0} with {1}/{2} exercises marked done?',
   '{0}, xem bài và nhập tạ': '{0}, view exercises & log weights', '{0}, xem chi tiết': '{0}, view details',
   'Mức tạ {0}': 'Weight for {0}', 'Ghi lại {0}, {1} kcal': 'Log again: {0}, {1} kcal',
   'Chưa tập {0#} ngày': 'No training for {0} days', 'Quá hạn đo InBody {0#} tuần': 'InBody overdue by {0} weeks',
