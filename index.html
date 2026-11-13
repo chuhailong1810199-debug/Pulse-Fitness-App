@@ -816,6 +816,9 @@ async function loadApp() {
     if (dashTab) dashTab.style.display = '';
     const grpTab = document.getElementById('groups-nav-tab');   // tab Lớp nhóm — dashboard riêng của lớp
     if (grpTab) grpTab.style.display = '';
+    // Work list: buổi tập Garmin của CHÍNH coach — chỉ hiện khi coach có hồ sơ tập của mình.
+    const wlTab = document.getElementById('worklist-nav-tab');
+    if (wlTab && clientsData.some((c) => c.id === COACH_HOME_CLIENT)) wlTab.style.display = '';
     if (userIsAdmin) loadCoachNames();       // tên coach cho biển "đang quan sát"
     afterClientChange();
     // Youth là công cụ của coach: khách không cần thấy pin test này.
@@ -2379,6 +2382,234 @@ async function dshOpenLog(id) {
 // mà không phải vào Dashboard. Thay nút trợ lý tròn (#ai-fab) khi đang hiện.
 // Số liệu đọc từ clientsData (miễn phí) + MỘT lượt đọc bookings hôm nay.
 // ═══════════════════════════════════════════════════════════════════════════
+// ── TAB WORK LIST (2026-11-13) — lịch sử buổi tập từ đồng hồ Garmin của coach ─────────────────
+//
+// Thiết kế: claude.ai/artifact/EAzFcgtXxCcwkf8Pdsb5ua. Dữ liệu do scripts/garmin (python-garminconnect,
+// KHÔNG chính thức) đồng bộ TRÊN MÁY coach vào clients/{COACH_HOME_CLIENT}/activity/{ngày}.garmin.workouts;
+// giờ đồng bộ ở clients/{id}.garminSync. Tab chỉ ĐỌC. Web không chạy được script trên máy → nút "Đồng bộ"
+// hiện lệnh để copy, không giả vờ đồng bộ.
+const WL_SPORT = {
+  run: { name: 'Chạy', color: '#FFB86B', abbr: 'RUN' },
+  strength: { name: 'Strength', color: '#C9B8FF', abbr: 'STR' },
+  hiit: { name: 'HIIT', color: '#F2D16B', abbr: 'HIT' },
+  bike: { name: 'Đạp xe', color: '#9FD9B4', abbr: 'BIK' },
+  other: { name: 'Khác', color: '#7FB2FF', abbr: 'ETC' },
+};
+const WL_ZONE_COLORS = ['#8A8580', '#7FB2FF', '#9FD9B4', '#FFB86B', '#EE5A4F'];
+const WL_SYNC_CMD = 'scripts/garmin/.venv/bin/python scripts/garmin/sync.py && node scripts/garmin/write.js --write';
+let _wl = { items: null, err: null, loading: false, sport: 'all', period: 30, sel: null, view: 'list', showCmd: false, weeks: 4 };
+
+/** typeKey của Garmin → nhóm màu của tab. */
+function wlCat(sport) {
+  const s = String(sport || '').toLowerCase();
+  if (/run/.test(s)) return 'run';
+  if (/strength|weight/.test(s)) return 'strength';
+  if (/hiit|cardio|boxing|crossfit|interval|bootcamp/.test(s)) return 'hiit';
+  if (/cycl|bik|spin/.test(s)) return 'bike';
+  return 'other';
+}
+function wlClientId() { return typeof COACH_HOME_CLIENT !== 'undefined' ? COACH_HOME_CLIENT : 'longchu'; }
+function wlDur(sec) {
+  sec = Math.round(Number(sec) || 0);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return h ? h + ':' + String(m).padStart(2, '0') : m + ':' + String(s).padStart(2, '0');
+}
+function wlHM(sec) { const m = Math.round((Number(sec) || 0) / 60); return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm'; }
+function wlPace(speed) { const v = Number(speed); if (!(v > 0)) return ''; const s = Math.round(1000 / v); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+function wlLoadTone(v) {
+  v = Number(v);
+  if (!(v > 0)) return { bg: '#2C2826', fg: 'rgba(255,255,255,.6)' };
+  return v >= 150 ? { bg: 'rgba(238,90,79,.18)', fg: '#FFB3B3' } : v >= 80 ? { bg: 'rgba(255,184,107,.18)', fg: '#FFD4A3' } : { bg: 'rgba(159,217,180,.16)', fg: '#9FD9B4' };
+}
+/** "2026-11-13 06:05:12" → Date theo giờ máy (đồng hồ ghi giờ địa phương). */
+function wlDate(at) { const m = String(at || '').match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/); return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5]) : null; }
+function wlMonday(d) { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; }
+const WL_DOW = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+const WL_DOW_LONG = ['Chủ nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'];
+function wlDM(d) { return d.getDate() + '/' + (d.getMonth() + 1); }
+
+async function loadWorklist(force) {
+  if (_wl.loading || (_wl.items && !force)) { renderWorklist(); return; }
+  _wl.loading = true; _wl.err = null; renderWorklist();
+  try {
+    const cid = wlClientId();
+    // Chỉ doc ĐÃ có phần Garmin (garmin.at là chuỗi giờ ghi) — khỏi đọc cả năm doc Polar.
+    const snap = await db.collection('clients').doc(cid).collection('activity').where('garmin.at', '>', '').get();
+    const items = [];
+    snap.forEach((d) => { for (const w of ((d.data() || {}).garmin || {}).workouts || []) if (w && w.at) items.push(w); });
+    items.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    _wl.items = items;
+    const c = clientsData.find((x) => x.id === cid);
+    if (c && !c.garminSync) { const cs = await db.collection('clients').doc(cid).get().catch(() => null); if (cs && cs.exists) c.garminSync = (cs.data() || {}).garminSync || null; }
+  } catch (e) {
+    _wl.err = e.code || e.message || String(e);
+    console.warn('[worklist]', _wl.err);
+  }
+  _wl.loading = false;
+  renderWorklist();
+}
+
+function wlFiltered() {
+  const all = _wl.items || [];
+  const since = _wl.period ? Date.now() - _wl.period * 864e5 : 0;
+  const inPeriod = all.filter((w) => { const d = wlDate(w.at); return d && d.getTime() >= since; });
+  return { inPeriod, list: inPeriod.filter((w) => _wl.sport === 'all' || wlCat(w.sport) === _wl.sport) };
+}
+
+function wlSyncBadge() {
+  const s = (clientsData.find((x) => x.id === wlClientId()) || {}).garminSync;
+  const ms = s && s.at ? new Date(s.at).getTime() : 0;
+  if (!ms) return '<span class="wl-sync off">' + escHtml(T('Chưa đồng bộ Garmin')) + '</span>';
+  const d = new Date(ms), now = new Date(), hrs = (Date.now() - ms) / 3600e3;
+  const when = d.toDateString() === now.toDateString() ? T('hôm nay') : wlDM(d);
+  return '<span class="wl-sync' + (hrs > 36 ? ' stale' : '') + '"><i aria-hidden="true"></i>' + escHtml(T('Đồng bộ lúc') + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ' ' + when) + '</span>';
+}
+
+function renderWorklist() {
+  const el = document.getElementById('worklist-body');
+  if (!el) return;
+  const head = '<header class="wl-head"><div><h1>Work list</h1><p>' + escHtml(T('Mọi buổi tập từ đồng hồ Garmin')) + '</p></div>'
+    + '<div class="wl-acts">' + wlSyncBadge() + '<button type="button" class="gp-btn gp-p" onclick="_wl.showCmd=!_wl.showCmd;renderWorklist()" aria-expanded="' + _wl.showCmd + '">↻ ' + escHtml(T('Đồng bộ')) + '</button>'
+    + '<button type="button" class="gp-btn gp-s" onclick="loadWorklist(true)" aria-label="' + escHtml(T('Tải lại')) + '">' + escHtml(T('Tải lại')) + '</button></div></header>'
+    + (_wl.showCmd ? '<div class="wl-cmd"><p>' + escHtml(T('Đồng bộ chạy trên máy tính của mày (thư viện Garmin không chạy được trên web). Mở Terminal ở thư mục Fitness-app rồi chạy:')) + '</p>'
+      + '<code data-i18n-skip>' + escHtml(WL_SYNC_CMD) + '</code><div class="wl-cmd-b"><button type="button" class="gp-btn gp-s" onclick="wlCopyCmd(this)">' + escHtml(T('Copy lệnh')) + '</button>'
+      + '<span>' + escHtml(T('Hết phiên đăng nhập thì chạy trước: scripts/garmin/.venv/bin/python scripts/garmin/login.py')) + '</span></div></div>' : '');
+  if (_wl.loading && !_wl.items) { el.innerHTML = head + '<div class="gp-card wl-empty"><p>' + escHtml(T('Đang tải…')) + '</p></div>'; return; }
+  if (_wl.err) {
+    el.innerHTML = head + '<div class="gp-card wl-empty" role="alert"><h2>' + escHtml(T('Chưa tải được Work list')) + '</h2><p>' + escHtml(_wl.err === 'permission-denied'
+      ? T('Tab này đọc dữ liệu Garmin trên hồ sơ của chính mày — tài khoản này không có quyền đọc hồ sơ đó.') : T('Kiểm tra mạng rồi bấm Tải lại.')) + '</p></div>';
+    return;
+  }
+  const all = _wl.items || [];
+  if (!all.length) {
+    el.innerHTML = head + '<section class="gp-card wl-empty"><h2>' + escHtml(T('Chưa có buổi tập nào')) + '</h2><p>'
+      + escHtml(T('Buổi tập trên đồng hồ Garmin hiện ở đây sau lần đồng bộ đầu tiên — kéo về cả lịch sử cũ.')) + '</p>'
+      + '<ol class="gp-steps"><li><b>1</b>' + escHtml(T('Đăng nhập Garmin trên máy tính (login.py)')) + '</li><li><b>2</b>' + escHtml(T('Chạy lệnh đồng bộ — kéo cả lịch sử'))
+      + '</li><li><b>3</b>' + escHtml(T('Bấm Tải lại')) + '</li></ol>'
+      + '<button type="button" class="gp-btn gp-p" onclick="_wl.showCmd=true;renderWorklist()">' + escHtml(T('Xem lệnh đồng bộ')) + '</button></section>';
+    return;
+  }
+  const { inPeriod, list } = wlFiltered();
+  if (!_wl.sel || !list.some((w) => w.id === _wl.sel)) _wl.sel = list[0] ? list[0].id : null;
+  const phone = window.matchMedia('(max-width: 899px)').matches;
+  if (phone && _wl.view === 'detail' && _wl.sel) {
+    el.innerHTML = '<a class="gp-back" href="#" onclick="event.preventDefault();_wl.view=\'list\';renderWorklist()">‹ Work list</a>' + wlDetailHTML(list.find((w) => w.id === _wl.sel));
+    window.scrollTo(0, 0);
+    return;
+  }
+  const cats = Object.keys(WL_SPORT).filter((k) => inPeriod.some((w) => wlCat(w.sport) === k));
+  const chips = [['all', T('Tất cả') + ' · ' + inPeriod.length]].concat(cats.map((k) => [k, T(WL_SPORT[k].name) + ' · ' + inPeriod.filter((w) => wlCat(w.sport) === k).length]));
+  const periods = [[7, '7 ngày'], [30, '30 ngày'], [90, '3 tháng'], [0, 'Tất cả']];
+  el.innerHTML = head + wlKpis(all) + wlChart(all)
+    + '<div class="wl-filters"><div class="gp-filters" role="group" aria-label="' + escHtml(T('Lọc theo môn')) + '">'
+    + chips.map(([v, t]) => '<button type="button" class="gp-chip' + (_wl.sport === v ? ' on' : '') + '" aria-pressed="' + (_wl.sport === v) + '" onclick="_wl.sport=\'' + v + '\';renderWorklist()">' + escHtml(t) + '</button>').join('') + '</div>'
+    + '<div class="gp-seg-ctl" role="group" aria-label="' + escHtml(T('Khoảng thời gian')) + '">' + periods.map(([v, t]) =>
+      '<button type="button" class="' + (_wl.period === v ? 'on' : '') + '" aria-pressed="' + (_wl.period === v) + '" onclick="_wl.period=' + v + ';renderWorklist()">' + escHtml(T(t)) + '</button>').join('') + '</div></div>'
+    + '<div class="wl-cols"><section class="wl-list" aria-label="' + escHtml(T('Danh sách buổi tập')) + '">' + (list.length ? wlGroups(list) : '<div class="gp-card wl-empty"><p>' + escHtml(T('Không có buổi nào khớp bộ lọc.')) + '</p></div>') + '</section>'
+    + (phone || !_wl.sel ? '' : '<aside class="wl-side">' + wlDetailHTML(list.find((w) => w.id === _wl.sel)) + '</aside>') + '</div>';
+}
+
+function wlKpis(all) {
+  const mon = wlMonday(new Date()).getTime(), prevMon = mon - 7 * 864e5;
+  const sum = (from, to) => {
+    const ws = all.filter((w) => { const t = (wlDate(w.at) || 0).valueOf(); return t >= from && t < to; });
+    return { n: ws.length, sec: ws.reduce((t, w) => t + (Number(w.sec) || 0), 0), load: ws.reduce((t, w) => t + (Number(w.load) || 0), 0),
+      km: ws.filter((w) => wlCat(w.sport) === 'run').reduce((t, w) => t + (Number(w.distM) || 0), 0) / 1000 };
+  };
+  const a = sum(mon, mon + 7 * 864e5), b = sum(prevMon, mon);
+  const delta = (x, y, f) => { const d = x - y; return d === 0 ? T('bằng tuần trước') : (d > 0 ? '+' : '−') + f(Math.abs(d)) + ' ' + T('so với tuần trước'); };
+  const tile = (k, v, dl, good) => '<div class="wl-kpi"><span>' + escHtml(T(k)) + '</span><b>' + escHtml(v) + '</b><em class="' + (good == null ? '' : good ? 'up' : 'down') + '">' + escHtml(dl) + '</em></div>';
+  return '<section class="wl-kpis" aria-label="' + escHtml(T('Tuần này')) + '">'
+    + tile('Buổi tuần này', String(a.n), delta(a.n, b.n, String), a.n >= b.n)
+    + tile('Thời gian', wlHM(a.sec), delta(a.sec, b.sec, (s) => Math.round(s / 60) + ' ' + T('phút')), a.sec >= b.sec)
+    + tile('Training load', a.load ? String(Math.round(a.load)) : '—', delta(Math.round(a.load), Math.round(b.load), String), null)
+    + tile('Quãng đường chạy', a.km.toFixed(1) + ' km', delta(Math.round(a.km * 10) / 10, Math.round(b.km * 10) / 10, (x) => x.toFixed(1) + ' km'), a.km >= b.km)
+    + '</section>';
+}
+
+function wlChart(all) {
+  const mon = wlMonday(new Date()).getTime();
+  const useLoad = all.some((w) => Number(w.load) > 0);
+  const weeks = Array.from({ length: 12 }, (_, i) => {
+    const from = mon - (11 - i) * 7 * 864e5, to = from + 7 * 864e5;
+    const by = {};
+    for (const w of all) { const t = (wlDate(w.at) || 0).valueOf(); if (t >= from && t < to) { const k = wlCat(w.sport); by[k] = (by[k] || 0) + (useLoad ? Number(w.load) || 0 : (Number(w.sec) || 0) / 60); } }
+    return { from: new Date(from), by, tot: Object.values(by).reduce((a, b) => a + b, 0) };
+  });
+  const max = Math.max(1, ...weeks.map((w) => w.tot));
+  const used = Object.keys(WL_SPORT).filter((k) => weeks.some((w) => w.by[k]));
+  return '<section class="gp-card wl-chart" aria-labelledby="wl-ch-t"><div class="wl-ch-h"><h2 id="wl-ch-t">' + escHtml(T(useLoad ? 'Tải tập 12 tuần' : 'Phút tập 12 tuần')) + '</h2>'
+    + '<div class="gp-legend">' + used.map((k) => '<span><i style="background:' + WL_SPORT[k].color + '"></i>' + escHtml(T(WL_SPORT[k].name)) + '</span>').join('') + '</div></div>'
+    + '<div class="wl-bars" role="img" aria-label="' + escHtml(T('Biểu đồ cột theo tuần, 12 tuần gần nhất, chia theo môn')) + '">'
+    + weeks.map((w) => '<div class="wl-bar" title="' + escHtml(wlDM(w.from) + ': ' + Math.round(w.tot)) + '">' + used.slice().reverse().map((k) => w.by[k] ? '<i style="height:' + (w.by[k] / max * 130).toFixed(1) + 'px;background:' + WL_SPORT[k].color + '"></i>' : '').join('') + '</div>').join('')
+    + '</div><div class="wl-bar-l">' + weeks.map((w) => '<span>' + wlDM(w.from) + '</span>').join('') + '</div></section>';
+}
+
+function wlGroups(list) {
+  const mon = wlMonday(new Date()).getTime();
+  const groups = [];
+  for (const w of list) {
+    const d = wlDate(w.at); if (!d) continue;
+    const m = wlMonday(d).getTime();
+    let g = groups[groups.length - 1];
+    if (!g || g.m !== m) groups.push(g = { m, items: [] });
+    g.items.push(w);
+  }
+  const shown = groups.slice(0, _wl.weeks);
+  return shown.map((g) => {
+    const s = new Date(g.m), e = new Date(g.m + 6 * 864e5);
+    const name = g.m === mon ? T('Tuần này') : g.m === mon - 7 * 864e5 ? T('Tuần trước') : T('Tuần');
+    const sec = g.items.reduce((t, w) => t + (Number(w.sec) || 0), 0), load = g.items.reduce((t, w) => t + (Number(w.load) || 0), 0);
+    return '<div class="gp-card wl-week"><div class="wl-wh"><b>' + escHtml(name + ' · ' + s.getDate() + '–' + wlDM(e)) + '</b><span>'
+      + escHtml(T(g.items.length + ' buổi') + ' · ' + wlHM(sec) + (load ? ' · load ' + Math.round(load) : '')) + '</span></div>'
+      + g.items.map(wlRow).join('') + '</div>';
+  }).join('') + (groups.length > shown.length ? '<button type="button" class="gp-btn gp-s wl-more" onclick="_wl.weeks+=4;renderWorklist()">' + escHtml(T('Xem thêm 4 tuần trước')) + '</button>' : '');
+}
+
+function wlRow(w) {
+  const d = wlDate(w.at), cat = WL_SPORT[wlCat(w.sport)], tone = wlLoadTone(w.load);
+  const sub = [w.distM ? (w.distM / 1000).toFixed(1) + ' km' : '', wlCat(w.sport) === 'run' && wlPace(w.speed) ? wlPace(w.speed) + '/km' : '', !w.distM ? T(cat.name) : ''].filter(Boolean).join(' · ');
+  return '<button type="button" class="wl-row' + (w.id === _wl.sel ? ' on' : '') + '" aria-pressed="' + (w.id === _wl.sel) + '" onclick="wlPick(\'' + escHtml(String(w.id)).replace(/'/g, '') + '\')">'
+    + '<span class="wl-day"><b>' + escHtml(WL_DOW[d.getDay()] + ' ' + d.getDate()) + '</b><span>' + escHtml(String(w.at).slice(11, 16)) + '</span></span>'
+    + '<span class="wl-ab" aria-hidden="true" style="background:' + cat.color + '">' + cat.abbr + '</span>'
+    + '<span class="wl-nm"><b data-i18n-skip>' + escHtml(w.name || T(cat.name)) + '</b><span>' + escHtml(sub) + '</span></span>'
+    + '<span class="wl-m"><b>' + wlDur(w.sec) + '</b><span>' + escHtml(T('thời gian')) + '</span></span>'
+    + '<span class="wl-m wl-hide"><b>' + (w.hrAvg || '—') + '</b><span>' + escHtml(T('HR TB')) + '</span></span>'
+    + '<span class="wl-m wl-hide"><b>' + (w.calories || '—') + '</b><span>kcal</span></span>'
+    + '<span class="wl-load" style="background:' + tone.bg + ';color:' + tone.fg + '">' + (w.load ? Math.round(w.load) : '—') + '</span></button>';
+}
+function wlPick(id) { _wl.sel = id; if (window.matchMedia('(max-width: 899px)').matches) _wl.view = 'detail'; renderWorklist(); }
+
+function wlDetailHTML(w) {
+  if (!w) return '';
+  const d = wlDate(w.at), catK = wlCat(w.sport), cat = WL_SPORT[catK], tone = wlLoadTone(w.load);
+  const stats = [['Thời gian', wlDur(w.sec)], w.distM ? ['Quãng đường', (w.distM / 1000).toFixed(2) + ' km'] : null,
+    catK === 'run' && wlPace(w.speed) ? ['Pace TB', wlPace(w.speed) + '/km'] : null,
+    w.hrAvg ? ['HR TB / max', w.hrAvg + ' / ' + (w.hrMax || '—')] : null, w.calories ? ['Calo', w.calories + ' kcal'] : null,
+    w.load ? ['Training load', String(Math.round(w.load))] : null].filter(Boolean);
+  const zs = Array.isArray(w.zones) ? w.zones.map(Number) : null, zt = zs ? zs.reduce((a, b) => a + (b || 0), 0) : 0;
+  const bar = (v, c) => '<span class="wl-te-b"><i style="width:' + Math.min(100, (Number(v) || 0) / 5 * 100) + '%;background:' + c + '"></i></span>';
+  const q = 'Phân tích buổi ' + (w.name || cat.name) + ' ngày ' + (d ? wlDM(d) : '') + ': ' + wlDur(w.sec)
+    + (w.distM ? ', ' + (w.distM / 1000).toFixed(1) + ' km' : '') + (w.hrAvg ? ', HR TB ' + w.hrAvg + '/max ' + (w.hrMax || '?') : '')
+    + (w.load ? ', load ' + Math.round(w.load) : '') + (w.teAer != null ? ', TE ' + w.teAer + '/' + (w.teAna ?? '?') : '') + '. Có ổn không, buổi sau nên làm gì?';
+  return '<section class="gp-card wl-det" aria-labelledby="wl-dt-t"><div class="wl-det-h"><span class="gp-eyebrow">' + escHtml((d ? T(WL_DOW_LONG[d.getDay()]) + ' ' + wlDM(d) : '') + ' · ' + String(w.at).slice(11, 16)) + '</span>'
+    + '<h2 id="wl-dt-t" data-i18n-skip>' + escHtml(w.name || T(cat.name)) + '</h2><div class="gp-chips"><span class="gp-tp" style="background:' + cat.color + '">' + escHtml(T(cat.name)) + '</span>'
+    + (w.load ? '<span class="gp-tp" style="background:' + tone.bg + ';color:' + tone.fg + '">Load ' + Math.round(w.load) + '</span>' : '') + '</div></div>'
+    + '<div class="wl-stats">' + stats.map(([k, v]) => '<div><span>' + escHtml(T(k)) + '</span><b>' + escHtml(v) + '</b></div>').join('') + '</div>'
+    + (w.teAer != null || w.teAna != null ? '<div class="wl-sec"><h3>Training effect</h3><div class="wl-te"><span>' + escHtml(T('Hiếu khí')) + '</span>' + bar(w.teAer, '#7FB2FF') + '<b>' + (w.teAer ?? '—') + '</b>'
+      + '<span>' + escHtml(T('Kỵ khí')) + '</span>' + bar(w.teAna, '#FFB86B') + '<b>' + (w.teAna ?? '—') + '</b></div></div>' : '')
+    + (zt > 0 ? '<div class="wl-sec"><h3>' + escHtml(T('Thời gian ở từng vùng nhịp tim')) + '</h3>' + zs.map((s, i) => '<div class="wl-z"><b>Z' + (i + 1) + '</b><span class="wl-z-b"><i style="width:'
+      + ((s || 0) / zt * 100).toFixed(1) + '%;background:' + WL_ZONE_COLORS[i] + '"></i></span><span>' + wlDur(s || 0) + '</span></div>').join('') + '</div>' : '')
+    + (Array.isArray(w.laps) && w.laps.length > 1 ? '<div class="wl-sec"><h3>Lap</h3><div class="wl-laps"><span>#</span><span>' + escHtml(T('Quãng')) + '</span><span>' + escHtml(T(catK === 'run' ? 'Pace' : 'Thời gian')) + '</span><span>HR</span>'
+      + w.laps.map((l, i) => '<b>' + (i + 1) + '</b><span>' + (l.distM ? (l.distM >= 1000 ? (l.distM / 1000).toFixed(2) + ' km' : Math.round(l.distM) + ' m') : '—') + '</span><b>'
+        + (catK === 'run' && wlPace(l.speed) ? wlPace(l.speed) : wlDur(l.sec)) + '</b><span>' + (l.hrAvg || '—') + '</span>').join('') + '</div></div>' : '')
+    + '<button type="button" class="gp-btn gp-s wl-ask" data-q="' + escHtml(q) + '" onclick="wlAsk(this.dataset.q)">' + escHtml(T('Hỏi Pulse về buổi này')) + '</button></section>';
+}
+function wlAsk(q) { aiOpen('general'); setTimeout(() => { const i = document.getElementById('ai-in'); if (i) { i.value = q; i.focus(); } }, 260); }
+function wlCopyCmd(btn) {
+  try { navigator.clipboard.writeText(WL_SYNC_CMD).then(() => { btn.textContent = T('Đã copy ✓'); }); } catch (_e) { /* trình duyệt chặn — vẫn chọn được tay */ }
+}
+
 // ── TAB LỚP NHÓM (2026-11-12) — thiết kế Claude Design "Pulse · Tab Lớp nhóm" ───────────────
 //
 // Lớp = hồ sơ clients có isGroup. Tab này là dashboard riêng của lớp: danh sách → trang lớp (ô Buổi
@@ -2733,7 +2964,7 @@ function grpTeachPaint() {
     + (timed ? '<div class="gt-prog"><i style="width:' + (prog * 100).toFixed(1) + '%;background:' + GRP_COLORS[f] + '"></i></div>' : '')
     + body + (note ? '<div class="gt-note" data-i18n-skip>💬 ' + escHtml(note) + '</div>' : '') + '</div>'
     + '<div class="gt-foot">' + (nx ? '<div class="gt-next">' + escHtml(T('Tiếp theo')) + ': <b data-i18n-skip>' + escHtml(grpShort(nx)) + (Number(nx.durationMin) > 0 ? ' · ' + nx.durationMin + '′' : '') + '</b></div>' : '<div class="gt-next">' + escHtml(T('Block cuối')) + '</div>')
-    + '<div class="gt-btns"><button type="button" class="gt-b" onclick="grpTeachNav(-1)"' + (_gt.i === 0 ? ' disabled' : '') + '>‹ ' + escHtml(T('Trước')) + '</button>'
+    + '<div class="gt-btns"><button type="button" class="gt-b" onclick="grpTeachNav(-1)"' + (_gt.i === 0 ? ' disabled' : '') + '>‹ ' + escHtml(T('Block trước')) + '</button>'
     + '<button type="button" class="gt-play" onclick="grpTeachToggle()" aria-label="' + escHtml(_gt.run ? T('Tạm dừng') : T('Chạy tiếp')) + '">' + (_gt.run ? '❚❚' : '▶') + '</button>'
     + (nx ? '<button type="button" class="gt-b gt-b-p" onclick="grpTeachNav(1)">' + escHtml(T('Block kế')) + ' ›</button>' : '<button type="button" class="gt-b gt-b-p" onclick="grpTeachClose()">' + escHtml(T('Xong')) + '</button>') + '</div></div>';
 }
@@ -9239,6 +9470,7 @@ function showPage(page) {
   if (page === 'youth' && userRole !== 'coach') return;
   if (page === 'platform' && !userIsAdmin) return;
   if (page === 'groups' && userRole !== 'coach') return;
+  if (page === 'worklist' && userRole !== 'coach') return;
   // Thu tiền chỉ bật cho khách của admin nền tảng — xem billingOn().
   if (page === 'billing' && !billingOn()) return;
   document.querySelectorAll('.nav-tab').forEach(t => {
@@ -9261,6 +9493,8 @@ function showPage(page) {
   document.getElementById('chat-page').classList.toggle('active', page === 'chat');
   document.getElementById('groups-page').classList.toggle('active', page === 'groups');
   if (page === 'groups') renderGroups();
+  document.getElementById('worklist-page').classList.toggle('active', page === 'worklist');
+  if (page === 'worklist') loadWorklist();
   if (page === 'chat') chatPageOpen(); else chatPageClose();
   if (page === 'platform') renderPlatform();
   if (page === 'dash') renderDashboard();
@@ -15807,6 +16041,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <div class="nav-tab" id="dash-nav-tab" data-page="dash" style="display:none" onclick="showPage('dash')">Dashboard</div>
     <div class="nav-tab active" data-page="workout" onclick="showPage('workout')">Workout</div>
     <div class="nav-tab" id="groups-nav-tab" data-page="groups" style="display:none" onclick="showPage('groups')">Lớp nhóm</div>
+    <div class="nav-tab" id="worklist-nav-tab" data-page="worklist" style="display:none" onclick="showPage('worklist')">Work list</div>
     <div class="nav-tab" data-page="progress" onclick="showPage('progress')">Progress</div>
     <div class="nav-tab" id="recovery-nav-tab" data-page="recovery" style="display:none" onclick="showPage('recovery')">Recovery</div>
     <div class="nav-tab" id="health-nav-tab" data-page="health" style="display:none" onclick="showPage('health')">Health</div>
@@ -15870,6 +16105,9 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     </div>
     <div id="workout-log-list"><div class="loading">Loading sessions...</div></div>
   </div>
+
+  <!-- WORK LIST — lịch sử buổi tập từ đồng hồ Garmin của coach -->
+  <div id="worklist-page"><div id="worklist-body"></div></div>
 
   <!-- LỚP NHÓM — dashboard riêng của lớp (coach) -->
   <div id="groups-page"><div id="groups-body"></div></div>
@@ -18772,6 +19010,99 @@ button.cd-av:focus-visible{outline:2px solid #8FDBFF;outline-offset:2px;}
 #ai-fab:focus-visible{ outline: 2px solid var(--ai-acc); outline-offset: 3px; }
 body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-events: none; }
 
+/* ── Tab Work list (renderWorklist) — thiết kế claude.ai/artifact/EAzFcgtXxCcwkf8Pdsb5ua; dùng chung .gp-* của tab Lớp nhóm ── */
+#worklist-page{display:none;padding:16px 16px 140px;max-width:1200px;margin:0 auto;color:#fff;font-family:'Figtree',system-ui,sans-serif;}
+#worklist-page.active{display:block;}
+#worklist-page *{box-sizing:border-box;}
+.wl-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:16px;margin:4px 0 18px;}
+.wl-head h1{margin:0;font-size:32px;font-weight:800;letter-spacing:-.5px;}
+.wl-head p{margin:6px 0 0;font-size:15px;color:rgba(255,255,255,.75);}
+.wl-acts{display:flex;flex-wrap:wrap;align-items:center;gap:10px;}
+.wl-sync{display:inline-flex;align-items:center;gap:8px;min-height:36px;padding:0 14px;border-radius:999px;background:rgba(159,217,180,.14);color:#9FD9B4;font-size:14px;font-weight:700;}
+.wl-sync i{width:8px;height:8px;border-radius:50%;background:currentColor;}
+.wl-sync.stale{background:rgba(255,184,107,.16);color:#FFD4A3;}
+.wl-sync.off{background:#2C2826;color:rgba(255,255,255,.7);}
+.wl-cmd{margin:-6px 0 18px;padding:14px 16px;border-radius:16px;background:#211E1D;border:1px solid rgba(143,219,255,.35);display:flex;flex-direction:column;gap:10px;font-size:14px;line-height:1.45;}
+.wl-cmd p{margin:0;color:rgba(255,255,255,.85);}
+.wl-cmd code{display:block;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,.35);font:600 13px ui-monospace,SFMono-Regular,Menlo,monospace;color:#FFD4A3;overflow-wrap:anywhere;}
+.wl-cmd-b{display:flex;flex-wrap:wrap;align-items:center;gap:12px;color:rgba(255,255,255,.65);font-size:13px;}
+.wl-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px;}
+.wl-kpi{padding:16px 18px;border-radius:18px;background:#211E1D;border:1px solid rgba(255,255,255,.12);display:flex;flex-direction:column;gap:4px;}
+.wl-kpi span{font-size:12px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:rgba(255,255,255,.6);}
+.wl-kpi b{font-size:30px;font-weight:800;line-height:1.1;}
+.wl-kpi em{font-style:normal;font-size:13px;font-weight:700;color:rgba(255,255,255,.65);}
+.wl-kpi em.up{color:#9FD9B4;}
+.wl-kpi em.down{color:#FFD4A3;}
+.wl-chart{padding:18px 20px;margin-bottom:16px;}
+.wl-ch-h{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;}
+.wl-ch-h h2{margin:0;font-size:17px;font-weight:800;}
+.wl-ch-h .gp-legend{margin:0;}
+.wl-bars{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:10px;align-items:end;height:140px;}
+.wl-bar{display:flex;flex-direction:column;justify-content:flex-end;gap:2px;height:100%;}
+.wl-bar i{display:block;border-radius:3px;}
+.wl-bar-l{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:10px;margin-top:6px;font-size:11px;color:rgba(255,255,255,.55);text-align:center;}
+.wl-filters{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;}
+.wl-filters .gp-filters{margin:0;padding:0;}
+.wl-filters .gp-seg-ctl{margin-left:0;}
+.wl-cols{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;}
+.wl-list{flex:999 1 560px;min-width:0;display:flex;flex-direction:column;gap:14px;}
+.wl-side{flex:1 1 360px;min-width:0;position:sticky;top:16px;}
+.wl-week{overflow:hidden;}
+.wl-wh{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid rgba(255,255,255,.08);}
+.wl-wh b{font-size:15px;font-weight:800;}
+.wl-wh span{font-size:13px;color:rgba(255,255,255,.65);font-weight:600;text-align:right;}
+.wl-row{width:100%;display:grid;grid-template-columns:52px 38px minmax(0,1fr) 70px 56px 56px 58px;align-items:center;gap:12px;min-height:64px;padding:8px 18px;border:0;border-top:1px solid rgba(255,255,255,.06);background:transparent;color:#fff;font:inherit;text-align:left;cursor:pointer;}
+.wl-row:first-of-type{border-top:0;}
+.wl-row:hover{background:rgba(255,255,255,.03);}
+.wl-row.on{background:#2A2624;}
+.wl-row:focus-visible{outline:2px solid #8FDBFF;outline-offset:-2px;}
+.wl-day,.wl-m{display:flex;flex-direction:column;line-height:1.2;}
+.wl-day b,.wl-m b{font-size:15px;}
+.wl-day span,.wl-m span{font-size:11.5px;color:rgba(255,255,255,.58);}
+.wl-ab{width:36px;height:36px;border-radius:10px;color:#161111;display:grid;place-items:center;font-size:11px;font-weight:800;}
+.wl-nm{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.wl-nm b{font-size:16px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.wl-nm span{font-size:13px;color:rgba(255,255,255,.65);}
+.wl-load{justify-self:end;display:inline-flex;align-items:center;justify-content:center;min-width:50px;height:30px;padding:0 10px;border-radius:999px;font-size:14px;font-weight:800;}
+.wl-more{align-self:center;}
+.wl-det{padding:20px;display:flex;flex-direction:column;gap:16px;border-color:rgba(143,219,255,.35);}
+.wl-det-h{display:flex;flex-direction:column;gap:6px;}
+.wl-det-h h2{margin:0;font-size:24px;font-weight:800;line-height:1.2;}
+.wl-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;}
+.wl-stats div{padding:10px 12px;border-radius:12px;background:#2C2826;display:flex;flex-direction:column;gap:2px;}
+.wl-stats span{font-size:12px;color:rgba(255,255,255,.6);}
+.wl-stats b{font-size:19px;font-weight:800;}
+.wl-sec{display:flex;flex-direction:column;gap:8px;}
+.wl-sec h3{margin:0;font-size:15px;font-weight:800;}
+.wl-te{display:grid;grid-template-columns:80px minmax(0,1fr) 36px;align-items:center;gap:10px;font-size:13px;}
+.wl-te span:not(.wl-te-b){color:rgba(255,255,255,.75);}
+.wl-te b{text-align:right;}
+.wl-te-b,.wl-z-b{height:10px;border-radius:5px;background:#2C2826;overflow:hidden;}
+.wl-te-b i,.wl-z-b i{display:block;height:100%;}
+.wl-z{display:grid;grid-template-columns:30px minmax(0,1fr) 54px;align-items:center;gap:10px;font-size:13px;}
+.wl-z-b{height:14px;border-radius:4px;}
+.wl-z span:last-child{text-align:right;color:rgba(255,255,255,.8);}
+.wl-laps{display:grid;grid-template-columns:30px minmax(0,1fr) 64px 44px;gap:6px 8px;font-size:14px;}
+.wl-laps>span:nth-child(-n+4){font-size:12px;font-weight:700;color:rgba(255,255,255,.55);}
+.wl-ask{width:100%;}
+.wl-empty{display:flex;flex-direction:column;align-items:center;text-align:center;gap:12px;padding:36px 20px;}
+.wl-empty h2{margin:0;font-size:20px;font-weight:800;}
+.wl-empty p{margin:0;max-width:440px;font-size:15px;line-height:1.5;color:rgba(255,255,255,.75);}
+@media (max-width:899px){
+  #worklist-page{padding:12px 16px 150px;}
+  .wl-head h1{font-size:28px;}
+  .wl-kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}
+  .wl-kpi{padding:12px 14px;}
+  .wl-kpi b{font-size:22px;}
+  .wl-bars,.wl-bar-l{gap:4px;}
+  .wl-bar-l span:nth-child(odd){visibility:hidden;}
+  .wl-filters .gp-filters{flex-wrap:nowrap;overflow-x:auto;width:100%;}
+  .wl-filters .gp-seg-ctl{width:100%;}
+  .wl-filters .gp-seg-ctl button{flex:1;min-width:0;}
+  .wl-row{grid-template-columns:40px 36px minmax(0,1fr) 54px;padding:8px 14px;gap:10px;}
+  .wl-hide,.wl-load{display:none;}
+  .wl-stats{grid-template-columns:repeat(2,minmax(0,1fr));}
+}
 /* ── Tab Lớp nhóm (renderGroups) — thiết kế Claude Design "Pulse · Tab Lớp nhóm" ── */
 #groups-page{display:none;padding:16px 16px 140px;max-width:1180px;margin:0 auto;color:#fff;font-family:'Figtree',system-ui,sans-serif;}
 #groups-page.active{display:block;}
@@ -20729,6 +21060,24 @@ Object.assign(I18N_VI_EN, {
   'cần chú ý': 'needs attention', 'Chi tiết, tempo, video': 'Details, tempo, video',
   // Dashboard coach
   'Bảng điều khiển': 'Dashboard', 'Tải lại dữ liệu cũ': 'Reload older data', 'Cài Pulse lên máy': 'Install Pulse',
+  // Work list (Garmin)
+  'Mọi buổi tập từ đồng hồ Garmin': 'Every workout from your Garmin watch', 'Đồng bộ': 'Sync', 'Tải lại': 'Reload', 'Chưa đồng bộ Garmin': 'Garmin not synced yet',
+  'Đồng bộ lúc': 'Synced at', 'Copy lệnh': 'Copy command', 'Đã copy ✓': 'Copied ✓', 'Xem lệnh đồng bộ': 'Show sync command',
+  'Đồng bộ chạy trên máy tính của mày (thư viện Garmin không chạy được trên web). Mở Terminal ở thư mục Fitness-app rồi chạy:': 'Sync runs on your computer (the Garmin library cannot run on the web). Open Terminal in the Fitness-app folder and run:',
+  'Hết phiên đăng nhập thì chạy trước: scripts/garmin/.venv/bin/python scripts/garmin/login.py': 'If the login expired, first run: scripts/garmin/.venv/bin/python scripts/garmin/login.py',
+  'Chưa tải được Work list': "Couldn't load Work list", 'Kiểm tra mạng rồi bấm Tải lại.': 'Check your connection and tap Reload.',
+  'Tab này đọc dữ liệu Garmin trên hồ sơ của chính mày — tài khoản này không có quyền đọc hồ sơ đó.': 'This tab reads Garmin data on your own profile — this account cannot read that profile.',
+  'Buổi tập trên đồng hồ Garmin hiện ở đây sau lần đồng bộ đầu tiên — kéo về cả lịch sử cũ.': 'Workouts from your Garmin watch show up here after the first sync — full history included.',
+  'Đăng nhập Garmin trên máy tính (login.py)': 'Sign in to Garmin on your computer (login.py)', 'Chạy lệnh đồng bộ — kéo cả lịch sử': 'Run the sync command — pulls the full history',
+  'Chưa có buổi tập nào': 'No workouts yet', 'Lọc theo môn': 'Filter by sport', 'Khoảng thời gian': 'Time range', '7 ngày': '7 days', '30 ngày': '30 days', '3 tháng': '3 months',
+  'Danh sách buổi tập': 'Workout list', 'Không có buổi nào khớp bộ lọc.': 'No workouts match the filters.', 'Tuần này': 'This week', 'Tuần trước': 'Last week', 'Tuần': 'Week',
+  'Buổi tuần này': 'Workouts this week', 'Thời gian': 'Time', 'Training load': 'Training load', 'Quãng đường chạy': 'Running distance', 'bằng tuần trước': 'same as last week',
+  'so với tuần trước': 'vs last week', 'Tải tập 12 tuần': 'Training load — 12 weeks', 'Phút tập 12 tuần': 'Training minutes — 12 weeks',
+  'Biểu đồ cột theo tuần, 12 tuần gần nhất, chia theo môn': 'Weekly bar chart, last 12 weeks, split by sport', 'Xem thêm 4 tuần trước': 'Show 4 more weeks',
+  'thời gian': 'time', 'HR TB': 'avg HR', 'Quãng đường': 'Distance', 'Pace TB': 'Avg pace', 'HR TB / max': 'Avg / max HR', 'Calo': 'Calories',
+  'Hiếu khí': 'Aerobic', 'Kỵ khí': 'Anaerobic', 'Thời gian ở từng vùng nhịp tim': 'Time in heart-rate zones', 'Quãng': 'Distance', 'Hỏi Pulse về buổi này': 'Ask Pulse about this workout',
+  'Đạp xe': 'Cycling', 'Khác': 'Other', 'Strength': 'Strength', 'HIIT': 'HIIT',
+  'Chủ nhật': 'Sunday', 'Thứ Hai': 'Monday', 'Thứ Ba': 'Tuesday', 'Thứ Tư': 'Wednesday', 'Thứ Năm': 'Thursday', 'Thứ Sáu': 'Friday', 'Thứ Bảy': 'Saturday',
   // Lớp nhóm — mỗi lệnh 1 buổi, block có đồng hồ
   'Lớp mới': 'New class', 'Chưa có lớp nhóm nào': 'No group classes yet', 'Tạo hồ sơ lớp rồi nhờ Pulse soạn từng buổi — tối đa 7 buổi (A–G).': 'Create a class profile, then have Pulse design one session at a time — up to 7 sessions (A–G).',
   'Tạo lớp — kiểu lớp, số người, độ dài, dụng cụ': 'Create the class — type, size, length, equipment', 'Soạn 1 buổi với Pulse': 'Design 1 session with Pulse',
@@ -20741,7 +21090,7 @@ Object.assign(I18N_VI_EN, {
   'Thời gian theo block': 'Time by block', 'Mức': 'Level', 'Dễ': 'Easy', 'Chuẩn': 'Standard', 'Khó': 'Hard', 'Dễ hơn': 'Easier', 'Nghỉ': 'Rest', 'Setup': 'Setup',
   'Dụng cụ khai báo của lớp.': "From the class's equipment list.", 'Xem buổi': 'View session', 'vừa xong': 'just now', 'hôm qua': 'yesterday', 'Chưa ghi phút': 'No minutes yet',
   'Buổi soạn trước khi có phút cho từng block, nên không có thanh thời gian. Chế độ dạy lớp sẽ dùng đồng hồ bấm giờ tự do.': 'This session predates per-block minutes, so there is no timeline. Teach mode uses a free-running stopwatch.',
-  'Thoát dạy lớp': 'Exit teach mode', 'bấm giờ tự do': 'free stopwatch', 'Tiếp theo': 'Up next', 'Block cuối': 'Last block', 'Trước': 'Back', 'Block kế': 'Next block',
+  'Thoát dạy lớp': 'Exit teach mode', 'bấm giờ tự do': 'free stopwatch', 'Tiếp theo': 'Up next', 'Block cuối': 'Last block', 'Block trước': 'Previous block', 'Block kế': 'Next block',
   'Tạm dừng': 'Pause', 'Chạy tiếp': 'Resume', 'Xong': 'Done', 'Mobility': 'Mobility', 'Superset': 'Superset', 'Circuit': 'Circuit', 'EMOM': 'EMOM',
   'Lớp nhóm mới — soạn buổi đầu': 'New group class — first session', 'Mỗi lần 1 buổi · HYROX · Strength nhóm nhỏ · Circuit': 'One session at a time · HYROX · Small-group strength · Circuit',
   'Soạn 1 buổi cho lớp này': 'Design one session for this class', 'Buổi mới hoặc làm lại một buổi — các buổi khác giữ nguyên': 'A new session or redo one — the others stay as they are',

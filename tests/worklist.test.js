@@ -1,0 +1,72 @@
+/**
+ * Tab Work list (2026-11-13) — lịch sử buổi tập Garmin của coach. Hàm THẬT cắt từ index.html.
+ */
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs'), path = require('path');
+const s = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const cut = (a, b) => { const i = s.indexOf(a); assert(i >= 0, 'missing ' + a); return s.slice(i, s.indexOf(b, i)); };
+
+function load(items, sync) {
+  return new Function('var userRole="coach", COACH_HOME_CLIENT="longchu", clientsData=[{id:"longchu", garminSync:' + JSON.stringify(sync || null) + '}];'
+    + 'function T(x){return x} function escHtml(x){return String(x==null?"":x).replace(/[&<>"\']/g,function(m){return "&#"+m.charCodeAt(0)+";"})}'
+    + cut('// ── TAB WORK LIST', '// ── TAB LỚP NHÓM') + '; _wl.items = ' + JSON.stringify(items || null)
+    + '; return { wlCat, wlPace, wlDur, wlLoadTone, wlRow, wlDetailHTML, wlGroups, wlKpis, wlChart, wlSyncBadge, _wl };')();
+}
+const pad = (n) => String(n).padStart(2, '0');
+const ymd = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+const today = new Date();
+const W = (daysAgo, o) => ({ id: 'a' + daysAgo, at: ymd(new Date(today.getFullYear(), today.getMonth(), today.getDate() - daysAgo)) + ' 06:05:00', sec: 2900, ...o });
+
+test('mon Garmin -> nhom mau; pace tu m/s; thoi luong', () => {
+  const g = load();
+  assert.strictEqual(g.wlCat('treadmill_running'), 'run');
+  assert.strictEqual(g.wlCat('strength_training'), 'strength');
+  assert.strictEqual(g.wlCat('hiit'), 'hiit');
+  assert.strictEqual(g.wlCat('indoor_cycling'), 'bike');
+  assert.strictEqual(g.wlCat('yoga'), 'other');
+  assert.strictEqual(g.wlPace(800 / 261), '5:26', '800 m trong 4:21 = 5:26/km');
+  assert.strictEqual(g.wlPace(0), '');
+  assert.strictEqual(g.wlDur(2900), '48:20');
+  assert.strictEqual(g.wlDur(3900), '1:05');
+  assert.strictEqual(g.wlLoadTone(168).fg, '#FFB3B3');
+  assert.strictEqual(g.wlLoadTone(62).fg, '#9FD9B4');
+});
+
+test('dong + chi tiet: so lieu Garmin, ten buoi duoc thoat HTML, khong co so thi khong ve muc do', () => {
+  const run = W(0, { name: '<img src=x onerror=alert(1)>', sport: 'running', distM: 9200, speed: 9200 / 2900, hrAvg: 156, hrMax: 182, calories: 612, load: 168,
+    teAer: 3.8, teAna: 2.6, zones: [250, 690, 860, 820, 280], laps: [{ distM: 800, sec: 261, hrAvg: 171, speed: 800 / 261 }, { distM: 800, sec: 258, hrAvg: 175, speed: 800 / 258 }] });
+  const g = load([run]);
+  const row = g.wlRow(run);
+  assert(!/<img/.test(row), 'ten buoi phai thoat HTML');
+  assert.match(row, /9\.2 km · 5:15\/km/);
+  const det = g.wlDetailHTML(run);
+  assert.match(det, /Training effect/);
+  assert.match(det, /Z5/);
+  assert.match(det, /5:26/);
+  const bare = W(1, { name: 'Strength', sport: 'strength_training' });
+  const d2 = g.wlDetailHTML(bare);
+  assert.doesNotMatch(d2, /Training effect|Z1|Lap/, 'khong co du lieu thi khong ve khung rong');
+});
+
+test('gom theo tuan, KPI tuan nay, bieu do 12 tuan, badge dong bo cu thi doi mau', () => {
+  const items = [W(0, { sport: 'running', distM: 5000, load: 100 }), W(1, { sport: 'strength_training', load: 60 }), W(9, { sport: 'running', distM: 8000, load: 120 })];
+  const g = load(items, { at: new Date(Date.now() - 3 * 864e5).toISOString() });
+  assert.match(g.wlGroups(items), /Tuần này/);
+  assert.match(g.wlKpis(items), /Buổi tuần này/);
+  assert.match(g.wlChart(items), /Tải tập 12 tuần/);
+  assert.match(g.wlSyncBadge(), /wl-sync stale/);
+  assert.match(load([], null).wlSyncBadge(), /Chưa đồng bộ Garmin/);
+});
+
+test('noi vao app: tab chi coach co ho so rieng, chi doc doc co phan Garmin, lenh dong bo khong gia vo chay tren web', () => {
+  assert.match(s, /if \(page === 'worklist' && userRole !== 'coach'\) return;/);
+  assert.match(s, /id="worklist-nav-tab" data-page="worklist"/);
+  assert.match(s, /clientsData\.some\(\(c\) => c\.id === COACH_HOME_CLIENT\)\) wlTab\.style\.display = ''/);
+  assert.match(cut('async function loadWorklist', '\nfunction wlFiltered'), /where\('garmin\.at', '>', ''\)/);
+  const w = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'garmin', 'write.js'), 'utf8');
+  assert.match(w, /garmin: \{ \.\.\.s\.act, workouts: s\.workouts, at \}/, 'write.js ghi workouts vao truong garmin rieng');
+  assert.doesNotMatch(w, /\{ merge: true \}\);\s*\/\/.*polar/i);
+  const gi = fs.readFileSync(path.join(__dirname, '..', '.gitignore'), 'utf8');
+  assert.match(gi, /\*garmin_tokens\*\.json/, 'token Garmin khong bao gio vao git');
+});

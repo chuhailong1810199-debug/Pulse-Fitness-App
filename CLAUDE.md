@@ -280,6 +280,12 @@ Key routing rules:
   cue) → **Dạy lớp** (`grpTeach`, toàn màn hình, đồng hồ theo `durationMin` từng block, lưới EMOM, giữ màn hình sáng).
   Chỉ ĐỌC; soạn / làm lại = `grpPulse(cid, key)` mở form lớp với khoá chọn sẵn. `coachApply` đóng `pushedAt` cho buổi lớp
   vừa duyệt (trước khi ghép) → nhãn "Mới" 24h + `grpAfterPush` hiện "Đã lưu Buổi X vào lớp". Màu block: `GRP_COLORS`.
+- **Tab Work list + Garmin** (2026-11-13, thiết kế claude.ai/artifact/EAzFcgtXxCcwkf8Pdsb5ua): lịch sử buổi tập đồng hồ
+  Garmin của CHÍNH coach (`COACH_HOME_CLIENT`). Đồng bộ chạy TRÊN MÁY coach bằng `scripts/garmin` (python-garminconnect —
+  KHÔNG chính thức, có thể hỏng khi Garmin đổi đăng nhập): `login.py` (coach tự gõ mật khẩu; token ở ~/.garminconnect,
+  gitignore) → `sync.py` → `write.js --write`. Ghi vào trường `garmin` RIÊNG của `activity/{ngày}` (workouts[]) và
+  `recovery/{ngày}`, + `clients/{id}.garminSync` — KHÔNG đè số Polar cùng doc. Tab chỉ đọc doc có `garmin.at`; web không
+  chạy được script nên nút "Đồng bộ" chỉ hiện lệnh để copy. Khách khác muốn Garmin → Garmin Connect Developer Program.
 - **Lớp Hybrid / HYROX** (`groupFormat: hyrox`, 2026-10-19): label mỗi buổi bắt đầu bằng loại buổi
   (Compromised / Strength Endurance / Engine / Foundation / Race Sim / Partner); số buổi/tuần quyết định loại
   (form tự gán). Buổi Compromised / Engine / Race Sim: phút CHẠY ≥ phút TRẠM — `hybridIssues()` trong
