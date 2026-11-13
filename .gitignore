@@ -6,3 +6,8 @@ node_modules
 storage-debug.log
 ui-debug.log
 .DS_Store
+
+# Garmin (scripts/garmin) — môi trường Python và mọi file token đăng nhập
+scripts/garmin/.venv/
+scripts/garmin/out/
+*garmin_tokens*.json
