@@ -96,3 +96,11 @@ test('ket noi Garmin: mat khau khong luu, khong log; ma 2 lop co han; form chi h
   const g = load([], null);
   assert.match(g.wlConnectHTML ? g.wlConnectHTML() : '', /type="password"/);
 });
+
+test('coach khac (khong co ho so longchu) khong bi tro vao ho so cua admin', () => {
+  const src = cut('// ── TAB WORK LIST', '// ── TAB LỚP NHÓM');
+  const mk = (clients) => new Function('var userRole="coach", activeClient=null, userClientId=null, COACH_HOME_CLIENT="longchu", clientsData=' + JSON.stringify(clients) + ';'
+    + 'function T(x){return x} function escHtml(x){return String(x)}' + src + '; return wlClientId;')();
+  assert.strictEqual(mk([{ id: 'khach_cua_b' }])(), null);
+  assert.strictEqual(mk([{ id: 'longchu' }])(), 'longchu');
+});

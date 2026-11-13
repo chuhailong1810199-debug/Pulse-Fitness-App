@@ -2415,7 +2415,9 @@ function wlCat(sport) {
 /** Hồ sơ đang xem: khách = chính mình; coach = khách đang mở (không có thì hồ sơ tập của coach). */
 function wlClientId() {
   if (userRole !== 'coach') return (activeClient && activeClient.id) || userClientId;
-  return (activeClient && activeClient.id) || (typeof COACH_HOME_CLIENT !== 'undefined' ? COACH_HOME_CLIENT : 'longchu');
+  // Hồ sơ tập của coach chỉ là mặc định khi coach ĐÓ có nó — coach khác không có quyền đọc hồ sơ của admin.
+  const home = typeof COACH_HOME_CLIENT !== 'undefined' ? COACH_HOME_CLIENT : 'longchu';
+  return (activeClient && activeClient.id) || (clientsData.some((c) => c.id === home) ? home : null);
 }
 function wlProfile() { return clientsData.find((x) => x.id === wlClientId()) || {}; }
 /** Đã kết nối Garmin: hàm nền đặt garmin.connected; hồ sơ coach kết nối từ Mac thì có garminSync. */
@@ -2441,6 +2443,11 @@ const WL_DOW_LONG = ['Chủ nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Th�
 function wlDM(d) { return d.getDate() + '/' + (d.getMonth() + 1); }
 
 async function loadWorklist(force) {
+  if (!wlClientId()) {   // coach chưa có / chưa chọn khách nào
+    const el = document.getElementById('worklist-body');
+    if (el) el.innerHTML = '<header class="wl-head"><div><h1>Work list</h1></div></header><div class="gp-card wl-empty"><p>' + escHtml(T('Chọn một khách ở thanh khách để xem buổi tập Garmin của khách đó.')) + '</p></div>';
+    return;
+  }
   // Coach đổi khách đang mở → dữ liệu của khách cũ phải bỏ.
   if (_wl.cid !== wlClientId()) { _wl.items = null; _wl.sel = null; _wl.syncMsg = ''; _wl.syncErr = ''; _wl.conn = { busy: false, mfa: false, err: '' }; force = true; }
   if (_wl.loading || (_wl.items && !force)) { renderWorklist(); return; }
@@ -21177,7 +21184,7 @@ Object.assign(I18N_VI_EN, {
   'Tab này đọc dữ liệu Garmin trên hồ sơ của chính mày — tài khoản này không có quyền đọc hồ sơ đó.': 'This tab reads Garmin data on your own profile — this account cannot read that profile.',
   'Buổi tập trên đồng hồ Garmin hiện ở đây sau lần đồng bộ đầu tiên — kéo về cả lịch sử cũ.': 'Workouts from your Garmin watch show up here after the first sync — full history included.',
   'Đăng nhập Garmin trên máy tính (login.py)': 'Sign in to Garmin on your computer (login.py)', 'Chạy lệnh đồng bộ — kéo cả lịch sử': 'Run the sync command — pulls the full history',
-  'Chưa có buổi tập nào': 'No workouts yet', 'Bấm Tải lại': 'Tap Reload', 'Bấm Đồng bộ': 'Tap Sync', 'Ngắt kết nối': 'Disconnect', 'Kết nối Garmin': 'Connect Garmin', 'Email Garmin': 'Garmin email', 'Mật khẩu Garmin': 'Garmin password',
+  'Chưa có buổi tập nào': 'No workouts yet', 'Bấm Tải lại': 'Tap Reload', 'Bấm Đồng bộ': 'Tap Sync', 'Chọn một khách ở thanh khách để xem buổi tập Garmin của khách đó.': "Pick a client in the client bar to see their Garmin workouts.", 'Ngắt kết nối': 'Disconnect', 'Kết nối Garmin': 'Connect Garmin', 'Email Garmin': 'Garmin email', 'Mật khẩu Garmin': 'Garmin password',
   'Đang kết nối…': 'Connecting…', 'Xác nhận mã': 'Confirm code', 'Mã xác thực Garmin vừa gửi (email / app)': 'Garmin verification code (email / app)',
   'Nhập email và mật khẩu Garmin.': 'Enter your Garmin email and password.', 'Máy chủ chưa có hàm kết nối Garmin (chưa deploy).': 'The Garmin connect function is not deployed yet.',
   'Kết nối tài khoản Garmin Connect một lần — sau đó buổi tập tự về mỗi sáng, bấm Đồng bộ để lấy ngay.': 'Connect your Garmin Connect account once — workouts then arrive every morning; tap Sync to pull them now.',
