@@ -17,6 +17,17 @@
         "firebase-debug.*.log",
         "*.local"
       ]
+    },
+    {
+      "source": "functions-py",
+      "codebase": "garmin",
+      "runtime": "python313",
+      "ignore": [
+        "venv",
+        ".git",
+        "__pycache__",
+        "*.local"
+      ]
     }
   ],
   "hosting": {
@@ -29,7 +40,8 @@
       "FitnessApp/**",
       "clients.json",
       "seed-exercises.html",
-      "migrate.html"
+      "migrate.html",
+      "functions-py/**"
     ],
     "rewrites": [
       {

@@ -2386,8 +2386,9 @@ async function dshOpenLog(id) {
 //
 // Thiết kế: claude.ai/artifact/EAzFcgtXxCcwkf8Pdsb5ua. Dữ liệu do scripts/garmin (python-garminconnect,
 // KHÔNG chính thức) đồng bộ TRÊN MÁY coach vào clients/{COACH_HOME_CLIENT}/activity/{ngày}.garmin.workouts;
-// giờ đồng bộ ở clients/{id}.garminSync. Tab chỉ ĐỌC. Web không chạy được script trên máy → nút "Đồng bộ"
-// hiện lệnh để copy, không giả vờ đồng bộ.
+// giờ đồng bộ ở clients/{id}.garminSync. Tab chỉ ĐỌC. Nút "Đồng bộ" gọi hàm nền garminSyncNow (functions-py,
+// token ở privateTokens/ — máy chủ tự chạy thêm 06:30 mỗi sáng). Máy chủ bị Garmin chặn / chưa có token → báo lỗi
+// rõ và hiện lệnh đồng bộ trên Mac, không giả vờ đã đồng bộ.
 const WL_SPORT = {
   run: { name: 'Chạy', color: '#FFB86B', abbr: 'RUN' },
   strength: { name: 'Strength', color: '#C9B8FF', abbr: 'STR' },
@@ -2397,7 +2398,7 @@ const WL_SPORT = {
 };
 const WL_ZONE_COLORS = ['#8A8580', '#7FB2FF', '#9FD9B4', '#FFB86B', '#EE5A4F'];
 const WL_SYNC_CMD = 'scripts/garmin/.venv/bin/python scripts/garmin/sync.py && node scripts/garmin/write.js --write';
-let _wl = { items: null, err: null, loading: false, sport: 'all', period: 30, sel: null, view: 'list', showCmd: false, weeks: 4 };
+let _wl = { items: null, err: null, loading: false, sport: 'all', period: 30, sel: null, view: 'list', showCmd: false, weeks: 4, syncing: false, syncMsg: '', syncErr: '' };
 
 /** typeKey của Garmin → nhóm màu của tab. */
 function wlCat(sport) {
@@ -2469,9 +2470,12 @@ function renderWorklist() {
   const el = document.getElementById('worklist-body');
   if (!el) return;
   const head = '<header class="wl-head"><div><h1>Work list</h1><p>' + escHtml(T('Mọi buổi tập từ đồng hồ Garmin')) + '</p></div>'
-    + '<div class="wl-acts">' + wlSyncBadge() + '<button type="button" class="gp-btn gp-p" onclick="_wl.showCmd=!_wl.showCmd;renderWorklist()" aria-expanded="' + _wl.showCmd + '">↻ ' + escHtml(T('Đồng bộ')) + '</button>'
-    + '<button type="button" class="gp-btn gp-s" onclick="loadWorklist(true)" aria-label="' + escHtml(T('Tải lại')) + '">' + escHtml(T('Tải lại')) + '</button></div></header>'
-    + (_wl.showCmd ? '<div class="wl-cmd"><p>' + escHtml(T('Đồng bộ chạy trên máy tính của mày (thư viện Garmin không chạy được trên web). Mở Terminal ở thư mục Fitness-app rồi chạy:')) + '</p>'
+    + '<div class="wl-acts">' + wlSyncBadge() + '<button type="button" class="gp-btn gp-p" onclick="wlSync()"' + (_wl.syncing ? ' disabled aria-busy="true"' : '') + '>'
+    + (_wl.syncing ? escHtml(T('Đang đồng bộ…')) : '↻ ' + escHtml(T('Đồng bộ'))) + '</button>'
+    + '<button type="button" class="gp-btn gp-s" onclick="_wl.showCmd=!_wl.showCmd;renderWorklist()" aria-expanded="' + _wl.showCmd + '">' + escHtml(T('Lệnh trên Mac')) + '</button></div></header>'
+    + (_wl.syncMsg ? '<div class="wl-note ok" role="status">✓ ' + escHtml(_wl.syncMsg) + '</div>' : '')
+    + (_wl.syncErr ? '<div class="wl-note err" role="alert">' + escHtml(_wl.syncErr) + '</div>' : '')
+    + (_wl.showCmd ? '<div class="wl-cmd"><p>' + escHtml(T('Máy chủ tự đồng bộ 06:30 mỗi sáng. Khi máy chủ bị Garmin chặn, hoặc muốn kéo lịch sử dài, chạy trên Mac (Terminal, thư mục Fitness-app):')) + '</p>'
       + '<code data-i18n-skip>' + escHtml(WL_SYNC_CMD) + '</code><div class="wl-cmd-b"><button type="button" class="gp-btn gp-s" onclick="wlCopyCmd(this)">' + escHtml(T('Copy lệnh')) + '</button>'
       + '<span>' + escHtml(T('Hết phiên đăng nhập thì chạy trước: scripts/garmin/.venv/bin/python scripts/garmin/login.py')) + '</span></div></div>' : '');
   if (_wl.loading && !_wl.items) { el.innerHTML = head + '<div class="gp-card wl-empty"><p>' + escHtml(T('Đang tải…')) + '</p></div>'; return; }
@@ -2485,7 +2489,7 @@ function renderWorklist() {
     el.innerHTML = head + '<section class="gp-card wl-empty"><h2>' + escHtml(T('Chưa có buổi tập nào')) + '</h2><p>'
       + escHtml(T('Buổi tập trên đồng hồ Garmin hiện ở đây sau lần đồng bộ đầu tiên — kéo về cả lịch sử cũ.')) + '</p>'
       + '<ol class="gp-steps"><li><b>1</b>' + escHtml(T('Đăng nhập Garmin trên máy tính (login.py)')) + '</li><li><b>2</b>' + escHtml(T('Chạy lệnh đồng bộ — kéo cả lịch sử'))
-      + '</li><li><b>3</b>' + escHtml(T('Bấm Tải lại')) + '</li></ol>'
+      + '</li><li><b>3</b>' + escHtml(T('Bấm Đồng bộ')) + '</li></ol>'
       + '<button type="button" class="gp-btn gp-p" onclick="_wl.showCmd=true;renderWorklist()">' + escHtml(T('Xem lệnh đồng bộ')) + '</button></section>';
     return;
   }
@@ -2604,6 +2608,27 @@ function wlDetailHTML(w) {
       + w.laps.map((l, i) => '<b>' + (i + 1) + '</b><span>' + (l.distM ? (l.distM >= 1000 ? (l.distM / 1000).toFixed(2) + ' km' : Math.round(l.distM) + ' m') : '—') + '</span><b>'
         + (catK === 'run' && wlPace(l.speed) ? wlPace(l.speed) : wlDur(l.sec)) + '</b><span>' + (l.hrAvg || '—') + '</span>').join('') + '</div></div>' : '')
     + '<button type="button" class="gp-btn gp-s wl-ask" data-q="' + escHtml(q) + '" onclick="wlAsk(this.dataset.q)">' + escHtml(T('Hỏi Pulse về buổi này')) + '</button></section>';
+}
+/** Nút Đồng bộ: hàm nền garminSyncNow kéo 45 ngày gần nhất (máy chủ giữ token Garmin), rồi nạp lại tab. */
+async function wlSync() {
+  if (_wl.syncing) return;
+  _wl.syncing = true; _wl.syncMsg = ''; _wl.syncErr = ''; renderWorklist();
+  try {
+    const fn = firebase.app().functions('asia-southeast1').httpsCallable('garminSyncNow', { timeout: 250000 });
+    const r = (await fn({})).data || {};
+    const c = clientsData.find((x) => x.id === wlClientId());
+    if (c) c.garminSync = { at: new Date().toISOString() };
+    _wl.syncMsg = T('Đã đồng bộ ' + (r.workouts ?? 0) + ' buổi trong 45 ngày gần nhất');
+    _wl.syncing = false;
+    await loadWorklist(true);
+    return;
+  } catch (e) {
+    const m = String((e && e.message) || e || '');
+    _wl.syncErr = /not.?found|NOT_FOUND/i.test(m) ? T('Máy chủ chưa có hàm đồng bộ Garmin (chưa deploy). Tạm dùng lệnh trên Mac.') : m;
+    _wl.showCmd = true;
+  }
+  _wl.syncing = false;
+  renderWorklist();
 }
 function wlAsk(q) { aiOpen('general'); setTimeout(() => { const i = document.getElementById('ai-in'); if (i) { i.value = q; i.focus(); } }, 260); }
 function wlCopyCmd(btn) {
@@ -19022,6 +19047,9 @@ body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-even
 .wl-sync i{width:8px;height:8px;border-radius:50%;background:currentColor;}
 .wl-sync.stale{background:rgba(255,184,107,.16);color:#FFD4A3;}
 .wl-sync.off{background:#2C2826;color:rgba(255,255,255,.7);}
+.wl-note{margin:-6px 0 14px;padding:12px 14px;border-radius:14px;font-size:14px;font-weight:700;line-height:1.4;}
+.wl-note.ok{background:rgba(159,217,180,.14);color:#9FD9B4;}
+.wl-note.err{background:rgba(238,90,79,.12);border:1px solid rgba(238,90,79,.5);color:#FFB3B3;}
 .wl-cmd{margin:-6px 0 18px;padding:14px 16px;border-radius:16px;background:#211E1D;border:1px solid rgba(143,219,255,.35);display:flex;flex-direction:column;gap:10px;font-size:14px;line-height:1.45;}
 .wl-cmd p{margin:0;color:rgba(255,255,255,.85);}
 .wl-cmd code{display:block;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,.35);font:600 13px ui-monospace,SFMono-Regular,Menlo,monospace;color:#FFD4A3;overflow-wrap:anywhere;}
@@ -21069,7 +21097,9 @@ Object.assign(I18N_VI_EN, {
   'Tab này đọc dữ liệu Garmin trên hồ sơ của chính mày — tài khoản này không có quyền đọc hồ sơ đó.': 'This tab reads Garmin data on your own profile — this account cannot read that profile.',
   'Buổi tập trên đồng hồ Garmin hiện ở đây sau lần đồng bộ đầu tiên — kéo về cả lịch sử cũ.': 'Workouts from your Garmin watch show up here after the first sync — full history included.',
   'Đăng nhập Garmin trên máy tính (login.py)': 'Sign in to Garmin on your computer (login.py)', 'Chạy lệnh đồng bộ — kéo cả lịch sử': 'Run the sync command — pulls the full history',
-  'Chưa có buổi tập nào': 'No workouts yet', 'Bấm Tải lại': 'Tap Reload', 'Lọc theo môn': 'Filter by sport', 'Khoảng thời gian': 'Time range', '7 ngày': '7 days', '30 ngày': '30 days', '3 tháng': '3 months',
+  'Chưa có buổi tập nào': 'No workouts yet', 'Bấm Tải lại': 'Tap Reload', 'Bấm Đồng bộ': 'Tap Sync', 'Đang đồng bộ…': 'Syncing…', 'Lệnh trên Mac': 'Mac command',
+  'Máy chủ tự đồng bộ 06:30 mỗi sáng. Khi máy chủ bị Garmin chặn, hoặc muốn kéo lịch sử dài, chạy trên Mac (Terminal, thư mục Fitness-app):': 'The server syncs every morning at 06:30. If Garmin blocks the server, or to pull a long history, run this on your Mac (Terminal, Fitness-app folder):',
+  'Máy chủ chưa có hàm đồng bộ Garmin (chưa deploy). Tạm dùng lệnh trên Mac.': 'The Garmin sync function is not deployed yet. Use the Mac command for now.', 'Lọc theo môn': 'Filter by sport', 'Khoảng thời gian': 'Time range', '7 ngày': '7 days', '30 ngày': '30 days', '3 tháng': '3 months',
   'Danh sách buổi tập': 'Workout list', 'Không có buổi nào khớp bộ lọc.': 'No workouts match the filters.', 'Tuần này': 'This week', 'Tuần trước': 'Last week', 'Tuần': 'Week',
   'Buổi tuần này': 'Workouts this week', 'Thời gian': 'Time', 'Training load': 'Training load', 'Quãng đường chạy': 'Running distance', 'bằng tuần trước': 'same as last week',
   'so với tuần trước': 'vs last week', 'Tải tập 12 tuần': 'Training load — 12 weeks', 'Phút tập 12 tuần': 'Training minutes — 12 weeks',
@@ -21225,7 +21255,7 @@ const I18N_FULL = {
   'Tập {0} · {1}/{2} bài · {3} kg': 'Trained {0} · {1}/{2} exercises · {3} kg', 'Tập {0} · {1}/{2} bài': 'Trained {0} · {1}/{2} exercises',
   '{0} · {1}/{2} bài · {3} kg': '{0} · {1}/{2} exercises · {3} kg', '{0} · {1}/{2} bài': '{0} · {1}/{2} exercises',
   'Buổi {0}': 'Session {0}', 'Buổi {0} · {1}': 'Session {0} · {1}',
-  'Phút {0#}': 'Min {0}', 'Vòng {0#}': 'Round {0}', '{0#} người': '{0} people', '{0#} phút / buổi': '{0} min / session', '{0#} block': '{0} blocks',
+  'Phút {0#}': 'Min {0}', 'Đã đồng bộ {0#} buổi trong 45 ngày gần nhất': 'Synced {0} workouts from the last 45 days', 'Vòng {0#}': 'Round {0}', '{0#} người': '{0} people', '{0#} phút / buổi': '{0} min / session', '{0#} block': '{0} blocks',
   '{0#} phút trước': '{0} min ago', '{0#} giờ trước': '{0} h ago', '{0#} ngày trước': '{0} days ago', '{0#} tuần trước': '{0} weeks ago',
   'Đã lưu Buổi {0} vào lớp': 'Saved Session {0} to the class', 'Còn {0#}s trong phút này': '{0}s left in this minute',
   'Nhờ Pulse cân lại về {0#}′': 'Ask Pulse to rebalance to {0}′', '{0#} block chưa ghi số phút': '{0} blocks without minutes',

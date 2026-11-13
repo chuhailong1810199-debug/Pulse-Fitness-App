@@ -11,3 +11,5 @@ ui-debug.log
 scripts/garmin/.venv/
 scripts/garmin/out/
 *garmin_tokens*.json
+functions-py/venv/
+functions-py/__pycache__/

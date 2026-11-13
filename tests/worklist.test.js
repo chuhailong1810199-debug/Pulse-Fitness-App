@@ -70,3 +70,17 @@ test('noi vao app: tab chi coach co ho so rieng, chi doc doc co phan Garmin, len
   const gi = fs.readFileSync(path.join(__dirname, '..', '.gitignore'), 'utf8');
   assert.match(gi, /\*garmin_tokens\*\.json/, 'token Garmin khong bao gio vao git');
 });
+
+test('dong bo tren may chu: nut goi garminSyncNow, ham chi cho chu dong ho, keo hong thi khong xoa buoi cu', () => {
+  assert.match(cut('async function wlSync', '\nfunction wlAsk'), /httpsCallable\('garminSyncNow'/);
+  const main = fs.readFileSync(path.join(__dirname, '..', 'functions-py', 'main.py'), 'utf8');
+  assert.match(main, /get\("coachUid"\) != req\.auth\.uid/, 'chi coach phu trach ho so moi dong bo duoc');
+  assert.match(main, /schedule="30 6 \* \* \*", timezone="Asia\/Ho_Chi_Minh"/);
+  assert.match(main, /workouts = None if acts is None/);
+  const core = fs.readFileSync(path.join(__dirname, '..', 'functions-py', 'garmin_core.py'), 'utf8');
+  assert.match(core, /if workouts is not None:\n\s+g_\["workouts"\] = s\["w"\]/, 'keo hong (None) thi giu workouts cu');
+  const fb = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'firebase.json'), 'utf8'));
+  assert(fb.functions.some((f) => f.codebase === 'garmin' && f.source === 'functions-py'));
+  const rules = fs.readFileSync(path.join(__dirname, '..', 'firestore.rules'), 'utf8');
+  assert.match(rules, /match \/privateTokens\/\{docId\} \{\s*\n\s*allow read, write: if false;/);
+});

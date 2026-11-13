@@ -285,7 +285,12 @@ Key routing rules:
   KHÔNG chính thức, có thể hỏng khi Garmin đổi đăng nhập): `login.py` (coach tự gõ mật khẩu; token ở ~/.garminconnect,
   gitignore) → `sync.py` → `write.js --write`. Ghi vào trường `garmin` RIÊNG của `activity/{ngày}` (workouts[]) và
   `recovery/{ngày}`, + `clients/{id}.garminSync` — KHÔNG đè số Polar cùng doc. Tab chỉ đọc doc có `garmin.at`; web không
-  chạy được script nên nút "Đồng bộ" chỉ hiện lệnh để copy. Khách khác muốn Garmin → Garmin Connect Developer Program.
+  Khách khác muốn Garmin → Garmin Connect Developer Program.
+  **Đồng bộ trên máy chủ** (2026-11-13): codebase Python `functions-py` (firebase.json codebase `garmin`, python313) —
+  `garminSyncNow` (nút Đồng bộ, chỉ coachUid của hồ sơ) + `garminSyncDaily` 06:30. Lõi đọc/ghi `functions-py/garmin_core.py`
+  dùng CHUNG với `scripts/garmin/sync.py`. Token ở `privateTokens/garmin_longchu` (luật `if false` — chỉ Admin SDK), tải lên
+  bằng `node scripts/garmin/upload-token.js`; hàm ghi lại token đã làm mới mỗi lần chạy. Kéo buổi tập hỏng → KHÔNG ghi đè
+  workouts cũ. Garmin có thể chặn IP cloud → nút báo lỗi + hiện lệnh trên Mac. Deploy cần `functions-py/venv` (gitignore).
 - **Lớp Hybrid / HYROX** (`groupFormat: hyrox`, 2026-10-19): label mỗi buổi bắt đầu bằng loại buổi
   (Compromised / Strength Endurance / Engine / Foundation / Race Sim / Partner); số buổi/tuần quyết định loại
   (form tự gán). Buổi Compromised / Engine / Race Sim: phút CHẠY ≥ phút TRẠM — `hybridIssues()` trong

@@ -208,6 +208,12 @@ service cloud.firestore {
     // Trường role quyết định ai nhận push lịch và brief sáng (pushToAll lọc
     // role=='coach'). Khách tự khai 'coach' là nhận được lịch có tên khách khác
     // — nên chỉ coach thật mới được ghi role 'coach'.
+    // Token đăng nhập dịch vụ ngoài (Garmin — functions-py). Giá trị như mật khẩu: KHÔNG máy khách nào
+    // đọc / ghi, kể cả admin trên web. Chỉ hàm nền (Admin SDK, bỏ qua luật) và script trên máy coach.
+    match /privateTokens/{docId} {
+      allow read, write: if false;
+    }
+
     match /pushSubs/{subId} {
       allow read: if false;
       allow create, update: if request.auth != null

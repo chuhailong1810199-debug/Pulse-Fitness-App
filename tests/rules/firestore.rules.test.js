@@ -88,6 +88,12 @@ const STRANGER = { uid: "u_x", email: "la@gmail.com", ...V };
   ok("clientChatUsage: khach KHONG tu reset luot hoi", () =>
     assertFails(db(CINDY).doc("clients/cindy/clientChatUsage/2026-10-15").set({ count: 0 })));
 
+  // ── Token dịch vụ ngoài (Garmin) — không máy khách nào chạm được ──
+  for (const [who, nm] of [[ADMIN, "admin goc"], [COACH_A, "coach"], [CINDY, "khach"], [STRANGER, "nguoi la"], [null, "chua dang nhap"]]) {
+    ok("privateTokens: " + nm + " KHONG doc", () => assertFails(db(who).doc("privateTokens/garmin_longchu").get()));
+    ok("privateTokens: " + nm + " KHONG ghi", () => assertFails(db(who).doc("privateTokens/garmin_longchu").set({ tokens: "x" })));
+  }
+
   // ── Tin nhắn coach ↔ khách (messages) — riêng tư, chỉ hai bên ──
   const firebaseCompat = require("firebase/compat/app"); require("firebase/compat/firestore");
   const serverTimestamp = () => firebaseCompat.firestore.FieldValue.serverTimestamp();
