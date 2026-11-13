@@ -26,7 +26,9 @@ def main() -> int:
     store.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(store, 0o700)
 
-    email = input("Email Garmin: ").strip()
+    # --email điền sẵn địa chỉ (đỡ phải gõ "@" khi bộ gõ tiếng Việt chặn phím đó). Mật khẩu thì luôn tự gõ / dán.
+    email = sys.argv[sys.argv.index("--email") + 1].strip() if "--email" in sys.argv[:-1] else input("Email Garmin: ").strip()
+    print(f"Email: {email}")
     password = getpass.getpass("Mật khẩu Garmin (gõ ẩn): ")
     api = Garmin(email=email, password=password,
                  prompt_mfa=lambda: input("Mã xác thực 2 lớp (MFA) từ Garmin: ").strip())
