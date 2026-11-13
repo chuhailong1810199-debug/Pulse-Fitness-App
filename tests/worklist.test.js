@@ -8,10 +8,10 @@ const s = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const cut = (a, b) => { const i = s.indexOf(a); assert(i >= 0, 'missing ' + a); return s.slice(i, s.indexOf(b, i)); };
 
 function load(items, sync) {
-  return new Function('var userRole="coach", COACH_HOME_CLIENT="longchu", clientsData=[{id:"longchu", garminSync:' + JSON.stringify(sync || null) + '}];'
+  return new Function('var userRole="coach", activeClient=null, userClientId=null, COACH_HOME_CLIENT="longchu", clientsData=[{id:"longchu", garminSync:' + JSON.stringify(sync || null) + '}];'
     + 'function T(x){return x} function escHtml(x){return String(x==null?"":x).replace(/[&<>"\']/g,function(m){return "&#"+m.charCodeAt(0)+";"})}'
     + cut('// ── TAB WORK LIST', '// ── TAB LỚP NHÓM') + '; _wl.items = ' + JSON.stringify(items || null)
-    + '; return { wlCat, wlPace, wlDur, wlLoadTone, wlRow, wlDetailHTML, wlGroups, wlKpis, wlChart, wlSyncBadge, _wl };')();
+    + '; return { wlCat, wlPace, wlDur, wlLoadTone, wlRow, wlDetailHTML, wlGroups, wlKpis, wlChart, wlSyncBadge, wlConnectHTML, _wl };')();
 }
 const pad = (n) => String(n).padStart(2, '0');
 const ymd = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
@@ -59,10 +59,9 @@ test('gom theo tuan, KPI tuan nay, bieu do 12 tuan, badge dong bo cu thi doi mau
   assert.match(load([], null).wlSyncBadge(), /Chưa đồng bộ Garmin/);
 });
 
-test('noi vao app: tab chi coach co ho so rieng, chi doc doc co phan Garmin, lenh dong bo khong gia vo chay tren web', () => {
-  assert.match(s, /if \(page === 'worklist' && userRole !== 'coach'\) return;/);
+test('noi vao app: tab cho coach + khach, chi doc doc co phan Garmin, script tren Mac ghi truong rieng', () => {
+  assert.doesNotMatch(s, /if \(page === 'worklist' && userRole !== 'coach'\) return;/, 'khach cung dung tab');
   assert.match(s, /id="worklist-nav-tab" data-page="worklist"/);
-  assert.match(s, /clientsData\.some\(\(c\) => c\.id === COACH_HOME_CLIENT\)\) wlTab\.style\.display = ''/);
   assert.match(cut('async function loadWorklist', '\nfunction wlFiltered'), /where\('garmin\.at', '>', ''\)/);
   const w = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'garmin', 'write.js'), 'utf8');
   assert.match(w, /garmin: \{ \.\.\.s\.act, workouts: s\.workouts, at \}/, 'write.js ghi workouts vao truong garmin rieng');
@@ -72,9 +71,11 @@ test('noi vao app: tab chi coach co ho so rieng, chi doc doc co phan Garmin, len
 });
 
 test('dong bo tren may chu: nut goi garminSyncNow, ham chi cho chu dong ho, keo hong thi khong xoa buoi cu', () => {
-  assert.match(cut('async function wlSync', '\nfunction wlAsk'), /httpsCallable\('garminSyncNow'/);
+  assert.match(cut('async function wlSync', '\nfunction wlConnectHTML'), /httpsCallable\('garminSyncNow'/);
   const main = fs.readFileSync(path.join(__dirname, '..', 'functions-py', 'main.py'), 'utf8');
-  assert.match(main, /get\("coachUid"\) != req\.auth\.uid/, 'chi coach phu trach ho so moi dong bo duoc');
+  assert.match(main, /d\.get\("coachUid"\) == req\.auth\.uid/, 'coach phu trach duoc');
+  assert.match(main, /str\(d\.get\("email"\) or ""\)\.strip\(\)\.lower\(\) == em/, 'chinh khach (email khop) duoc');
+  assert.match(main, /raise _err\(E\.PERMISSION_DENIED/, 'nguoi khac bi chan');
   assert.match(main, /schedule="30 6 \* \* \*", timezone="Asia\/Ho_Chi_Minh"/);
   assert.match(main, /workouts = None if acts is None/);
   const core = fs.readFileSync(path.join(__dirname, '..', 'functions-py', 'garmin_core.py'), 'utf8');
@@ -83,4 +84,15 @@ test('dong bo tren may chu: nut goi garminSyncNow, ham chi cho chu dong ho, keo 
   assert(fb.functions.some((f) => f.codebase === 'garmin' && f.source === 'functions-py'));
   const rules = fs.readFileSync(path.join(__dirname, '..', 'firestore.rules'), 'utf8');
   assert.match(rules, /match \/privateTokens\/\{docId\} \{\s*\n\s*allow read, write: if false;/);
+});
+
+test('ket noi Garmin: mat khau khong luu, khong log; ma 2 lop co han; form chi hien khi chua ket noi', () => {
+  const main = fs.readFileSync(path.join(__dirname, '..', 'functions-py', 'main.py'), 'utf8');
+  const conn = main.slice(main.indexOf('def garminConnect'), main.indexOf('def garminDisconnect'));
+  assert.doesNotMatch(conn, /set\(\{[^}]*password/, 'khong ghi mat khau vao Firestore');
+  assert.doesNotMatch(conn, /print\([^)]*(password|str\(e\))/, 'khong in mat khau / loi tho');
+  assert.match(conn, /"exp": time\.time\(\) \+ 600/);
+  assert.match(main, /time\.sleep\(20\)/, 'dong bo sang gian tung tai khoan');
+  const g = load([], null);
+  assert.match(g.wlConnectHTML ? g.wlConnectHTML() : '', /type="password"/);
 });

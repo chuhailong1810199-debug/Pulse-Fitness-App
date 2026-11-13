@@ -816,9 +816,9 @@ async function loadApp() {
     if (dashTab) dashTab.style.display = '';
     const grpTab = document.getElementById('groups-nav-tab');   // tab Lớp nhóm — dashboard riêng của lớp
     if (grpTab) grpTab.style.display = '';
-    // Work list: buổi tập Garmin của CHÍNH coach — chỉ hiện khi coach có hồ sơ tập của mình.
+    // Work list: buổi tập Garmin — coach xem của khách đang mở (hoặc của chính mình).
     const wlTab = document.getElementById('worklist-nav-tab');
-    if (wlTab && clientsData.some((c) => c.id === COACH_HOME_CLIENT)) wlTab.style.display = '';
+    if (wlTab) wlTab.style.display = '';
     if (userIsAdmin) loadCoachNames();       // tên coach cho biển "đang quan sát"
     afterClientChange();
     // Youth là công cụ của coach: khách không cần thấy pin test này.
@@ -928,6 +928,7 @@ async function loadApp() {
     afterClientChange();
     aiMount();                       // khách cũng có trợ lý (chỉ đọc giáo án của chính mình)
     chatMount();                     // nhắn tin với coach
+    { const t = document.getElementById('worklist-nav-tab'); if (t) t.style.display = ''; }   // Work list: đồng hồ Garmin của chính khách
     console.log('[clientId-debug] activeClient.id =', activeClient.id, '| userClientId =', userClientId);
     renderClientBar(false);
 
@@ -1085,6 +1086,7 @@ function afterClientChange() {
   renderAccessAlert();
   if (typeof aiOnClientChange === 'function') aiOnClientChange();
   if (typeof chatOnClientChange === 'function') chatOnClientChange();
+  if (document.getElementById('worklist-page')?.classList.contains('active') && typeof loadWorklist === 'function') loadWorklist();
 }
 
 async function observeCoach(uid) {
@@ -2398,7 +2400,8 @@ const WL_SPORT = {
 };
 const WL_ZONE_COLORS = ['#8A8580', '#7FB2FF', '#9FD9B4', '#FFB86B', '#EE5A4F'];
 const WL_SYNC_CMD = 'scripts/garmin/.venv/bin/python scripts/garmin/sync.py && node scripts/garmin/write.js --write';
-let _wl = { items: null, err: null, loading: false, sport: 'all', period: 30, sel: null, view: 'list', showCmd: false, weeks: 4, syncing: false, syncMsg: '', syncErr: '' };
+let _wl = { items: null, err: null, loading: false, sport: 'all', period: 30, sel: null, view: 'list', showCmd: false, weeks: 4, syncing: false, syncMsg: '', syncErr: '',
+  cid: null, conn: { busy: false, mfa: false, err: '' } };
 
 /** typeKey của Garmin → nhóm màu của tab. */
 function wlCat(sport) {
@@ -2409,7 +2412,15 @@ function wlCat(sport) {
   if (/cycl|bik|spin/.test(s)) return 'bike';
   return 'other';
 }
-function wlClientId() { return typeof COACH_HOME_CLIENT !== 'undefined' ? COACH_HOME_CLIENT : 'longchu'; }
+/** Hồ sơ đang xem: khách = chính mình; coach = khách đang mở (không có thì hồ sơ tập của coach). */
+function wlClientId() {
+  if (userRole !== 'coach') return (activeClient && activeClient.id) || userClientId;
+  return (activeClient && activeClient.id) || (typeof COACH_HOME_CLIENT !== 'undefined' ? COACH_HOME_CLIENT : 'longchu');
+}
+function wlProfile() { return clientsData.find((x) => x.id === wlClientId()) || {}; }
+/** Đã kết nối Garmin: hàm nền đặt garmin.connected; hồ sơ coach kết nối từ Mac thì có garminSync. */
+function wlConnected() { const c = wlProfile(); return !!((c.garmin && c.garmin.connected) || (c.garminSync && c.garminSync.at && !(c.garmin && c.garmin.connected === false))); }
+function wlIsOwnHome() { return userRole === 'coach' && wlClientId() === (typeof COACH_HOME_CLIENT !== 'undefined' ? COACH_HOME_CLIENT : 'longchu'); }
 function wlDur(sec) {
   sec = Math.round(Number(sec) || 0);
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
@@ -2430,10 +2441,13 @@ const WL_DOW_LONG = ['Chủ nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Th�
 function wlDM(d) { return d.getDate() + '/' + (d.getMonth() + 1); }
 
 async function loadWorklist(force) {
+  // Coach đổi khách đang mở → dữ liệu của khách cũ phải bỏ.
+  if (_wl.cid !== wlClientId()) { _wl.items = null; _wl.sel = null; _wl.syncMsg = ''; _wl.syncErr = ''; _wl.conn = { busy: false, mfa: false, err: '' }; force = true; }
   if (_wl.loading || (_wl.items && !force)) { renderWorklist(); return; }
   _wl.loading = true; _wl.err = null; renderWorklist();
   try {
     const cid = wlClientId();
+    _wl.cid = cid;
     // Chỉ doc ĐÃ có phần Garmin (garmin.at là chuỗi giờ ghi) — khỏi đọc cả năm doc Polar.
     const snap = await db.collection('clients').doc(cid).collection('activity').where('garmin.at', '>', '').get();
     const items = [];
@@ -2441,7 +2455,7 @@ async function loadWorklist(force) {
     items.sort((a, b) => String(b.at).localeCompare(String(a.at)));
     _wl.items = items;
     const c = clientsData.find((x) => x.id === cid);
-    if (c && !c.garminSync) { const cs = await db.collection('clients').doc(cid).get().catch(() => null); if (cs && cs.exists) c.garminSync = (cs.data() || {}).garminSync || null; }
+    if (c) { const cs = await db.collection('clients').doc(cid).get().catch(() => null); if (cs && cs.exists) { const x = cs.data() || {}; c.garminSync = x.garminSync || null; c.garmin = x.garmin || null; } }
   } catch (e) {
     _wl.err = e.code || e.message || String(e);
     console.warn('[worklist]', _wl.err);
@@ -2469,13 +2483,18 @@ function wlSyncBadge() {
 function renderWorklist() {
   const el = document.getElementById('worklist-body');
   if (!el) return;
-  const head = '<header class="wl-head"><div><h1>Work list</h1><p>' + escHtml(T('Mọi buổi tập từ đồng hồ Garmin')) + '</p></div>'
-    + '<div class="wl-acts">' + wlSyncBadge() + '<button type="button" class="gp-btn gp-p" onclick="wlSync()"' + (_wl.syncing ? ' disabled aria-busy="true"' : '') + '>'
-    + (_wl.syncing ? escHtml(T('Đang đồng bộ…')) : '↻ ' + escHtml(T('Đồng bộ'))) + '</button>'
-    + '<button type="button" class="gp-btn gp-s" onclick="_wl.showCmd=!_wl.showCmd;renderWorklist()" aria-expanded="' + _wl.showCmd + '">' + escHtml(T('Lệnh trên Mac')) + '</button></div></header>'
+  const prof = wlProfile(), gname = prof.garmin && prof.garmin.name;
+  const who = userRole === 'coach' && !wlIsOwnHome() ? ' · <span data-i18n-skip>' + escHtml(prof.name || prof.id || '') + '</span>' : '';
+  const head = '<header class="wl-head"><div><h1>Work list' + who + '</h1><p>' + escHtml(T('Mọi buổi tập từ đồng hồ Garmin'))
+    + (gname ? ' · <span data-i18n-skip>' + escHtml(gname) + '</span>' : '') + '</p></div>'
+    + '<div class="wl-acts">' + (wlConnected() ? wlSyncBadge() + '<button type="button" class="gp-btn gp-p" onclick="wlSync()"' + (_wl.syncing ? ' disabled aria-busy="true"' : '') + '>'
+    + (_wl.syncing ? escHtml(T('Đang đồng bộ…')) : '↻ ' + escHtml(T('Đồng bộ'))) + '</button>' : '')
+    + (wlIsOwnHome() ? '<button type="button" class="gp-btn gp-s" onclick="_wl.showCmd=!_wl.showCmd;renderWorklist()" aria-expanded="' + _wl.showCmd + '">' + escHtml(T('Lệnh trên Mac')) + '</button>' : '')
+    + (wlConnected() ? '<button type="button" class="gp-btn gp-s" onclick="wlDisconnect()">' + escHtml(T('Ngắt kết nối')) + '</button>' : '') + '</div></header>'
     + (_wl.syncMsg ? '<div class="wl-note ok" role="status">✓ ' + escHtml(_wl.syncMsg) + '</div>' : '')
     + (_wl.syncErr ? '<div class="wl-note err" role="alert">' + escHtml(_wl.syncErr) + '</div>' : '')
-    + (_wl.showCmd ? '<div class="wl-cmd"><p>' + escHtml(T('Máy chủ tự đồng bộ 06:30 mỗi sáng. Khi máy chủ bị Garmin chặn, hoặc muốn kéo lịch sử dài, chạy trên Mac (Terminal, thư mục Fitness-app):')) + '</p>'
+    + (prof.garmin && prof.garmin.err ? '<div class="wl-note err" role="alert">' + escHtml(T('Lần đồng bộ sáng nay hỏng — Garmin có thể đã đăng xuất. Bấm Đồng bộ thử lại; vẫn hỏng thì Ngắt kết nối rồi kết nối lại.')) + '</div>' : '')
+    + (_wl.showCmd && wlIsOwnHome() ? '<div class="wl-cmd"><p>' + escHtml(T('Máy chủ tự đồng bộ 06:30 mỗi sáng. Khi máy chủ bị Garmin chặn, hoặc muốn kéo lịch sử dài, chạy trên Mac (Terminal, thư mục Fitness-app):')) + '</p>'
       + '<code data-i18n-skip>' + escHtml(WL_SYNC_CMD) + '</code><div class="wl-cmd-b"><button type="button" class="gp-btn gp-s" onclick="wlCopyCmd(this)">' + escHtml(T('Copy lệnh')) + '</button>'
       + '<span>' + escHtml(T('Hết phiên đăng nhập thì chạy trước: scripts/garmin/.venv/bin/python scripts/garmin/login.py')) + '</span></div></div>' : '');
   if (_wl.loading && !_wl.items) { el.innerHTML = head + '<div class="gp-card wl-empty"><p>' + escHtml(T('Đang tải…')) + '</p></div>'; return; }
@@ -2485,6 +2504,9 @@ function renderWorklist() {
     return;
   }
   const all = _wl.items || [];
+  // Chưa kết nối: chưa có buổi nào → chỉ form; đã có buổi cũ (ngắt kết nối rồi) → form nằm trên dữ liệu cũ.
+  const connCard = wlConnected() ? '' : wlConnectHTML();
+  if (!all.length && connCard) { el.innerHTML = head + connCard; return; }
   if (!all.length) {
     el.innerHTML = head + '<section class="gp-card wl-empty"><h2>' + escHtml(T('Chưa có buổi tập nào')) + '</h2><p>'
       + escHtml(T('Buổi tập trên đồng hồ Garmin hiện ở đây sau lần đồng bộ đầu tiên — kéo về cả lịch sử cũ.')) + '</p>'
@@ -2504,7 +2526,7 @@ function renderWorklist() {
   const cats = Object.keys(WL_SPORT).filter((k) => inPeriod.some((w) => wlCat(w.sport) === k));
   const chips = [['all', T('Tất cả') + ' · ' + inPeriod.length]].concat(cats.map((k) => [k, T(WL_SPORT[k].name) + ' · ' + inPeriod.filter((w) => wlCat(w.sport) === k).length]));
   const periods = [[7, '7 ngày'], [30, '30 ngày'], [90, '3 tháng'], [0, 'Tất cả']];
-  el.innerHTML = head + wlKpis(all) + wlChart(all)
+  el.innerHTML = head + connCard + wlKpis(all) + wlChart(all)
     + '<div class="wl-filters"><div class="gp-filters" role="group" aria-label="' + escHtml(T('Lọc theo môn')) + '">'
     + chips.map(([v, t]) => '<button type="button" class="gp-chip' + (_wl.sport === v ? ' on' : '') + '" aria-pressed="' + (_wl.sport === v) + '" onclick="_wl.sport=\'' + v + '\';renderWorklist()">' + escHtml(t) + '</button>').join('') + '</div>'
     + '<div class="gp-seg-ctl" role="group" aria-label="' + escHtml(T('Khoảng thời gian')) + '">' + periods.map(([v, t]) =>
@@ -2615,7 +2637,7 @@ async function wlSync() {
   _wl.syncing = true; _wl.syncMsg = ''; _wl.syncErr = ''; renderWorklist();
   try {
     const fn = firebase.app().functions('asia-southeast1').httpsCallable('garminSyncNow', { timeout: 250000 });
-    const r = (await fn({})).data || {};
+    const r = (await fn({ clientId: wlClientId() })).data || {};
     const c = clientsData.find((x) => x.id === wlClientId());
     if (c) c.garminSync = { at: new Date().toISOString() };
     _wl.syncMsg = T('Đã đồng bộ ' + (r.workouts ?? 0) + ' buổi trong 45 ngày gần nhất');
@@ -2625,9 +2647,59 @@ async function wlSync() {
   } catch (e) {
     const m = String((e && e.message) || e || '');
     _wl.syncErr = /not.?found|NOT_FOUND/i.test(m) ? T('Máy chủ chưa có hàm đồng bộ Garmin (chưa deploy). Tạm dùng lệnh trên Mac.') : m;
-    _wl.showCmd = true;
+    _wl.showCmd = wlIsOwnHome();
   }
   _wl.syncing = false;
+  renderWorklist();
+}
+/** Form kết nối Garmin: email + mật khẩu (dùng MỘT lần để lấy token, máy chủ không lưu) → mã 2 lớp nếu Garmin hỏi. */
+function wlConnectHTML() {
+  const c = _wl.conn, own = userRole !== 'coach' || wlIsOwnHome();
+  const intro = own ? T('Kết nối tài khoản Garmin Connect một lần — sau đó buổi tập tự về mỗi sáng, bấm Đồng bộ để lấy ngay.')
+    : T('Khách chưa kết nối Garmin. Khách tự kết nối trong tab Work list của họ, hoặc nhập tài khoản Garmin của khách ở đây.');
+  return '<section class="gp-card wl-conn" aria-labelledby="wl-cn-t"><h2 id="wl-cn-t">' + escHtml(T('Kết nối Garmin')) + '</h2><p>' + escHtml(intro) + '</p>'
+    + '<form onsubmit="wlConnect(event)" novalidate>'
+    + (c.mfa
+      ? '<label class="wl-f"><span>' + escHtml(T('Mã xác thực Garmin vừa gửi (email / app)')) + '</span><input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>'
+      : '<label class="wl-f"><span>' + escHtml(T('Email Garmin')) + '</span><input name="email" type="email" autocomplete="off" autocapitalize="off" spellcheck="false" required></label>'
+        + '<label class="wl-f"><span>' + escHtml(T('Mật khẩu Garmin')) + '</span><input name="password" type="password" autocomplete="off" required></label>')
+    + (c.err ? '<div class="wl-note err" role="alert">' + escHtml(c.err) + '</div>' : '')
+    + '<button type="submit" class="gp-btn gp-p"' + (c.busy ? ' disabled aria-busy="true"' : '') + '>' + escHtml(c.busy ? T('Đang kết nối…') : c.mfa ? T('Xác nhận mã') : T('Kết nối Garmin')) + '</button>'
+    + '<p class="wl-fine">' + escHtml(T('Mật khẩu chỉ dùng một lần để đăng nhập Garmin rồi bỏ — app giữ phiên đăng nhập (token), không lưu mật khẩu. Ngắt kết nối bất cứ lúc nào.')) + '</p>'
+    + '</form></section>';
+}
+async function wlConnect(ev) {
+  if (ev) ev.preventDefault();
+  if (_wl.conn.busy) return;
+  const f = ev && ev.target, data = { clientId: wlClientId() };
+  if (_wl.conn.mfa) data.mfaCode = String(f.code.value || '').trim();
+  else { data.email = String(f.email.value || '').trim(); data.password = String(f.password.value || ''); }
+  if (!_wl.conn.mfa && (!data.email || !data.password)) { _wl.conn.err = T('Nhập email và mật khẩu Garmin.'); renderWorklist(); return; }
+  _wl.conn.busy = true; _wl.conn.err = ''; renderWorklist();
+  try {
+    const fn = firebase.app().functions('asia-southeast1').httpsCallable('garminConnect', { timeout: 120000 });
+    const r = (await fn(data)).data || {};
+    data.password = null;
+    if (r.needsMfa) { _wl.conn = { busy: false, mfa: true, err: '' }; renderWorklist(); return; }
+    const c = wlProfile();
+    c.garmin = { connected: true, name: r.name || null };
+    _wl.conn = { busy: false, mfa: false, err: '' };
+    renderWorklist();
+    wlSync();
+    return;
+  } catch (e) {
+    data.password = null;
+    _wl.conn.err = /not.?found|NOT_FOUND/i.test(String(e && e.message)) ? T('Máy chủ chưa có hàm kết nối Garmin (chưa deploy).') : String((e && e.message) || e);
+  }
+  _wl.conn.busy = false;
+  renderWorklist();
+}
+async function wlDisconnect() {
+  if (!confirm(T('Ngắt kết nối Garmin? Buổi tập đã đồng bộ vẫn giữ; buổi mới sẽ không về nữa cho tới khi kết nối lại.'))) return;
+  try {
+    await firebase.app().functions('asia-southeast1').httpsCallable('garminDisconnect')({ clientId: wlClientId() });
+    const c = wlProfile(); c.garmin = { connected: false }; c.garminSync = null;
+  } catch (e) { alert(String((e && e.message) || e)); }
   renderWorklist();
 }
 function wlAsk(q) { aiOpen('general'); setTimeout(() => { const i = document.getElementById('ai-in'); if (i) { i.value = q; i.focus(); } }, 260); }
@@ -9495,7 +9567,6 @@ function showPage(page) {
   if (page === 'youth' && userRole !== 'coach') return;
   if (page === 'platform' && !userIsAdmin) return;
   if (page === 'groups' && userRole !== 'coach') return;
-  if (page === 'worklist' && userRole !== 'coach') return;
   // Thu tiền chỉ bật cho khách của admin nền tảng — xem billingOn().
   if (page === 'billing' && !billingOn()) return;
   document.querySelectorAll('.nav-tab').forEach(t => {
@@ -19047,6 +19118,15 @@ body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-even
 .wl-sync i{width:8px;height:8px;border-radius:50%;background:currentColor;}
 .wl-sync.stale{background:rgba(255,184,107,.16);color:#FFD4A3;}
 .wl-sync.off{background:#2C2826;color:rgba(255,255,255,.7);}
+.wl-conn{padding:24px;display:flex;flex-direction:column;gap:12px;max-width:520px;}
+.wl-conn h2{margin:0;font-size:20px;font-weight:800;}
+.wl-conn>p{margin:0;font-size:15px;line-height:1.5;color:rgba(255,255,255,.75);}
+.wl-conn form{display:flex;flex-direction:column;gap:12px;}
+.wl-f{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700;color:rgba(255,255,255,.75);}
+.wl-f input{min-height:46px;padding:0 14px;border-radius:12px;border:1px solid rgba(255,255,255,.22);background:rgba(0,0,0,.3);color:#fff;font:600 16px 'Figtree',sans-serif;}
+.wl-f input:focus{outline:2px solid #8FDBFF;outline-offset:1px;}
+.wl-fine{margin:0;font-size:12.5px;line-height:1.45;color:rgba(255,255,255,.6);}
+.wl-conn .wl-note{margin:0;}
 .wl-note{margin:-6px 0 14px;padding:12px 14px;border-radius:14px;font-size:14px;font-weight:700;line-height:1.4;}
 .wl-note.ok{background:rgba(159,217,180,.14);color:#9FD9B4;}
 .wl-note.err{background:rgba(238,90,79,.12);border:1px solid rgba(238,90,79,.5);color:#FFB3B3;}
@@ -21097,7 +21177,14 @@ Object.assign(I18N_VI_EN, {
   'Tab này đọc dữ liệu Garmin trên hồ sơ của chính mày — tài khoản này không có quyền đọc hồ sơ đó.': 'This tab reads Garmin data on your own profile — this account cannot read that profile.',
   'Buổi tập trên đồng hồ Garmin hiện ở đây sau lần đồng bộ đầu tiên — kéo về cả lịch sử cũ.': 'Workouts from your Garmin watch show up here after the first sync — full history included.',
   'Đăng nhập Garmin trên máy tính (login.py)': 'Sign in to Garmin on your computer (login.py)', 'Chạy lệnh đồng bộ — kéo cả lịch sử': 'Run the sync command — pulls the full history',
-  'Chưa có buổi tập nào': 'No workouts yet', 'Bấm Tải lại': 'Tap Reload', 'Bấm Đồng bộ': 'Tap Sync', 'phút': 'min', 'Đang đồng bộ…': 'Syncing…', 'Lệnh trên Mac': 'Mac command',
+  'Chưa có buổi tập nào': 'No workouts yet', 'Bấm Tải lại': 'Tap Reload', 'Bấm Đồng bộ': 'Tap Sync', 'Ngắt kết nối': 'Disconnect', 'Kết nối Garmin': 'Connect Garmin', 'Email Garmin': 'Garmin email', 'Mật khẩu Garmin': 'Garmin password',
+  'Đang kết nối…': 'Connecting…', 'Xác nhận mã': 'Confirm code', 'Mã xác thực Garmin vừa gửi (email / app)': 'Garmin verification code (email / app)',
+  'Nhập email và mật khẩu Garmin.': 'Enter your Garmin email and password.', 'Máy chủ chưa có hàm kết nối Garmin (chưa deploy).': 'The Garmin connect function is not deployed yet.',
+  'Kết nối tài khoản Garmin Connect một lần — sau đó buổi tập tự về mỗi sáng, bấm Đồng bộ để lấy ngay.': 'Connect your Garmin Connect account once — workouts then arrive every morning; tap Sync to pull them now.',
+  'Khách chưa kết nối Garmin. Khách tự kết nối trong tab Work list của họ, hoặc nhập tài khoản Garmin của khách ở đây.': "This client hasn't connected Garmin. They can connect in their own Work list tab, or enter their Garmin account here.",
+  'Mật khẩu chỉ dùng một lần để đăng nhập Garmin rồi bỏ — app giữ phiên đăng nhập (token), không lưu mật khẩu. Ngắt kết nối bất cứ lúc nào.': 'The password is used once to sign in to Garmin and then discarded — the app keeps the session (token), never the password. Disconnect any time.',
+  'Ngắt kết nối Garmin? Buổi tập đã đồng bộ vẫn giữ; buổi mới sẽ không về nữa cho tới khi kết nối lại.': 'Disconnect Garmin? Synced workouts stay; new ones stop arriving until you reconnect.',
+  'Lần đồng bộ sáng nay hỏng — Garmin có thể đã đăng xuất. Bấm Đồng bộ thử lại; vẫn hỏng thì Ngắt kết nối rồi kết nối lại.': "This morning's sync failed — Garmin may have signed out. Tap Sync to retry; if it still fails, Disconnect and connect again.", 'phút': 'min', 'Đang đồng bộ…': 'Syncing…', 'Lệnh trên Mac': 'Mac command',
   'Máy chủ tự đồng bộ 06:30 mỗi sáng. Khi máy chủ bị Garmin chặn, hoặc muốn kéo lịch sử dài, chạy trên Mac (Terminal, thư mục Fitness-app):': 'The server syncs every morning at 06:30. If Garmin blocks the server, or to pull a long history, run this on your Mac (Terminal, Fitness-app folder):',
   'Máy chủ chưa có hàm đồng bộ Garmin (chưa deploy). Tạm dùng lệnh trên Mac.': 'The Garmin sync function is not deployed yet. Use the Mac command for now.', 'Lọc theo môn': 'Filter by sport', 'Khoảng thời gian': 'Time range', '7 ngày': '7 days', '30 ngày': '30 days', '3 tháng': '3 months',
   'Danh sách buổi tập': 'Workout list', 'Không có buổi nào khớp bộ lọc.': 'No workouts match the filters.', 'Tuần này': 'This week', 'Tuần trước': 'Last week', 'Tuần': 'Week',

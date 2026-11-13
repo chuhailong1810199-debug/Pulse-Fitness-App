@@ -291,6 +291,12 @@ Key routing rules:
   dùng CHUNG với `scripts/garmin/sync.py`. Token ở `privateTokens/garmin_longchu` (luật `if false` — chỉ Admin SDK), tải lên
   bằng `node scripts/garmin/upload-token.js`; hàm ghi lại token đã làm mới mỗi lần chạy. Kéo buổi tập hỏng → KHÔNG ghi đè
   workouts cũ. Garmin có thể chặn IP cloud → nút báo lỗi + hiện lệnh trên Mac. Deploy cần `functions-py/venv` (gitignore).
+  **Mọi khách** (2026-11-13, coach chốt — chấp nhận dùng thư viện không chính thức cho khách): tab Work list hiện cho
+  khách (hồ sơ của chính mình) và coach (khách đang mở). Chưa kết nối → form email + mật khẩu Garmin → `garminConnect`
+  (đăng nhập MỘT lần, lưu TOKEN ở `privateTokens/garmin_{id}`, KHÔNG lưu / log mật khẩu; mã 2 lớp: `privateTokens/
+  garmin_mfa_{id}` 10 phút). `clients/{id}.garmin` {connected, name, err}. `garminDisconnect` xoá token. Quyền: coach
+  phụ trách hoặc chính khách (email đã xác thực khớp). `garminSyncDaily` chạy mọi token, giãn 20 giây/tài khoản.
+  Deploy functions-py cần venv Python **3.13** (runtime python313) — venv 3.14 làm deploy hỏng "Failed to find … SDK".
 - **Lớp Hybrid / HYROX** (`groupFormat: hyrox`, 2026-10-19): label mỗi buổi bắt đầu bằng loại buổi
   (Compromised / Strength Endurance / Engine / Foundation / Race Sim / Partner); số buổi/tuần quyết định loại
   (form tự gán). Buổi Compromised / Engine / Race Sim: phút CHẠY ≥ phút TRẠM — `hybridIssues()` trong
