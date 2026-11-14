@@ -5,6 +5,7 @@ Ghi: write_firestore() — trường `garmin` RIÊNG trong activity/{ngày} và 
 KHÔNG đụng trường của Polar. Endpoint hỏng / đồng hồ không đo → null, không đoán số.
 """
 import calendar
+import math
 import sys
 from datetime import datetime, timezone
 
@@ -176,6 +177,70 @@ def laps_of(api, a: dict):
     return laps or None
 
 
+def encode_polyline(points) -> str:
+    """Google encoded polyline (độ chính xác 1e-5 ≈ 1 m) — 329 điểm còn ~2–3 KB thay vì ~15 KB số thô.
+    App giải bằng wlDecodePolyline() trong index.html (cùng thuật toán chuẩn)."""
+    out, plat, plon = [], 0, 0
+    for lat, lon in points:
+        ilat, ilon = int(round(lat * 1e5)), int(round(lon * 1e5))
+        for v in (ilat - plat, ilon - plon):
+            v = ~(v << 1) if v < 0 else (v << 1)
+            while v >= 0x20:
+                out.append(chr((0x20 | (v & 0x1F)) + 63))
+                v >>= 5
+            out.append(chr(v + 63))
+        plat, plon = ilat, ilon
+    return "".join(out)
+
+
+def route_of(api, activity_id):
+    """Tuyến GPS của một buổi ngoài trời: {poly, spd[]} — spd (m/s) từng điểm để tô màu theo pace. Tối đa 800 điểm.
+
+    Toạ độ là dữ liệu vị trí (lộ nơi ở nếu chạy từ nhà): nằm trong activity/{ngày} — chỉ coach phụ trách + chính khách đọc.
+    """
+    det = safe(api.get_activity_details, activity_id, 10, 800) or {}
+    pts = [p for p in ((det.get("geoPolylineDTO") or {}).get("polyline") or [])
+           if isinstance(p.get("lat"), (int, float)) and isinstance(p.get("lon"), (int, float)) and p.get("valid", True) is not False]
+    if len(pts) < 2:
+        return None
+    return {"poly": encode_polyline([(p["lat"], p["lon"]) for p in pts]), "spd": _route_speeds(pts)}
+
+
+def _haversine(la1, lo1, la2, lo2) -> float:
+    """Khoảng cách (m) giữa hai toạ độ."""
+    r = 6371008.8
+    p1, p2 = math.radians(la1), math.radians(la2)
+    a = math.sin((p2 - p1) / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lo2 - lo1) / 2) ** 2
+    return 2 * r * math.asin(min(1.0, math.sqrt(a)))
+
+
+def _route_speeds(pts, window_ms: int = 20000):
+    """Tốc độ (m/s) từng điểm. Trường `speed` Garmin trả trong polyline thường = 0 (2026-11-14: cả 329 điểm), nên
+    tự tính từ quãng cộng dồn (distanceInMeters) + giờ (time, ms), trung bình trượt ~20 giây — GPS nhiễu từng
+    điểm, tính từng cặp thì màu nhảy loạn. Thiếu quãng cộng dồn thì cộng distanceFromPreviousPoint."""
+    dist, tot = [], 0.0
+    for i, p in enumerate(pts):
+        if isinstance(p.get("distanceInMeters"), (int, float)):
+            tot = float(p["distanceInMeters"])
+        elif i and isinstance(p.get("distanceFromPreviousPoint"), (int, float)):
+            tot += float(p["distanceFromPreviousPoint"])
+        elif i:   # 2026-11-14: Garmin để trống cả hai → tính từ toạ độ
+            tot += _haversine(pts[i - 1]["lat"], pts[i - 1]["lon"], p["lat"], p["lon"])
+        dist.append(tot)
+    t = [p.get("time") if isinstance(p.get("time"), (int, float)) else None for p in pts]
+    out, j = [], 0
+    for i in range(len(pts)):
+        if t[i] is None:
+            out.append(None)
+            continue
+        while j < i and (t[j] is None or t[i] - t[j] > window_ms):
+            j += 1
+        k = j if j < i else max(0, i - 1)
+        dt = (t[i] - t[k]) / 1000 if t[k] is not None else 0
+        out.append(round((dist[i] - dist[k]) / dt, 2) if dt > 0 and dist[i] >= dist[k] else None)
+    return out
+
+
 def workout(api, a: dict, recent: bool) -> dict:
     sport = g(a, "activityType", "typeKey")
     return {
@@ -186,6 +251,8 @@ def workout(api, a: dict, recent: bool) -> dict:
         "teAer": num(a.get("aerobicTrainingEffect"), 1), "teAna": num(a.get("anaerobicTrainingEffect"), 1),
         "zones": zones_of(api, a, recent),
         "laps": laps_of(api, a) if recent and sport in LAP_SPORTS and a.get("activityId") else None,
+        # Bản đồ tuyến (tab Work list): chỉ buổi CÓ GPS (Garmin đánh dấu hasPolyline — chạy máy / trong nhà thì không).
+        "route": route_of(api, a["activityId"]) if recent and a.get("hasPolyline") and a.get("activityId") else None,
     }
 
 

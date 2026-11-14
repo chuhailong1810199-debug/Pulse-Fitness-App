@@ -2528,6 +2528,7 @@ function renderWorklist() {
   if (phone && _wl.view === 'detail' && _wl.sel) {
     el.innerHTML = '<a class="gp-back" href="#" onclick="event.preventDefault();_wl.view=\'list\';renderWorklist()">‹ Work list</a>' + wlDetailHTML(list.find((w) => w.id === _wl.sel));
     window.scrollTo(0, 0);
+    wlMountMap(list.find((w) => w.id === _wl.sel));
     return;
   }
   const cats = Object.keys(WL_SPORT).filter((k) => inPeriod.some((w) => wlCat(w.sport) === k));
@@ -2540,6 +2541,7 @@ function renderWorklist() {
       '<button type="button" class="' + (_wl.period === v ? 'on' : '') + '" aria-pressed="' + (_wl.period === v) + '" onclick="_wl.period=' + v + ';renderWorklist()">' + escHtml(T(t)) + '</button>').join('') + '</div></div>'
     + '<div class="wl-cols"><section class="wl-list" aria-label="' + escHtml(T('Danh sách buổi tập')) + '">' + (list.length ? wlGroups(list) : '<div class="gp-card wl-empty"><p>' + escHtml(T('Không có buổi nào khớp bộ lọc.')) + '</p></div>') + '</section>'
     + (phone || !_wl.sel ? '' : '<aside class="wl-side">' + wlDetailHTML(list.find((w) => w.id === _wl.sel)) + '</aside>') + '</div>';
+  if (!phone && _wl.sel) wlMountMap(list.find((w) => w.id === _wl.sel));
 }
 
 function wlKpis(all) {
@@ -2628,6 +2630,7 @@ function wlDetailHTML(w) {
   return '<section class="gp-card wl-det" aria-labelledby="wl-dt-t"><div class="wl-det-h"><span class="gp-eyebrow">' + escHtml((d ? T(WL_DOW_LONG[d.getDay()]) + ' ' + wlDM(d) : '') + ' · ' + String(w.at).slice(11, 16)) + '</span>'
     + '<h2 id="wl-dt-t" data-i18n-skip>' + escHtml(w.name || T(cat.name)) + '</h2><div class="gp-chips"><span class="gp-tp" style="background:' + cat.color + '">' + escHtml(T(cat.name)) + '</span>'
     + (w.load ? '<span class="gp-tp" style="background:' + tone.bg + ';color:' + tone.fg + '">Load ' + Math.round(w.load) + '</span>' : '') + '</div></div>'
+    + (w.route && w.route.poly ? wlMapHTML(w) : '')
     + '<div class="wl-stats">' + stats.map(([k, v]) => '<div><span>' + escHtml(T(k)) + '</span><b>' + escHtml(v) + '</b></div>').join('') + '</div>'
     + (w.teAer != null || w.teAna != null ? '<div class="wl-sec"><h3>Training effect</h3><div class="wl-te"><span>' + escHtml(T('Hiếu khí')) + '</span>' + bar(w.teAer, '#7FB2FF') + '<b>' + (w.teAer ?? '—') + '</b>'
       + '<span>' + escHtml(T('Kỵ khí')) + '</span>' + bar(w.teAna, '#FFB86B') + '<b>' + (w.teAna ?? '—') + '</b></div></div>' : '')
@@ -2708,6 +2711,93 @@ async function wlDisconnect() {
     const c = wlProfile(); c.garmin = { connected: false }; c.garminSync = null;
   } catch (e) { alert(String((e && e.message) || e)); }
   renderWorklist();
+}
+// ── Bản đồ tuyến chạy (2026-11-14): toạ độ GPS Garmin (garmin_core.route_of — polyline mã hoá + tốc độ từng điểm) ──
+// Leaflet + nền OpenStreetMap, tải lười lần đầu mở bản đồ. Không tải được (mất mạng / CDN chặn) → vẽ tuyến bằng SVG.
+let _wlMap = null, _leafletLoading = null;
+function wlDecodePolyline(str) {
+  const pts = []; let i = 0, lat = 0, lon = 0;
+  const next = () => { let r = 0, sh = 0, b; do { b = str.charCodeAt(i++) - 63; r |= (b & 0x1f) << sh; sh += 5; } while (b >= 0x20 && i <= str.length); return (r & 1) ? ~(r >> 1) : (r >> 1); };
+  while (i < str.length) { lat += next(); lon += next(); pts.push([lat / 1e5, lon / 1e5]); }
+  return pts;
+}
+/** Màu theo tốc độ trong CHÍNH buổi đó: chậm (xanh dương) → nhanh (đỏ). lo/hi = phân vị 10 / 90 để vài điểm nhiễu không kéo lệch thang. */
+const WL_PACE_COLS = ['#7FB2FF', '#8FDBFF', '#9FD9B4', '#F2D16B', '#FFB86B', '#EE5A4F'];
+function wlSpeedRange(spd) {
+  const v = (spd || []).filter((x) => x > 0.5).sort((a, b) => a - b);
+  if (v.length < 4) return null;
+  return { lo: v[Math.floor(v.length * 0.1)], hi: v[Math.floor(v.length * 0.9)] };
+}
+function wlSpeedCol(sp, rg) {
+  if (!rg || !(sp > 0.5) || rg.hi <= rg.lo) return WL_PACE_COLS[2];
+  const t = Math.max(0, Math.min(1, (sp - rg.lo) / (rg.hi - rg.lo)));
+  return WL_PACE_COLS[Math.min(WL_PACE_COLS.length - 1, Math.floor(t * WL_PACE_COLS.length))];
+}
+function wlMapHTML(w) {
+  const rg = wlSpeedRange(w.route.spd), run = wlCat(w.sport) === 'run';
+  const lab = (sp) => run ? wlPace(sp) + '/km' : (sp * 3.6).toFixed(1) + ' km/h';
+  return '<div class="wl-sec"><h3>' + escHtml(T('Bản đồ tuyến')) + '</h3>'
+    + '<div id="wl-map" class="wl-map" role="img" aria-label="' + escHtml(T('Bản đồ tuyến chạy, tô màu theo tốc độ: xanh chậm, đỏ nhanh')) + '"></div>'
+    + (rg ? '<div class="wl-map-l"><span>' + escHtml(T('Chậm') + ' ' + lab(rg.lo)) + '</span><i aria-hidden="true" style="background:linear-gradient(90deg,' + WL_PACE_COLS.join(',') + ')"></i><span>'
+      + escHtml(T('Nhanh') + ' ' + lab(rg.hi)) + '</span></div>' : '') + '</div>';
+}
+function ensureLeaflet() {
+  if (window.L && window.L.map) return Promise.resolve(true);
+  if (_leafletLoading) return _leafletLoading;
+  _leafletLoading = new Promise((resolve) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet'; css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
+    document.head.appendChild(css);
+    const js = document.createElement('script');
+    js.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+    js.onload = () => resolve(!!(window.L && window.L.map));
+    js.onerror = () => { _leafletLoading = null; resolve(false); };
+    document.head.appendChild(js);
+    setTimeout(() => resolve(!!(window.L && window.L.map)), 8000);
+  });
+  return _leafletLoading;
+}
+/** Nhóm điểm liền nhau cùng màu thành một đường — vài chục đường thay vì vài trăm. */
+function wlRouteSegments(pts, spd, rg) {
+  const segs = [];
+  for (let i = 1; i < pts.length; i++) {
+    const c = wlSpeedCol((spd || [])[i], rg), last = segs[segs.length - 1];
+    if (last && last.c === c) last.pts.push(pts[i]); else segs.push({ c, pts: [pts[i - 1], pts[i]] });
+  }
+  return segs;
+}
+async function wlMountMap(w) {
+  if (_wlMap) { try { _wlMap.remove(); } catch (_e) {} _wlMap = null; }
+  if (!w || !w.route || !w.route.poly) return;
+  const el = document.getElementById('wl-map');
+  if (!el) return;
+  const pts = wlDecodePolyline(w.route.poly), rg = wlSpeedRange(w.route.spd);
+  if (pts.length < 2) { el.remove(); return; }
+  const segs = wlRouteSegments(pts, w.route.spd, rg);
+  const ok = await ensureLeaflet();
+  if (!document.body.contains(el)) return;          // người dùng đã chọn buổi khác trong lúc tải
+  if (!ok) { el.innerHTML = wlRouteSVG(segs, pts); el.classList.add('svg'); return; }
+  const map = L.map(el, { zoomControl: true, attributionControl: true, scrollWheelZoom: false });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
+  }).addTo(map);
+  segs.forEach((sg) => L.polyline(sg.pts, { color: sg.c, weight: 5, opacity: 0.95, lineCap: 'round' }).addTo(map));
+  L.circleMarker(pts[0], { radius: 7, color: '#161111', weight: 2, fillColor: '#9FD9B4', fillOpacity: 1 }).bindTooltip(T('Xuất phát')).addTo(map);
+  L.circleMarker(pts[pts.length - 1], { radius: 7, color: '#161111', weight: 2, fillColor: '#EE5A4F', fillOpacity: 1 }).bindTooltip(T('Kết thúc')).addTo(map);
+  map.fitBounds(L.latLngBounds(pts), { padding: [18, 18] });
+  _wlMap = map;
+}
+/** Không có Leaflet: vẽ hình tuyến bằng SVG (không nền bản đồ), vẫn tô màu theo tốc độ. */
+function wlRouteSVG(segs, pts) {
+  const la = pts.map((p) => p[0]), lo = pts.map((p) => p[1]);
+  const minLa = Math.min(...la), maxLa = Math.max(...la), minLo = Math.min(...lo), maxLo = Math.max(...lo);
+  const kx = Math.cos((minLa + maxLa) / 2 * Math.PI / 180);      // kinh độ co lại theo vĩ độ
+  const w = Math.max(1e-9, (maxLo - minLo) * kx), h = Math.max(1e-9, maxLa - minLa), sc = 300 / Math.max(w, h);
+  const xy = (p) => ((p[1] - minLo) * kx * sc + 10).toFixed(1) + ',' + ((maxLa - p[0]) * sc + 10).toFixed(1);
+  return '<svg viewBox="0 0 ' + (w * sc + 20).toFixed(0) + ' ' + (h * sc + 20).toFixed(0) + '" width="100%" height="100%" aria-hidden="true">'
+    + segs.map((sg) => '<polyline fill="none" stroke="' + sg.c + '" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" points="' + sg.pts.map(xy).join(' ') + '"/>').join('')
+    + '<circle cx="' + xy(pts[0]).split(',')[0] + '" cy="' + xy(pts[0]).split(',')[1] + '" r="6" fill="#9FD9B4"/>'
+    + '<circle cx="' + xy(pts[pts.length - 1]).split(',')[0] + '" cy="' + xy(pts[pts.length - 1]).split(',')[1] + '" r="6" fill="#EE5A4F"/></svg>';
 }
 function wlAsk(q) { aiOpen('general'); setTimeout(() => { const i = document.getElementById('ai-in'); if (i) { i.value = q; i.focus(); } }, 260); }
 function wlCopyCmd(btn) {
@@ -19272,6 +19362,14 @@ body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-even
 .wl-f input:focus{outline:2px solid #8FDBFF;outline-offset:1px;}
 .wl-fine{margin:0;font-size:12.5px;line-height:1.45;color:rgba(255,255,255,.6);}
 .wl-conn .wl-note{margin:0;}
+.wl-map{height:260px;border-radius:14px;overflow:hidden;background:#2C2826;}
+.wl-map.svg{display:grid;place-items:center;padding:8px;}
+.wl-map .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.82) contrast(.92) saturate(.6);}
+.wl-map .leaflet-control-attribution{background:rgba(22,17,17,.75);color:rgba(255,255,255,.7);font-size:10px;}
+.wl-map .leaflet-control-attribution a{color:#8FDBFF;}
+.wl-map-l{display:flex;align-items:center;gap:10px;font-size:12.5px;color:rgba(255,255,255,.72);}
+.wl-map-l i{flex:1;height:6px;border-radius:3px;}
+@media (max-width:899px){.wl-map{height:220px;}}
 .wl-note{margin:-6px 0 14px;padding:12px 14px;border-radius:14px;font-size:14px;font-weight:700;line-height:1.4;}
 .wl-note.ok{background:rgba(159,217,180,.14);color:#9FD9B4;}
 .wl-note.err{background:rgba(238,90,79,.12);border:1px solid rgba(238,90,79,.5);color:#FFB3B3;}
@@ -21322,7 +21420,8 @@ Object.assign(I18N_VI_EN, {
   'Tab này đọc dữ liệu Garmin trên hồ sơ của chính mày — tài khoản này không có quyền đọc hồ sơ đó.': 'This tab reads Garmin data on your own profile — this account cannot read that profile.',
   'Buổi tập trên đồng hồ Garmin hiện ở đây sau lần đồng bộ đầu tiên — kéo về cả lịch sử cũ.': 'Workouts from your Garmin watch show up here after the first sync — full history included.',
   'Đăng nhập Garmin trên máy tính (login.py)': 'Sign in to Garmin on your computer (login.py)', 'Chạy lệnh đồng bộ — kéo cả lịch sử': 'Run the sync command — pulls the full history',
-  'Chưa có buổi tập nào': 'No workouts yet', 'Bấm Tải lại': 'Tap Reload', 'Bấm Đồng bộ': 'Tap Sync', 'Hôm qua': 'Yesterday', 'Ngày trước': 'Previous day', 'Ngày sau': 'Next day', 'Chọn ngày để log': 'Pick a day to log', 'Về hôm nay': 'Back to today',
+  'Chưa có buổi tập nào': 'No workouts yet', 'Bấm Tải lại': 'Tap Reload', 'Bấm Đồng bộ': 'Tap Sync', 'Bản đồ tuyến': 'Route map', 'Bản đồ tuyến chạy, tô màu theo tốc độ: xanh chậm, đỏ nhanh': 'Route map coloured by speed: blue slow, red fast',
+  'Chậm': 'Slow', 'Nhanh': 'Fast', 'Xuất phát': 'Start', 'Kết thúc': 'Finish', 'Hôm qua': 'Yesterday', 'Ngày trước': 'Previous day', 'Ngày sau': 'Next day', 'Chọn ngày để log': 'Pick a day to log', 'Về hôm nay': 'Back to today',
   'Đang log bù — bữa lưu vào ngày này': 'Catch-up logging — meals save to this day', 'Log bù cho': 'Logging for',
   'Chưa ghi bữa nào ngày này — bấm Ghi bữa ăn để log bù.': 'No meals logged this day — tap Log a meal to catch up.', 'Xoá bữa này khỏi log của': 'Remove this meal from the log of', 'Stress TB': 'Avg stress', 'Rất tốt': 'Prime', 'Kém': 'Poor', 'Nghỉ ngơi': 'Rest', 'Thấp': 'Low', 'Vừa': 'Medium', 'Cao': 'High', 'cao': 'high', 'thấp': 'low',
   'Số do đồng hồ Garmin tự tính — Body Battery 0–100 (năng lượng còn lại), Stress 0–100 (từ biến thiên nhịp tim), Readiness 0–100.': 'Computed by the Garmin watch — Body Battery 0–100 (energy left), Stress 0–100 (from heart-rate variability), Readiness 0–100.', 'Chọn một khách ở thanh khách để xem buổi tập Garmin của khách đó.': "Pick a client in the client bar to see their Garmin workouts.", 'Ngắt kết nối': 'Disconnect', 'Kết nối Garmin': 'Connect Garmin', 'Email Garmin': 'Garmin email', 'Mật khẩu Garmin': 'Garmin password',

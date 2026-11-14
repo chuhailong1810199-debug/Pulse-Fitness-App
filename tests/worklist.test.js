@@ -143,3 +143,25 @@ test('hien day du cho khach Garmin: strain, nhip tho, SpO2, Body Battery / Stres
   assert.match(s, /nights\.some\(\(n\) => num\(HS_MON\[i\]\.pick\(n\)\) != null\)/, 'o khong dem nao co so thi an');
   assert.match(s, /_rcMountRings\(wrap\);\n\s+_rcMountGarmin\(wrap\);/);
 });
+
+test('ban do tuyen: polyline may chu ma hoa == app giai ma; toc do tinh tu toa do khi Garmin de 0; buoi khong GPS khong co ban do', () => {
+  const { spawnSync } = require('child_process');
+  const py = `
+import sys, json; sys.path.insert(0, "functions-py")
+import garmin_core as c
+pts = [(10.79512, 106.76701), (10.79533, 106.76745), (10.79601, 106.76812), (10.78952, 106.78067)]
+raw = [{"lat": la, "lon": lo, "time": 1794389183000 + i * 5000, "speed": 0.0} for i, (la, lo) in enumerate(pts)]
+print(json.dumps({"ref": c.encode_polyline([(38.5, -120.2), (40.7, -120.95), (43.252, -126.453)]),
+                  "poly": c.encode_polyline(pts), "spd": c._route_speeds(raw)}))`;
+  const r = spawnSync('python3', ['-c', py], { cwd: path.join(__dirname, '..'), encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const j = JSON.parse(r.stdout);
+  assert.strictEqual(j.ref, '_p~iF~ps|U_ulLnnqC_mqNvxq`@', 'dung chuan Google');
+  const dec = new Function(cut('function wlDecodePolyline', '\n/** Màu theo tốc độ') + '; return wlDecodePolyline;')();
+  assert.deepStrictEqual(dec(j.poly), [[10.79512, 106.76701], [10.79533, 106.76745], [10.79601, 106.76812], [10.78952, 106.78067]]);
+  assert.strictEqual(j.spd[0], null);
+  assert(j.spd[1] > 9 && j.spd[1] < 11, 'toc do tu toa do (~53 m / 5 s): ' + j.spd[1]);
+  const core = fs.readFileSync(path.join(__dirname, '..', 'functions-py', 'garmin_core.py'), 'utf8');
+  assert.match(core, /"route": route_of\(api, a\["activityId"\]\) if recent and a\.get\("hasPolyline"\)/);
+  assert.match(s, /js\.onerror = \(\) => \{ _leafletLoading = null; resolve\(false\); \}/, 'CDN hong -> ve SVG');
+});

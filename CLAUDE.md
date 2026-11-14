@@ -312,6 +312,11 @@ Key routing rules:
   clients.maxHr > cao nhất Garmin ghi được > Tanaka theo ngày sinh. Chỉ 14 ngày gần nhất mỗi lần (gọi Garmin nặng).
   Nhịp thở + SpO₂ lúc ngủ → `recharge.breathing` / `recharge.spo2`; Health Monitor có ô SpO₂ (ô không đêm nào có số
   thì ẩn). Recovery có mục "Garmin" (`_rcMountGarmin`): Body Battery, Stress TB, Training Readiness.
+  **Bản đồ tuyến** (2026-11-14): buổi có GPS (`hasPolyline`) trong 60 ngày → `workouts[].route` {poly (Google encoded
+  polyline, ~2–3 KB), spd[] m/s}. Garmin để `speed` / quãng = 0 trong polyline → `_route_speeds` tự tính từ toạ độ
+  (haversine) + giờ, trượt 20 giây. App: Leaflet 1.9.4 (cdnjs, tải lười) + nền OpenStreetMap (ghi công), tuyến tô màu
+  chậm→nhanh theo phân vị 10/90 của chính buổi đó; CDN hỏng → vẽ SVG. Toạ độ = dữ liệu vị trí (lộ nơi ở) — chỉ coach
+  phụ trách + chính khách đọc (luật activity/).
 - **Lớp Hybrid / HYROX** (`groupFormat: hyrox`, 2026-10-19): label mỗi buổi bắt đầu bằng loại buổi
   (Compromised / Strength Endurance / Engine / Foundation / Race Sim / Partner); số buổi/tuần quyết định loại
   (form tự gán). Buổi Compromised / Engine / Race Sim: phút CHẠY ≥ phút TRẠM — `hybridIssues()` trong
