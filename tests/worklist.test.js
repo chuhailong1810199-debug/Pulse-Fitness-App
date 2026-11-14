@@ -131,3 +131,15 @@ print(json.dumps({"r": r, "a": a, "e": e}))`;
   assert.match(s, /activeClient\.polarProfile \|\| activeClient\.garminProfile/);
   assert.match(s, /garmin \? rcGarminSyncNow\(\) : polarSyncNow\(\)/);
 });
+
+test('hien day du cho khach Garmin: strain, nhip tho, SpO2, Body Battery / Stress / Readiness', () => {
+  const core = fs.readFileSync(path.join(__dirname, '..', 'functions-py', 'garmin_core.py'), 'utf8');
+  assert.match(core, /import strain as ST/, 'strain cung cong thuc voi Polar (strain-parity.test.js)');
+  assert.match(core, /"breathing": rec\.get\("resp"\), "spo2": rec\.get\("spo2"\)/);
+  assert.match(core, /if load:\n\s+r\["load"\] = load/);
+  const main = fs.readFileSync(path.join(__dirname, '..', 'functions-py', 'main.py'), 'utf8');
+  assert.match(main, /except Exception as e:  # noqa: BLE001 — strain hỏng một ngày/);
+  assert.match(s, /key: 'spo2', name: 'SpO₂'/);
+  assert.match(s, /nights\.some\(\(n\) => num\(HS_MON\[i\]\.pick\(n\)\) != null\)/, 'o khong dem nao co so thi an');
+  assert.match(s, /_rcMountRings\(wrap\);\n\s+_rcMountGarmin\(wrap\);/);
+});

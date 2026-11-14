@@ -8326,7 +8326,42 @@ function renderRecovery() {
   _rcMountBrief(wrap);
   _rcMountSleep(wrap);
   _rcMountRings(wrap);
+  _rcMountGarmin(wrap);
   // Healthspan chuyển sang tab Health riêng, không mount ở đây nữa.
+}
+
+/**
+ * Số riêng của Garmin (Polar không có): Body Battery, Stress, Training Readiness — đọc recovery/{ngày}.garmin.
+ * Không có dữ liệu Garmin nào thì không vẽ gì.
+ */
+const RC_READY_VI = { POOR: 'Kém', LOW: 'Thấp', MODERATE: 'Vừa', HIGH: 'Cao', PRIME: 'Rất tốt' };
+const RC_STRESS = [[25, 'Nghỉ ngơi', '#7ED9A0'], [50, 'Thấp', '#9FD9B4'], [75, 'Vừa', '#E6B34A'], [100, 'Cao', '#EE5A4F']];
+function _rcMountGarmin(wrap) {
+  if (wrap.querySelector('#rc-garmin')) return;
+  const days = (_recovery || []).filter((n) => n && n.garmin).slice(0, 7);
+  const today = days[0] && days[0].garmin;
+  if (!today || !(today.bodyBattery || today.stressAvg != null || today.readiness)) return;
+  const bb = today.bodyBattery || {}, rd = today.readiness || {};
+  const st = today.stressAvg, stB = st == null || st < 0 ? null : RC_STRESS.find(([max]) => st <= max) || RC_STRESS[3];
+  const bars = days.slice().reverse().map((n) => {
+    const h = (n.garmin.bodyBattery || {}).high;
+    return '<i title="' + escHtml(_rcDate(n.date) + ': ' + (h ?? '—')) + '" style="height:' + Math.max(4, Math.min(100, Number(h) || 0) * 0.42) + 'px"></i>';
+  }).join('');
+  const tile = (k, v, sub, extra) => '<div class="rc-g-t"><span class="rc-g-k">' + escHtml(T(k)) + '</span><b>' + v + '</b>'
+    + (sub ? '<span class="rc-g-s">' + sub + '</span>' : '') + (extra || '') + '</div>';
+  const box = document.createElement('section');
+  box.className = 'rc-sec';
+  box.id = 'rc-garmin';
+  box.innerHTML = '<div class="rc-sec-head"><h2 class="rc-h2">Garmin</h2><span class="rc-micro">' + escHtml(_rcDate(days[0].date)) + '</span></div>'
+    + '<div class="rc-g">'
+    + (bb.high != null ? tile('Body Battery', escHtml(String(bb.latest ?? bb.high)),
+        escHtml(T('cao') + ' ' + (bb.high ?? '—') + ' · ' + T('thấp') + ' ' + (bb.low ?? '—')), '<div class="rc-g-bars" aria-hidden="true">' + bars + '</div>') : '')
+    + (stB ? tile('Stress TB', escHtml(String(st)), '<span style="color:' + stB[2] + '">' + escHtml(T(stB[1])) + '</span>') : '')
+    + (rd.score != null ? tile('Training Readiness', escHtml(String(rd.score)),
+        escHtml(rd.level ? T(RC_READY_VI[String(rd.level).toUpperCase()] || String(rd.level)) : '')) : '')
+    + '</div><p class="hs-lead">' + escHtml(T('Số do đồng hồ Garmin tự tính — Body Battery 0–100 (năng lượng còn lại), Stress 0–100 (từ biến thiên nhịp tim), Readiness 0–100.')) + '</p>';
+  const rings = wrap.querySelector('#rc-rings');
+  if (rings && rings.parentNode) rings.parentNode.insertBefore(box, rings.nextSibling); else wrap.appendChild(box);
 }
 
 /**
@@ -8348,6 +8383,9 @@ const HS_MON = [
     pick: (n) => (n.sleep || {}).hrMin },
   { key: 'hrv', name: 'HRV', full: 'Biến thiên nhịp tim', unit: ' ms', dp: 0,
     pick: (n) => (n.recharge || {}).hrv },
+  // SpO₂ lúc ngủ — chỉ đồng hồ Garmin có Pulse Ox (Polar không đo). Không đêm nào có số thì ô bị ẩn.
+  { key: 'spo2', name: 'SpO₂', full: 'Oxy máu lúc ngủ', unit: '%', dp: 0,
+    pick: (n) => (n.recharge || {}).spo2 },
 ];
 
 function _hsMonitor(rec) {
@@ -8376,8 +8414,10 @@ function _hsMonitor(rec) {
     };
   });
 
-  const scored = out.filter((x) => x.state !== 'none');
-  return { list: out, ok: scored.filter((x) => x.state === 'ok').length, total: scored.length };
+  // Ô mà KHÔNG đêm nào có số (đồng hồ không đo — VD SpO₂ trên Polar) thì ẩn hẳn, khỏi một ô "—" vô nghĩa.
+  const shown = out.filter((x, i) => x.state !== 'none' || nights.some((n) => num(HS_MON[i].pick(n)) != null));
+  const scored = shown.filter((x) => x.state !== 'none');
+  return { list: shown, ok: scored.filter((x) => x.state === 'ok').length, total: scored.length };
 }
 
 /** Tab Health: Healthspan + Health Monitor. Đọc cùng dữ liệu với tab Recovery. */
@@ -8510,8 +8550,8 @@ function _hsMountMonitor(wrap) {
     + '<div class="hs-mon-sum ' + (m.ok === m.total ? 'good' : 'warn') + '">'
       + m.ok + '/' + m.total + ' chỉ số trong ngưỡng của bạn</div>'
     + '<p class="hs-lead">So với đường nền của chính bạn (±2 độ lệch chuẩn), không phải '
-      + 'ngưỡng dân số. Polar không đo SpO₂, nhiệt độ da, huyết áp hay ECG nên không có '
-      + 'mấy ô đó.</p>';
+      + 'ngưỡng dân số. Chỉ số nào đồng hồ không đo (SpO₂ cần cảm biến Pulse Ox; nhiệt độ da, huyết áp, ECG) '
+      + 'thì không có ô.</p>';
   wrap.appendChild(box);
 }
 
@@ -18715,6 +18755,13 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .blk-notes li, .ai-pg-n li{ margin: 2px 0; }
 .ai-pg-n{ margin: 4px 0 8px; font-size: 12.5px; line-height: 1.4; }
 .ai-pt-x{ display: block; margin-top: 2px; font-size: 11.5px; font-weight: 600; opacity: .72; }
+.rc-g{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.rc-g-t{ padding: 12px 14px; border-radius: 14px; background: rgba(255,255,255,.06); display: flex; flex-direction: column; gap: 3px; }
+.rc-g-k{ font-size: 11.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: rgba(255,255,255,.6); }
+.rc-g-t b{ font-size: 30px; font-weight: 800; line-height: 1.1; }
+.rc-g-s{ font-size: 13px; color: rgba(255,255,255,.72); }
+.rc-g-bars{ display: flex; align-items: flex-end; gap: 3px; height: 44px; margin-top: 6px; }
+.rc-g-bars i{ flex: 1; border-radius: 3px; background: #8FDBFF; opacity: .75; }
 .day-focus-k{ display: block; margin-bottom: 4px; color: #8FDBFF; font-size: 10.5px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
 .modal-why{ color: rgba(255,255,255,.88); line-height: 1.45; }
 #cdash-page .cd-goto{flex:none;min-height:46px;padding:0 20px;border-radius:999px;border:0;background:var(--accent-strong,#1C90FF);color:var(--on-accent,#161111);font:800 14px 'Figtree',sans-serif;cursor:pointer}
@@ -21205,7 +21252,8 @@ Object.assign(I18N_VI_EN, {
   'Tab này đọc dữ liệu Garmin trên hồ sơ của chính mày — tài khoản này không có quyền đọc hồ sơ đó.': 'This tab reads Garmin data on your own profile — this account cannot read that profile.',
   'Buổi tập trên đồng hồ Garmin hiện ở đây sau lần đồng bộ đầu tiên — kéo về cả lịch sử cũ.': 'Workouts from your Garmin watch show up here after the first sync — full history included.',
   'Đăng nhập Garmin trên máy tính (login.py)': 'Sign in to Garmin on your computer (login.py)', 'Chạy lệnh đồng bộ — kéo cả lịch sử': 'Run the sync command — pulls the full history',
-  'Chưa có buổi tập nào': 'No workouts yet', 'Bấm Tải lại': 'Tap Reload', 'Bấm Đồng bộ': 'Tap Sync', 'Chọn một khách ở thanh khách để xem buổi tập Garmin của khách đó.': "Pick a client in the client bar to see their Garmin workouts.", 'Ngắt kết nối': 'Disconnect', 'Kết nối Garmin': 'Connect Garmin', 'Email Garmin': 'Garmin email', 'Mật khẩu Garmin': 'Garmin password',
+  'Chưa có buổi tập nào': 'No workouts yet', 'Bấm Tải lại': 'Tap Reload', 'Bấm Đồng bộ': 'Tap Sync', 'Stress TB': 'Avg stress', 'Rất tốt': 'Prime', 'Kém': 'Poor', 'Nghỉ ngơi': 'Rest', 'Thấp': 'Low', 'Vừa': 'Medium', 'Cao': 'High', 'cao': 'high', 'thấp': 'low',
+  'Số do đồng hồ Garmin tự tính — Body Battery 0–100 (năng lượng còn lại), Stress 0–100 (từ biến thiên nhịp tim), Readiness 0–100.': 'Computed by the Garmin watch — Body Battery 0–100 (energy left), Stress 0–100 (from heart-rate variability), Readiness 0–100.', 'Chọn một khách ở thanh khách để xem buổi tập Garmin của khách đó.': "Pick a client in the client bar to see their Garmin workouts.", 'Ngắt kết nối': 'Disconnect', 'Kết nối Garmin': 'Connect Garmin', 'Email Garmin': 'Garmin email', 'Mật khẩu Garmin': 'Garmin password',
   'Đang kết nối…': 'Connecting…', 'Xác nhận mã': 'Confirm code', 'Mã xác thực Garmin vừa gửi (email / app)': 'Garmin verification code (email / app)',
   'Nhập email và mật khẩu Garmin.': 'Enter your Garmin email and password.', 'Máy chủ chưa có hàm kết nối Garmin (chưa deploy).': 'The Garmin connect function is not deployed yet.',
   'Kết nối tài khoản Garmin Connect một lần — sau đó buổi tập tự về mỗi sáng, bấm Đồng bộ để lấy ngay.': 'Connect your Garmin Connect account once — workouts then arrive every morning; tap Sync to pull them now.',

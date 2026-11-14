@@ -302,7 +302,13 @@ Key routing rules:
   = RHR Garmin), `recharge` {rhr, hrv}, `source:'garmin'`; activity `steps`, `activeSec`, `workouts` (sport viết hoa, at ISO).
   Mọi chỗ đọc khuôn Polar (tab Recovery / Health, recoveryBrief, dashboard) chạy luôn. `garminProfile` (ngày sinh, giới,
   cân kg, cao) → Healthspan tính tuổi. Lần đồng bộ đầu kéo 28 đêm. Nút "Đồng bộ ngay" tab Recovery → `rcGarminSyncNow`
-  (khách tự bấm được). Không có Polar strain (`load`) cho khách Garmin — vòng tải ở Recovery để trống.
+  (khách tự bấm được).
+  **Đầy đủ** (2026-11-14): strain 0–21 cho khách Garmin = `functions-py/strain.py`, bản Python của `functions/strain.js` —
+  `tests/strain-parity.test.js` bắt hai bản ra CÙNG SỐ (đổi công thức phải đổi cả hai). `garmin_core.day_load` (khuôn
+  `load` của Polar): nhịp tim từng giây mỗi buổi (`get_activity_details`) + nhịp tim cả ngày ngoài buổi tập; HR max =
+  clients.maxHr > cao nhất Garmin ghi được > Tanaka theo ngày sinh. Chỉ 14 ngày gần nhất mỗi lần (gọi Garmin nặng).
+  Nhịp thở + SpO₂ lúc ngủ → `recharge.breathing` / `recharge.spo2`; Health Monitor có ô SpO₂ (ô không đêm nào có số
+  thì ẩn). Recovery có mục "Garmin" (`_rcMountGarmin`): Body Battery, Stress TB, Training Readiness.
 - **Lớp Hybrid / HYROX** (`groupFormat: hyrox`, 2026-10-19): label mỗi buổi bắt đầu bằng loại buổi
   (Compromised / Strength Endurance / Engine / Foundation / Race Sim / Partner); số buổi/tuần quyết định loại
   (form tự gán). Buổi Compromised / Engine / Race Sim: phút CHẠY ≥ phút TRẠM — `hybridIssues()` trong

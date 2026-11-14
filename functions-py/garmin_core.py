@@ -4,8 +4,11 @@
 Ghi: write_firestore() — trường `garmin` RIÊNG trong activity/{ngày} và recovery/{ngày}, + clients/{id}.garminSync.
 KHÔNG đụng trường của Polar. Endpoint hỏng / đồng hồ không đo → null, không đoán số.
 """
+import calendar
 import sys
 from datetime import datetime, timezone
+
+import strain as ST
 
 LAP_SPORTS = ("running", "trail_running", "treadmill_running", "track_running", "cycling", "indoor_cycling", "road_biking")
 
@@ -42,6 +45,8 @@ def health_day(api, d: str) -> dict:
     hs = hrv.get("hrvSummary") or {}
     st = safe(api.get_stats, d) or {}
     tr = safe(api.get_training_readiness, d) or []
+    resp = safe(api.get_respiration_data, d) or {}
+    spo2 = safe(api.get_spo2_data, d) or {}
     tr0 = tr[0] if isinstance(tr, list) and tr else (tr if isinstance(tr, dict) else {})
     return {
         "date": d,
@@ -62,11 +67,88 @@ def health_day(api, d: str) -> dict:
             "drained": st.get("bodyBatteryDrainedValue"),
         } if st.get("bodyBatteryHighestValue") is not None else None,
         "stressAvg": st.get("averageStressLevel"),
+        # Nhịp thở / SpO₂ LÚC NGỦ — so được với nhịp thở đêm của Polar. Đồng hồ không đo / không đeo khi ngủ → null.
+        "resp": resp.get("avgSleepRespirationValue"),
+        "respWake": resp.get("avgWakingRespirationValue"),
+        "spo2": spo2.get("avgSleepSpO2") or spo2.get("averageSpO2"),
+        "spo2Low": spo2.get("lowestSpO2"),
         "readiness": {"score": tr0.get("score"), "level": tr0.get("level"), "feedback": tr0.get("feedbackShort")} if tr0 else None,
         "steps": st.get("totalSteps"),
         "calories": st.get("totalKilocalories"),
         "activeCalories": st.get("activeKilocalories"),
         "intensityMin": (st.get("moderateIntensityMinutes") or 0) + 2 * (st.get("vigorousIntensityMinutes") or 0) if st else None,
+    }
+
+
+def _gmt_sec(s):
+    """"2026-11-11 09:26:23" (GMT) → giây epoch."""
+    try:
+        return calendar.timegm(datetime.strptime(str(s)[:19], "%Y-%m-%d %H:%M:%S").timetuple())
+    except (TypeError, ValueError):
+        return None
+
+
+def all_day_hr(api, d: str) -> list:
+    """Nhịp tim cả ngày (Garmin ~2 phút / mẫu) → [{at giây, hr}] — tải ngày không tập, giống contSamples của Polar."""
+    h = safe(api.get_heart_rates, d) or {}
+    return [{"at": t / 1000, "hr": v} for t, v in (h.get("heartRateValues") or []) if isinstance(v, (int, float)) and v > 0]
+
+
+def activity_hr(api, activity_id) -> list:
+    """Nhịp tim TỪNG GIÂY của một buổi tập (directTimestamp ms + directHeartRate) — như file FIT của Polar."""
+    det = safe(api.get_activity_details, activity_id, 4000, 0) or {}
+    idx = {m.get("key"): m.get("metricsIndex") for m in det.get("metricDescriptors") or []}
+    ti, hi = idx.get("directTimestamp"), idx.get("directHeartRate")
+    if ti is None or hi is None:
+        return []
+    out = []
+    for row in det.get("activityDetailMetrics") or []:
+        m = row.get("metrics") or []
+        if max(ti, hi) < len(m) and isinstance(m[ti], (int, float)) and isinstance(m[hi], (int, float)) and m[hi] > 0:
+            out.append({"at": m[ti] / 1000, "hr": m[hi]})
+    return out
+
+
+def day_load(api, acts: list, cont: list, ctx: dict) -> dict | None:
+    """Tải tim mạch MỘT ngày cho khách Garmin — cùng khuôn `load` của Polar (dayLoad trong functions/index.js) và
+    cùng công thức strain (strain.py == strain.js). acts: buổi tập Garmin của ngày; cont: nhịp tim cả ngày."""
+    if not ctx.get("hrMax") or ctx.get("rhr") is None:
+        return None
+    series, workouts, wins, sec = [], [], [], 0
+    for a in acts:
+        samples = activity_hr(api, a["activityId"]) if a.get("activityId") else []
+        w = ST.workout_strain(samples, ctx) if len(samples) > 1 else None
+        if len(samples) > 1:
+            series.append(samples)
+            ts = [p["at"] for p in samples]
+            wins.append((min(ts), max(ts)))
+        gsec = round(a.get("duration") or 0)
+        sec += gsec
+        workouts.append({
+            "at": str(a.get("startTimeLocal") or "").replace(" ", "T"),
+            "sport": str(g(a, "activityType", "typeKey") or "OTHER").upper(),
+            "sec": gsec,
+            "cardioLoad": num(a.get("activityTrainingLoad"), 1),     # training load của Garmin — chỗ cardio-load của Polar
+            "strain": w["strain"] if w else None,
+            "hrAvg": w["hrAvg"] if w else num(a.get("averageHR"), 0),
+            "hrMax": w["hrMax"] if w else num(a.get("maxHR"), 0),
+            "zoneSec": w["zoneSec"] if w else None,
+            "samples": len(samples),
+            "noHr": len(samples) < 2,
+            "records": 1,
+        })
+    outside = [p for p in cont if not any(f <= p["at"] <= t for f, t in wins)]
+    if len(outside) > 1:
+        series.append(outside)
+    if not workouts and len(outside) < 2:
+        return None
+    day = ST.daily_strain(series, ctx) if series else None
+    cardio = sum(w["cardioLoad"] or 0 for w in workouts)
+    return {
+        "cardioLoad": round(cardio, 1), "strain": day["strain"] if day else None, "rawLoad": day["load"] if day else None,
+        "zoneSec": day["zoneSec"] if day else None, "hrMax": ctx["hrMax"], "hrMaxSource": ctx.get("hrMaxSource"), "rhr": ctx["rhr"],
+        "sessions": len(workouts), "sessionsNoHr": sum(1 for w in workouts if w["noHr"]), "sec": sec, "workouts": workouts,
+        "allDaySamples": len(outside), "source": "garmin + app-strain-v1",
     }
 
 
@@ -118,7 +200,7 @@ def profile_of(api) -> dict | None:
             "height": h, "at": datetime.now(timezone.utc).isoformat()}
 
 
-def polar_shape(day: str, rec: dict | None, act: dict | None, ws: list | None) -> tuple[dict, dict]:
+def polar_shape(day: str, rec: dict | None, act: dict | None, ws: list | None, load: dict | None = None) -> tuple[dict, dict]:
     """Bản theo KHUÔN POLAR cho khách chỉ có Garmin: tab Recovery / Health / dashboard / tóm tắt AI đọc
     sleep / recharge / steps / workouts ở gốc doc như của Polar. Không có số thì không ghi khoá đó (không ghi null đè)."""
     r, a = {}, {}
@@ -126,11 +208,13 @@ def polar_shape(day: str, rec: dict | None, act: dict | None, ws: list | None) -
         sl, hrv, rhr = rec.get("sleep") or {}, rec.get("hrv") or {}, rec.get("rhr")
         if sl.get("total"):
             r["sleep"] = {k: sl.get(k) for k in ("total", "deep", "light", "rem", "score", "start", "end")} | {"hrMin": rhr}
-        if rhr or hrv.get("lastNight"):
-            r["recharge"] = {"rhr": rhr, "hrv": hrv.get("lastNight"), "breathing": None, "status": None,
-                             "ansCharge": None, "ansStatus": None}
-        if r:
-            r["source"] = "garmin"
+        if rhr or hrv.get("lastNight") or rec.get("resp") or rec.get("spo2"):
+            r["recharge"] = {"rhr": rhr, "hrv": hrv.get("lastNight"), "breathing": rec.get("resp"), "spo2": rec.get("spo2"),
+                             "status": None, "ansCharge": None, "ansStatus": None}
+    if load:
+        r["load"] = load
+    if r:
+        r["source"] = "garmin"
     if act:
         a.update({"steps": act.get("steps"), "calories": act.get("calories"), "activeCalories": act.get("activeCalories"),
                   "activeSec": (act.get("intensityMin") or 0) * 60 if act.get("intensityMin") is not None else None})
@@ -156,18 +240,20 @@ def write_firestore(db, client_id: str, days: list, workouts, mirror: bool = Fal
     c = db.collection("clients").document(client_id)
     by = {}
     for d in days or []:
-        s = by.setdefault(d["date"], {"rec": None, "act": {}, "w": []})
+        s = by.setdefault(d["date"], {"rec": None, "act": {}, "w": [], "load": None})
         if d.get("sleep") or d.get("hrv") or d.get("rhr") or d.get("bodyBattery") or d.get("readiness"):
-            s["rec"] = {k: d.get(k) for k in ("sleep", "hrv", "rhr", "bodyBattery", "stressAvg", "readiness")} | {"at": at}
+            s["rec"] = {k: d.get(k) for k in ("sleep", "hrv", "rhr", "bodyBattery", "stressAvg", "readiness",
+                                              "resp", "respWake", "spo2", "spo2Low")} | {"at": at}
+        s["load"] = d.get("load")
         if d.get("steps") is not None:
             s["act"] = {k: d.get(k) for k in ("steps", "calories", "activeCalories", "intensityMin")}
     for w in workouts or []:
         day = str(w.get("at") or "")[:10]
         if len(day) == 10:
-            by.setdefault(day, {"rec": None, "act": {}, "w": []})["w"].append(w)
+            by.setdefault(day, {"rec": None, "act": {}, "w": [], "load": None})["w"].append(w)
     ops = []
     for day, s in sorted(by.items()):
-        pr, pa = polar_shape(day, s["rec"], s["act"] or None, s["w"] if workouts is not None else None) if mirror else ({}, {})
+        pr, pa = polar_shape(day, s["rec"], s["act"] or None, s["w"] if workouts is not None else None, s.get("load")) if mirror else ({}, {})
         if s["rec"] or pr:
             ops.append((c.collection("recovery").document(day), {"date": day, **pr, **({"garmin": s["rec"]} if s["rec"] else {})}))
         if s["act"] or s["w"] or workouts is not None:

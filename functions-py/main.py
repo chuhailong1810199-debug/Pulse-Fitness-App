@@ -85,7 +85,10 @@ def _sync(cid: str, health_days: int, history_days: int) -> dict:
     # Kéo buổi tập HỎNG (None) ≠ không có buổi nào ([]): hỏng thì giữ nguyên workouts cũ.
     workouts = None if acts is None else [core.workout(api, a, str(a.get("startTimeLocal") or "")[:10] >= cut)
                                           for a in acts if isinstance(a, dict)]
-    n = core.write_firestore(db, cid, days, workouts, mirror=mirror, profile=core.profile_of(api) if mirror else None)
+    profile = core.profile_of(api) if mirror else None
+    if mirror and acts:
+        _strain_days(api, cd, profile, days, acts, min(len(days), 14))
+    n = core.write_firestore(db, cid, days, workouts, mirror=mirror, profile=profile)
     try:  # token đã làm mới phải lưu lại — không thì lần sau Garmin bắt đăng nhập lại
         tref.set({"tokens": api.client.dumps(), "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True)
     except Exception as e:  # noqa: BLE001
@@ -94,6 +97,29 @@ def _sync(cid: str, health_days: int, history_days: int) -> dict:
     if workouts is None:
         raise RuntimeError("Garmin không trả danh sách buổi tập")
     return {"docs": n, "workouts": len(workouts), "from": start, "to": today.isoformat()}
+
+
+def _strain_days(api, cd: dict, profile: dict | None, days: list, acts: list, n: int) -> None:
+    """Strain 0–21 cho N ngày gần nhất (khách Garmin) — gắn d["load"]; write_firestore đưa vào recovery/{ngày}.load.
+
+    HR max: số coach nhập (clients.maxHr) > cao nhất Garmin ghi được trong các buổi đã kéo > ước theo tuổi.
+    """
+    observed = max([a.get("maxHR") for a in acts if isinstance(a.get("maxHR"), (int, float))] or [0]) or None
+    sex = "female" if str((profile or {}).get("gender") or "").upper() == "FEMALE" else "male"
+    for d in days[-n:]:
+        rhr = d.get("rhr")
+        if rhr is None:
+            continue
+        hm = core.ST.resolve_hr_max(manual=cd.get("maxHr"), observed=observed,
+                                    birthdate=(profile or {}).get("birthdate"), today=d["date"])
+        if not hm.get("hrMax"):
+            continue
+        ctx = {"rhr": rhr, "hrMax": hm["hrMax"], "hrMaxSource": hm["source"], "sex": sex}
+        day_acts = [a for a in acts if str(a.get("startTimeLocal") or "")[:10] == d["date"]]
+        try:
+            d["load"] = core.day_load(api, day_acts, core.all_day_hr(api, d["date"]), ctx)
+        except Exception as e:  # noqa: BLE001 — strain hỏng một ngày không được làm hỏng cả lần đồng bộ
+            print("[garmin] strain hỏng", d["date"], type(e).__name__, file=sys.stderr)
 
 
 def _mapped(e: Exception) -> https_fn.HttpsError:
@@ -175,7 +201,7 @@ def garminDisconnect(req: https_fn.CallableRequest) -> dict:
     return {"connected": False}
 
 
-@https_fn.on_call(region=REGION, timeout_sec=240, memory=options.MemoryOption.MB_512)
+@https_fn.on_call(region=REGION, timeout_sec=540, memory=options.MemoryOption.MB_512)
 def garminSyncNow(req: https_fn.CallableRequest) -> dict:
     """Nút "Đồng bộ" của tab Work list. data: {clientId} — mặc định hồ sơ của coach (longchu) cho bản app cũ."""
     data = dict(req.data or {})
