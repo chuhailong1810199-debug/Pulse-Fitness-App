@@ -1388,7 +1388,7 @@ async function switchClient(id) {
   checkRecoveryTab();             // hiện/ẩn tab Recovery theo khách mới (không await)
   _activity = []; checkActiveTab();
   _historyCache = null; // clear cache for new client
-  _nutritionData = null; _macroTargets = null; _macroMeta = null; // clear nutrition for new client
+  _nutritionData = null; _macroTargets = null; _macroMeta = null; _nlDate = null; // clear nutrition for new client
   _sessionLogged = false; updateFinishBtn();
   document.getElementById('client-level').textContent = activeClient.level || '—';
 
@@ -7509,11 +7509,57 @@ let _aiMealResult  = null;   // last Gemini result
 let _lastMealPhoto = null;   // base64 of the photo being reviewed (memory only)
 let _lastMealHint  = '';     // the client's correction, saved with the meal
 
-function _nutritionDateKey() {
+// Ngày đang xem / đang log (2026-11-14): null = hôm nay. Khách quên log thì lùi lại log bù — tối đa
+// NUTRITION_BACKLOG_DAYS ngày (hôm nay + 29 ngày trước = 30 ngày, khớp NUTRITION_RETENTION_DAYS: lùi xa
+// hơn thì pruneOldNutrition() xoá mất). Lưu / xoá bữa đều đi qua _nutritionDateKey() nên tự theo ngày này.
+let _nlDate = null;
+const NUTRITION_BACKLOG_DAYS = 30;
+function _nlTodayKey() {
   const d = new Date();
   return d.getFullYear() + '-' +
     String(d.getMonth() + 1).padStart(2, '0') + '-' +
     String(d.getDate()).padStart(2, '0');
+}
+function _nutritionDateKey() {
+  const today = _nlTodayKey();
+  // Ngày chọn rơi khỏi khung (tab để mở qua đêm nhiều ngày) → quay về hôm nay, không bao giờ log vào ngày sẽ bị xoá.
+  if (!_nlDate || _nlDate > today || _nlDate < _dateKeyDaysAgo(NUTRITION_BACKLOG_DAYS - 1)) return today;
+  return _nlDate;
+}
+/** "Hôm nay" / "Hôm qua" / "Thứ Năm 13/11" cho ngày đang chọn. */
+function _nlDayLabel(key) {
+  if (key === _nlTodayKey()) return T('Hôm nay');
+  if (key === _dateKeyDaysAgo(1)) return T('Hôm qua');
+  const d = new Date(key + 'T00:00:00');
+  return d.toLocaleDateString(_lang === 'en' ? 'en-AU' : 'vi-VN', { weekday: 'long', day: 'numeric', month: 'numeric' });
+}
+function nlSetDate(key) {
+  const today = _nlTodayKey(), min = _dateKeyDaysAgo(NUTRITION_BACKLOG_DAYS - 1);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(key || ''))) return;
+  if (key > today) key = today;
+  if (key < min) key = min;
+  _nlDate = key === today ? null : key;
+  loadNutritionData();
+  const page = document.getElementById('nutrition-page');
+  if (page) page.scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+function nlShiftDate(delta) {
+  const d = new Date(_nutritionDateKey() + 'T00:00:00');
+  d.setDate(d.getDate() + delta);
+  nlSetDate(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'));
+}
+/** Thanh chọn ngày dưới tiêu đề: ‹ › + ô chọn ngày + "Về hôm nay". */
+function nlRenderDayNav() {
+  const key = _nutritionDateKey(), today = _nlTodayKey(), min = _dateKeyDaysAgo(NUTRITION_BACKLOG_DAYS - 1);
+  const title = document.getElementById('nl-page-title');
+  if (title) title.textContent = _nlDayLabel(key);
+  const nav = document.getElementById('nl-day-nav');
+  if (!nav) return;
+  nav.innerHTML = '<button type="button" class="nl-day-b" onclick="nlShiftDate(-1)"' + (key <= min ? ' disabled' : '') + ' aria-label="' + T('Ngày trước') + '">‹</button>'
+    + '<label class="nl-day-pick"><span class="nl-sr">' + T('Chọn ngày để log') + '</span>'
+    + '<input type="date" value="' + key + '" min="' + min + '" max="' + today + '" onchange="nlSetDate(this.value)"></label>'
+    + '<button type="button" class="nl-day-b" onclick="nlShiftDate(1)"' + (key >= today ? ' disabled' : '') + ' aria-label="' + T('Ngày sau') + '">›</button>'
+    + (key !== today ? '<button type="button" class="nl-day-today" onclick="nlSetDate(_nlTodayKey())">' + T('Về hôm nay') + '</button>' : '');
 }
 
 async function loadNutritionData() {
@@ -7525,13 +7571,14 @@ async function loadNutritionData() {
   // sách vẫn là món của khách trước — mở sheet đúng lúc đó là thấy nhầm người.
   if (typeof nlSetRecent === 'function') nlSetRecent([]);
 
-  // Date title
+  // Tiêu đề + thanh chọn ngày (log bù tới 30 ngày)
   const titleEl = document.getElementById('nl-page-date');
   if (titleEl) {
-    titleEl.textContent = new Date().toLocaleDateString('vi-VN', {
-      weekday: 'long', day: 'numeric', month: 'numeric'
-    });
+    titleEl.textContent = _nutritionDateKey() === _nlTodayKey()
+      ? new Date().toLocaleDateString('vi-VN', { weekday: 'long', day: 'numeric', month: 'numeric' })
+      : T('Đang log bù — bữa lưu vào ngày này');
   }
+  nlRenderDayNav();
 
   // Load targets + recommendation meta from client doc
   const clientSnap = await db.collection('clients').doc(activeClient.id).get();
@@ -7539,7 +7586,7 @@ async function loadNutritionData() {
   _macroTargets = cdata.macroTargets || null;
   _macroMeta    = cdata.macroMeta || null;
 
-  // Load today's log
+  // Log của ngày đang chọn (mặc định hôm nay)
   const dateKey = _nutritionDateKey();
   const logSnap = await db.collection('clients').doc(activeClient.id)
     .collection('nutrition').doc(dateKey).get();
@@ -7609,7 +7656,7 @@ function renderNutritionMeals() {
 
   mealsEl.innerHTML = meals.length
     ? meals.map((m, i) => nlMealItemHTML(m, i)).join('')
-    : '<p class="nl-meals-empty">Chưa ghi bữa nào hôm nay.</p>';
+    : '<p class="nl-meals-empty">' + (_nutritionDateKey() === _nlTodayKey() ? 'Chưa ghi bữa nào hôm nay.' : T('Chưa ghi bữa nào ngày này — bấm Ghi bữa ăn để log bù.')) + '</p>';
 }
 
 function toggleMealItems(i) {
@@ -7707,12 +7754,13 @@ async function renderNutritionMonth() {
     const over = calTarget > 0 && cal > calTarget * 1.15;
     const under = calTarget > 0 && cal < calTarget * 0.85;
     const dl = new Date(d.date + 'T00:00:00').toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric' });
-    return `<div class="nweek-row">
+    // Bấm một ngày trong lịch sử = mở ngày đó để xem / log bù.
+    return `<button type="button" class="nweek-row${d.date === _nutritionDateKey() ? ' on' : ''}" onclick="nlSetDate('${d.date}')" aria-label="${dl}">
       <div class="nweek-day">${dl}</div>
       <div class="nweek-bar-wrap"><div class="nweek-bar${over ? ' over' : (under ? ' under' : '')}" style="width:${pct}%"></div></div>
       <div class="nweek-val">${cal}<span> kcal</span></div>
       <div class="nweek-meals">${(d.meals || []).length}</div>
-    </div>`;
+    </button>`;
   }).join('');
 
   wrap.innerHTML =
@@ -7774,6 +7822,9 @@ async function generateMacroRecommendation() {
 
 function openNutritionModal() {
   showNlogStep('0');
+  // Đang log bù → dải báo ngày ngay dưới tiêu đề, để không ai ghi nhầm bữa hôm nay vào hôm qua.
+  const day = document.getElementById('nlog-day'), key = _nutritionDateKey();
+  if (day) { day.hidden = key === _nlTodayKey(); day.textContent = T('Log bù cho') + ' ' + _nlDayLabel(key); }
   document.getElementById('nlog-overlay').classList.remove('hidden');
 }
 
@@ -8000,6 +8051,8 @@ async function saveNutritionLog(source) {
     const fat   = parseFloat(document.getElementById('nlog-fat')?.value)   || 0;
     mealData = { name, calories: cal, protein: prot, carbs, fat, source: 'manual', timestamp: Date.now() };
   } else return;
+  // Log bù: đánh dấu để coach biết bữa này ghi sau (giờ trong timestamp là giờ GHI, không phải giờ ăn).
+  if (_nutritionDateKey() !== _nlTodayKey()) mealData.late = true;
 
   const dateKey = _nutritionDateKey();
   const db = firebase.firestore();
@@ -8017,8 +8070,10 @@ async function saveNutritionLog(source) {
   };
 
   await ref.set({ date: dateKey, meals, totals, updatedAt: Date.now() });
+  const _late = dateKey !== _nlTodayKey();
   logActivity('nutrition', (mealData.name || 'Bữa ăn') + ' · '
-    + Math.round(mealData.calories) + ' kcal · tổng ' + Math.round(totals.calories) + ' kcal hôm nay');
+    + Math.round(mealData.calories) + ' kcal · tổng ' + Math.round(totals.calories) + ' kcal '
+    + (_late ? 'ngày ' + dateKey.slice(8) + '/' + dateKey.slice(5, 7) + ' (log bù)' : 'hôm nay'));
 
   _nutritionData = { date: dateKey, meals, totals };
   closeNutritionModal();
@@ -8034,7 +8089,7 @@ async function saveNutritionLog(source) {
 
 async function deleteMealLog(mealIndex) {
   if (!activeClient || !_nutritionData) return;
-  if (!confirm('Remove this meal from today\'s log?')) return;
+  if (!confirm(_nutritionDateKey() === _nlTodayKey() ? 'Remove this meal from today\'s log?' : T('Xoá bữa này khỏi log của') + ' ' + _nlDayLabel(_nutritionDateKey()) + '?')) return;
 
   const meals = (_nutritionData.meals || []).filter((_, i) => i !== mealIndex);
   const totals = meals.reduce((acc, m) => {
@@ -9673,6 +9728,7 @@ function showPage(page) {
     });
   }
   if (page === 'nutrition') {
+    _nlDate = null;            // mở tab là về hôm nay; lùi ngày bằng thanh chọn ngày
     loadNutritionData();
   }
   if (page === 'youth') {
@@ -16288,13 +16344,14 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 <section id="nutrition-page" class="nl nl-page">
   <header class="nl-page-head">
     <div>
-      <h1 class="nl-page-title">Hôm nay</h1>
+      <h1 class="nl-page-title" id="nl-page-title">Hôm nay</h1>
       <div class="nl-page-date" id="nl-page-date"></div>
     </div>
     <button class="nl-btn nl-btn-pri nl-log-btn" onclick="openNutritionModal()">
       <svg class="nl-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Ghi bữa ăn
     </button>
   </header>
+  <div class="nl-day-nav" id="nl-day-nav"></div>
 
   <!-- targets area: macro card / no-target card / InBody recommendation / medical note -->
   <div id="nutrition-targets" class="nl-targets"></div>
@@ -16407,6 +16464,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
         <svg class="nl-i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </div>
+    <div class="nlog-day" id="nlog-day" role="status" hidden></div>
 
     <!-- landing -->
     <div id="nlog-step-0" class="nlog-step active">
@@ -17858,6 +17916,9 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 
 /* 7-day history */
 .nweek-row{display:grid;grid-template-columns:56px 1fr 72px 32px;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid rgba(63,63,61,.07);}
+button.nweek-row{width:100%;border:0;border-bottom:1px solid rgba(63,63,61,.07);background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer;border-radius:8px}
+button.nweek-row:hover,button.nweek-row.on{background:rgba(143,219,255,.08)}
+button.nweek-row:focus-visible{outline:2px solid #8FDBFF;outline-offset:-2px}
 .nweek-row:last-child{border-bottom:none;}
 .nweek-day{font-size:12px;font-weight:700;color:rgba(176,169,160,.65);}
 .nweek-bar-wrap{background:rgba(63,63,61,.12);border-radius:99px;height:6px;overflow:hidden;}
@@ -18113,6 +18174,15 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 .nl .nl-page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px}
 .nl .nl-page-title{margin:0;font-size:28px;font-weight:800;letter-spacing:-.02em;line-height:1.1}
 .nl .nl-page-date{margin-top:4px;font-size:13.5px;color:var(--txt-muted)}
+.nl .nl-day-nav{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0 4px}
+.nl .nl-day-b{width:40px;height:40px;border-radius:12px;border:1px solid var(--line,rgba(255,255,255,.14));background:transparent;color:inherit;font:800 20px/1 'Figtree',sans-serif;cursor:pointer}
+.nl .nl-day-b:disabled{opacity:.3;cursor:default}
+.nl .nl-day-pick input{min-height:40px;padding:0 10px;border-radius:12px;border:1px solid var(--line,rgba(255,255,255,.14));background:rgba(0,0,0,.25);color:inherit;font:600 15px 'Figtree',sans-serif;color-scheme:dark}
+.nl .nl-day-today{min-height:40px;padding:0 14px;border-radius:999px;border:0;background:#8FDBFF;color:#161111;font:800 14px 'Figtree',sans-serif;cursor:pointer}
+.nl .nl-day-b:focus-visible,.nl .nl-day-today:focus-visible,.nl .nl-day-pick input:focus-visible{outline:2px solid #8FDBFF;outline-offset:2px}
+.nl .nl-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.nl .nlog-day{margin:0 18px 10px;padding:10px 12px;border-radius:12px;background:rgba(255,184,107,.14);color:#FFD4A3;font-size:14px;font-weight:800}
+.nl .nlog-day[hidden]{display:none}
 .nl .nl-log-btn{flex:none;min-height:46px;padding:0 16px 0 13px;border-radius:999px;font-size:14.5px}
 .nl .nl-log-btn .nl-i{stroke-width:2.2}
 .nl .nl-card{padding:18px 16px;border-radius:18px;background:var(--surface);border:1px solid var(--line)}
@@ -21252,7 +21322,9 @@ Object.assign(I18N_VI_EN, {
   'Tab này đọc dữ liệu Garmin trên hồ sơ của chính mày — tài khoản này không có quyền đọc hồ sơ đó.': 'This tab reads Garmin data on your own profile — this account cannot read that profile.',
   'Buổi tập trên đồng hồ Garmin hiện ở đây sau lần đồng bộ đầu tiên — kéo về cả lịch sử cũ.': 'Workouts from your Garmin watch show up here after the first sync — full history included.',
   'Đăng nhập Garmin trên máy tính (login.py)': 'Sign in to Garmin on your computer (login.py)', 'Chạy lệnh đồng bộ — kéo cả lịch sử': 'Run the sync command — pulls the full history',
-  'Chưa có buổi tập nào': 'No workouts yet', 'Bấm Tải lại': 'Tap Reload', 'Bấm Đồng bộ': 'Tap Sync', 'Stress TB': 'Avg stress', 'Rất tốt': 'Prime', 'Kém': 'Poor', 'Nghỉ ngơi': 'Rest', 'Thấp': 'Low', 'Vừa': 'Medium', 'Cao': 'High', 'cao': 'high', 'thấp': 'low',
+  'Chưa có buổi tập nào': 'No workouts yet', 'Bấm Tải lại': 'Tap Reload', 'Bấm Đồng bộ': 'Tap Sync', 'Hôm qua': 'Yesterday', 'Ngày trước': 'Previous day', 'Ngày sau': 'Next day', 'Chọn ngày để log': 'Pick a day to log', 'Về hôm nay': 'Back to today',
+  'Đang log bù — bữa lưu vào ngày này': 'Catch-up logging — meals save to this day', 'Log bù cho': 'Logging for',
+  'Chưa ghi bữa nào ngày này — bấm Ghi bữa ăn để log bù.': 'No meals logged this day — tap Log a meal to catch up.', 'Xoá bữa này khỏi log của': 'Remove this meal from the log of', 'Stress TB': 'Avg stress', 'Rất tốt': 'Prime', 'Kém': 'Poor', 'Nghỉ ngơi': 'Rest', 'Thấp': 'Low', 'Vừa': 'Medium', 'Cao': 'High', 'cao': 'high', 'thấp': 'low',
   'Số do đồng hồ Garmin tự tính — Body Battery 0–100 (năng lượng còn lại), Stress 0–100 (từ biến thiên nhịp tim), Readiness 0–100.': 'Computed by the Garmin watch — Body Battery 0–100 (energy left), Stress 0–100 (from heart-rate variability), Readiness 0–100.', 'Chọn một khách ở thanh khách để xem buổi tập Garmin của khách đó.': "Pick a client in the client bar to see their Garmin workouts.", 'Ngắt kết nối': 'Disconnect', 'Kết nối Garmin': 'Connect Garmin', 'Email Garmin': 'Garmin email', 'Mật khẩu Garmin': 'Garmin password',
   'Đang kết nối…': 'Connecting…', 'Xác nhận mã': 'Confirm code', 'Mã xác thực Garmin vừa gửi (email / app)': 'Garmin verification code (email / app)',
   'Nhập email và mật khẩu Garmin.': 'Enter your Garmin email and password.', 'Máy chủ chưa có hàm kết nối Garmin (chưa deploy).': 'The Garmin connect function is not deployed yet.',

@@ -156,7 +156,10 @@ await renderStats();
 ## Nutrition tab + Gemini
 
 Own top-level tab (`#nutrition-page`, between Progress and Log). Daily macro bars, meal log,
-7-day history. Data at `clients/{id}/nutrition/{YYYY-MM-DD}` → `{ date, meals[], totals }`.
+7-day history. **Log bù** (2026-11-14): thanh chọn ngày dưới tiêu đề (‹ › ô ngày "Về hôm nay"), hoặc bấm
+một ngày trong lịch sử 30 ngày → `_nlDate`; `_nutritionDateKey()` trả ngày đang chọn nên lưu / xoá bữa tự theo ngày
+đó. Lùi tối đa `NUTRITION_BACKLOG_DAYS` = 30 (khớp `NUTRITION_RETENTION_DAYS` — xa hơn là bị prune xoá); ngày rơi khỏi
+khung thì quay về hôm nay. Bữa log bù mang `late: true`. Mở tab / đổi khách → về hôm nay. Data at `clients/{id}/nutrition/{YYYY-MM-DD}` → `{ date, meals[], totals }`.
 Targets live on the client doc as `macroTargets` + `macroMeta` (reasoning, BMR/TDEE, basis).
 
 Two callables in `functions/index.js`, both `asia-southeast1`, secret `GEMINI_API_KEY`:
