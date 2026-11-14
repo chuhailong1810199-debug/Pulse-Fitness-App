@@ -297,6 +297,12 @@ Key routing rules:
   garmin_mfa_{id}` 10 phút). `clients/{id}.garmin` {connected, name, err}. `garminDisconnect` xoá token. Quyền: coach
   phụ trách hoặc chính khách (email đã xác thực khớp). `garminSyncDaily` chạy mọi token, giãn 20 giây/tài khoản.
   Deploy functions-py cần venv Python **3.13** (runtime python313) — venv 3.14 làm deploy hỏng "Failed to find … SDK".
+  **Recovery / Healthspan cho khách Garmin** (2026-11-14): Polar CHỈ là của coach; khách lấy từ Garmin. Khi đồng bộ hồ sơ
+  KHÔNG có `polarProfile`, máy chủ (`garmin_core.polar_shape`) ghi THÊM khuôn Polar ở gốc doc: recovery `sleep` (+`hrMin`
+  = RHR Garmin), `recharge` {rhr, hrv}, `source:'garmin'`; activity `steps`, `activeSec`, `workouts` (sport viết hoa, at ISO).
+  Mọi chỗ đọc khuôn Polar (tab Recovery / Health, recoveryBrief, dashboard) chạy luôn. `garminProfile` (ngày sinh, giới,
+  cân kg, cao) → Healthspan tính tuổi. Lần đồng bộ đầu kéo 28 đêm. Nút "Đồng bộ ngay" tab Recovery → `rcGarminSyncNow`
+  (khách tự bấm được). Không có Polar strain (`load`) cho khách Garmin — vòng tải ở Recovery để trống.
 - **Lớp Hybrid / HYROX** (`groupFormat: hyrox`, 2026-10-19): label mỗi buổi bắt đầu bằng loại buổi
   (Compromised / Strength Endurance / Engine / Foundation / Race Sim / Partner); số buổi/tuần quyết định loại
   (form tự gán). Buổi Compromised / Engine / Race Sim: phút CHẠY ≥ phút TRẠM — `hybridIssues()` trong

@@ -63,6 +63,13 @@ def _sync(cid: str, health_days: int, history_days: int) -> dict:
     from garminconnect import Garmin
 
     db = firestore.client()
+    cdoc = db.document("clients/" + cid).get()
+    cd = cdoc.to_dict() or {} if cdoc.exists else {}
+    # Khách CHỈ dùng Garmin (không có polarProfile) → ghi thêm khuôn Polar cho Recovery / Health. Lần đầu kéo
+    # 28 đêm để Recovery / Healthspan có đường nền ngay (Recovery đọc 28 ngày).
+    mirror = not cd.get("polarProfile")
+    if mirror and not (cd.get("garminSync") or {}).get("at"):
+        health_days = max(health_days, 28)
     tref = db.document("privateTokens/garmin_" + cid)
     snap = tref.get()
     tokens = (snap.to_dict() or {}).get("tokens") if snap.exists else None
@@ -78,7 +85,7 @@ def _sync(cid: str, health_days: int, history_days: int) -> dict:
     # Kéo buổi tập HỎNG (None) ≠ không có buổi nào ([]): hỏng thì giữ nguyên workouts cũ.
     workouts = None if acts is None else [core.workout(api, a, str(a.get("startTimeLocal") or "")[:10] >= cut)
                                           for a in acts if isinstance(a, dict)]
-    n = core.write_firestore(db, cid, days, workouts)
+    n = core.write_firestore(db, cid, days, workouts, mirror=mirror, profile=core.profile_of(api) if mirror else None)
     try:  # token đã làm mới phải lưu lại — không thì lần sau Garmin bắt đăng nhập lại
         tref.set({"tokens": api.client.dumps(), "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True)
     except Exception as e:  # noqa: BLE001

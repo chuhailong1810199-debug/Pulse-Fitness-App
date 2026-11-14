@@ -8425,7 +8425,8 @@ function renderHealth() {
 /** Thẻ tuổi: nhịp lão hoá bên trái, quả cầu bên phải. */
 function _hsMountAge(wrap) {
   const hs = _hsCompute(_recovery, _activity);
-  const prof = (activeClient && activeClient.polarProfile) || null;
+  // Ngày sinh / giới tính: Polar (coach) hoặc hồ sơ Garmin (khách — garminProfile do máy chủ ghi khi đồng bộ).
+  const prof = (activeClient && (activeClient.polarProfile || activeClient.garminProfile)) || null;
   const a = hs ? _hsAge(hs, _recovery, prof) : null;
 
   const box = document.createElement('section');
@@ -8436,7 +8437,7 @@ function _hsMountAge(wrap) {
     box.innerHTML = '<div class="rc-sec-head"><h2 class="rc-h2">Healthspan</h2></div>'
       + '<p class="hs-lead">Chưa tính được tuổi: '
       + (prof && prof.birthdate ? 'cần ít nhất 3 đêm dữ liệu.'
-         : 'thiếu ngày sinh. Bấm Đồng bộ ngay để kéo hồ sơ từ Polar.')
+         : 'thiếu ngày sinh. Bấm Đồng bộ ngay ở tab Recovery để kéo hồ sơ từ đồng hồ (ngày sinh phải có trong hồ sơ Garmin / Polar).')
       + '</p>';
     wrap.appendChild(box);
     return;
@@ -9280,15 +9281,35 @@ function _rcBriefPaint(b, at) {
  * khối đó, nút này không bị mất theo.
  */
 function _rcMountSync(wrap) {
-  if (userRole !== 'coach') return;        // callable phía server cũng chỉ cho coach
+  // Garmin (khách, hoặc bất kỳ hồ sơ đã kết nối): khách tự bấm được — garminSyncNow cho coach phụ trách + chính khách.
+  // Polar: chỉ hồ sơ của coach (syncPolarNow chỉ cho coach).
+  const garmin = !!(activeClient && activeClient.garmin && activeClient.garmin.connected && !activeClient.polarProfile);
+  if (!garmin && userRole !== 'coach') return;
   const head = wrap.querySelector('.rc-head');
   if (!head || head.querySelector('.rc-sync')) return;
   const b = document.createElement('button');
   b.type = 'button';
   b.className = 'rc-sync';
-  b.textContent = 'Đồng bộ ngay';
-  b.onclick = () => polarSyncNow();
+  b.textContent = T('Đồng bộ ngay');
+  b.onclick = () => (garmin ? rcGarminSyncNow() : polarSyncNow());
   head.appendChild(b);
+}
+
+/** Recovery / Health của khách Garmin: kéo ngay rồi đọc lại (máy chủ ghi khuôn Polar vào recovery/ + activity/). */
+async function rcGarminSyncNow() {
+  const set = (txt, busy) => { const b = document.querySelector('.rc-sync'); if (b) { b.textContent = txt; b.disabled = !!busy; } };
+  set(T('Đang kéo…'), true);
+  try {
+    const fn = firebase.app().functions('asia-southeast1').httpsCallable('garminSyncNow', { timeout: 250000 });
+    await fn({ clientId: activeClient.id });
+    const cs = await getDoc(doc(db, 'clients', activeClient.id)).catch(() => null);
+    if (cs && cs.exists) { const x = cs.data() || {}; activeClient.garminProfile = x.garminProfile || null; activeClient.garminSync = x.garminSync || null; }
+    _recovery = []; _activity = []; _rcBriefCache = null; _rcBriefAt = null;
+    if (document.getElementById('health-page')?.classList.contains('active')) await loadHealth(); else await loadRecovery();
+  } catch (e) {
+    set(T('Đồng bộ ngay'), false);
+    alert(String((e && e.message) || e));
+  }
 }
 
 /**

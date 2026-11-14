@@ -107,10 +107,50 @@ def workout(api, a: dict, recent: bool) -> dict:
     }
 
 
-def write_firestore(db, client_id: str, days: list, workouts) -> int:
+def profile_of(api) -> dict | None:
+    """Ngày sinh / giới tính / cân / cao từ hồ sơ Garmin — cùng dạng polarProfile (cân kg, cao cm) cho Healthspan."""
+    ud = (safe(api.get_user_profile) or {}).get("userData") or {}
+    if not ud.get("birthDate"):
+        return None
+    w, h = ud.get("weight"), ud.get("height")
+    return {"birthdate": ud.get("birthDate"), "gender": ud.get("gender"),
+            "weight": round(w / 1000, 1) if isinstance(w, (int, float)) and w > 500 else w,   # Garmin trả gram
+            "height": h, "at": datetime.now(timezone.utc).isoformat()}
+
+
+def polar_shape(day: str, rec: dict | None, act: dict | None, ws: list | None) -> tuple[dict, dict]:
+    """Bản theo KHUÔN POLAR cho khách chỉ có Garmin: tab Recovery / Health / dashboard / tóm tắt AI đọc
+    sleep / recharge / steps / workouts ở gốc doc như của Polar. Không có số thì không ghi khoá đó (không ghi null đè)."""
+    r, a = {}, {}
+    if rec:
+        sl, hrv, rhr = rec.get("sleep") or {}, rec.get("hrv") or {}, rec.get("rhr")
+        if sl.get("total"):
+            r["sleep"] = {k: sl.get(k) for k in ("total", "deep", "light", "rem", "score", "start", "end")} | {"hrMin": rhr}
+        if rhr or hrv.get("lastNight"):
+            r["recharge"] = {"rhr": rhr, "hrv": hrv.get("lastNight"), "breathing": None, "status": None,
+                             "ansCharge": None, "ansStatus": None}
+        if r:
+            r["source"] = "garmin"
+    if act:
+        a.update({"steps": act.get("steps"), "calories": act.get("calories"), "activeCalories": act.get("activeCalories"),
+                  "activeSec": (act.get("intensityMin") or 0) * 60 if act.get("intensityMin") is not None else None})
+    if ws is not None:
+        a["workouts"] = [{"at": str(w.get("at") or "").replace(" ", "T"), "sport": str(w.get("sport") or "OTHER").upper(),
+                          "sec": w.get("sec"), "calories": w.get("calories"), "hrAvg": w.get("hrAvg"), "hrMax": w.get("hrMax"),
+                          "noHr": not w.get("hrAvg")} for w in ws]
+        a["workoutSec"] = sum(w.get("sec") or 0 for w in ws) or None
+        a["workoutCalories"] = sum(w.get("calories") or 0 for w in ws) or None
+    if a:
+        a["source"] = "garmin"
+    return r, a
+
+
+def write_firestore(db, client_id: str, days: list, workouts, mirror: bool = False, profile: dict | None = None) -> int:
     """Ghi lên Firestore (Admin SDK). workouts=None nghĩa là KÉO BUỔI TẬP HỎNG → không đụng workouts cũ.
 
     Cùng dạng với scripts/garmin/write.js: activity/{d}.garmin = {bước…, workouts[], at}; recovery/{d}.garmin.
+    mirror=True (khách KHÔNG dùng Polar): ghi thêm bản khuôn Polar ở gốc doc (polar_shape) + garminProfile.
+    Hồ sơ dùng Polar (polarProfile) KHÔNG BAO GIỜ mirror — số Polar không bị đè.
     """
     at = datetime.now(timezone.utc).isoformat()
     c = db.collection("clients").document(client_id)
@@ -127,20 +167,23 @@ def write_firestore(db, client_id: str, days: list, workouts) -> int:
             by.setdefault(day, {"rec": None, "act": {}, "w": []})["w"].append(w)
     ops = []
     for day, s in sorted(by.items()):
-        if s["rec"]:
-            ops.append((c.collection("recovery").document(day), {"date": day, "garmin": s["rec"]}))
+        pr, pa = polar_shape(day, s["rec"], s["act"] or None, s["w"] if workouts is not None else None) if mirror else ({}, {})
+        if s["rec"] or pr:
+            ops.append((c.collection("recovery").document(day), {"date": day, **pr, **({"garmin": s["rec"]} if s["rec"] else {})}))
         if s["act"] or s["w"] or workouts is not None:
             g_ = dict(s["act"])
             if workouts is not None:
                 g_["workouts"] = s["w"]
             g_["at"] = at
-            ops.append((c.collection("activity").document(day), {"date": day, "garmin": g_}))
+            ops.append((c.collection("activity").document(day), {"date": day, **pa, "garmin": g_}))
     for i in range(0, len(ops), 400):
         b = db.batch()
         for ref, data in ops[i:i + 400]:
             b.set(ref, data, merge=True)
         b.commit()
     dates = sorted(by)
+    if mirror and profile:
+        c.set({"garminProfile": profile}, merge=True)
     c.set({"garminSync": {"at": at, "workouts": len(workouts or []), "from": dates[0] if dates else None,
                           "to": dates[-1] if dates else None, "by": "server"}}, merge=True)
     return len(ops)

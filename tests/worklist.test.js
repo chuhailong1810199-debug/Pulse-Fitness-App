@@ -104,3 +104,30 @@ test('coach khac (khong co ho so longchu) khong bi tro vao ho so cua admin', () 
   assert.strictEqual(mk([{ id: 'khach_cua_b' }])(), null);
   assert.strictEqual(mk([{ id: 'longchu' }])(), 'longchu');
 });
+
+test('khach chi dung Garmin: may chu ghi them khuon Polar cho Recovery / Health; ho so Polar khong bi de', () => {
+  const { spawnSync } = require('child_process');
+  const py = `
+import sys, json; sys.path.insert(0, "functions-py")
+import garmin_core as c
+r, a = c.polar_shape("2026-11-12", {"sleep": {"total": 25200, "deep": 5000}, "hrv": {"lastNight": 62}, "rhr": 55},
+                     {"steps": 9000, "intensityMin": 40}, [{"at": "2026-11-12 06:05:00", "sport": "running", "sec": 2900, "hrAvg": 156}])
+e = c.polar_shape("d", {"rhr": None, "hrv": None}, None, None)
+print(json.dumps({"r": r, "a": a, "e": e}))`;
+  const out = spawnSync('python3', ['-c', py], { cwd: path.join(__dirname, '..'), encoding: 'utf8' });
+  assert.strictEqual(out.status, 0, out.stderr);
+  const j = JSON.parse(out.stdout);
+  assert.strictEqual(j.r.source, 'garmin');
+  assert.strictEqual(j.r.sleep.total, 25200);
+  assert.strictEqual(j.r.sleep.hrMin, 55, 'Healthspan doc RHR o sleep.hrMin');
+  assert.strictEqual(j.r.recharge.hrv, 62);
+  assert.strictEqual(j.a.steps, 9000);
+  assert.strictEqual(j.a.activeSec, 2400);
+  assert.strictEqual(j.a.workouts[0].at, '2026-11-12T06:05:00');
+  assert.strictEqual(j.a.workouts[0].sport, 'RUNNING');
+  assert.deepStrictEqual(j.e, [{}, {}], 'khong co so thi khong ghi khoa nao (khong ghi null de)');
+  const main = fs.readFileSync(path.join(__dirname, '..', 'functions-py', 'main.py'), 'utf8');
+  assert.match(main, /mirror = not cd\.get\("polarProfile"\)/, 'ho so Polar (coach) KHONG mirror');
+  assert.match(s, /activeClient\.polarProfile \|\| activeClient\.garminProfile/);
+  assert.match(s, /garmin \? rcGarminSyncNow\(\) : polarSyncNow\(\)/);
+});
