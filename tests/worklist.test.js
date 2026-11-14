@@ -71,7 +71,8 @@ test('noi vao app: tab cho coach + khach, chi doc doc co phan Garmin, script tre
 });
 
 test('dong bo tren may chu: nut goi garminSyncNow, ham chi cho chu dong ho, keo hong thi khong xoa buoi cu', () => {
-  assert.match(cut('async function wlSync', '\nfunction wlConnectHTML'), /httpsCallable\('garminSyncNow'/);
+  assert.match(cut('async function wlSync', '\nfunction wlConnectHTML'), /call\('garminSyncNow'\)/);
+  assert.match(cut('async function wlSync', '\nfunction wlConnectHTML'), /call\('stravaSyncNow'\)/);
   const main = fs.readFileSync(path.join(__dirname, '..', 'functions-py', 'main.py'), 'utf8');
   assert.match(main, /d\.get\("coachUid"\) == req\.auth\.uid/, 'coach phu trach duoc');
   assert.match(main, /str\(d\.get\("email"\) or ""\)\.strip\(\)\.lower\(\) == em/, 'chinh khach (email khop) duoc');
@@ -198,4 +199,51 @@ print(json.dumps({"reuse_calls": reuse_calls, "route": w["route"], "laps": w["la
   const main = fs.readFileSync(path.join(__dirname, '..', 'functions-py', 'main.py'), 'utf8');
   assert.match(main, /return _sync\(cid, health_days=3, history_days=45\)/);
   assert.match(main, /keep = \{window\[-1\]\["date"\], window\[-2\]\["date"\]\}/, 'strain: tinh lai hom nay + hom qua');
+});
+
+test('Strava: map buoi dung khuon, ban do tu streams (to mau) hoac summary (mot mau), da keo thi khong keo lai', () => {
+  const { spawnSync } = require('child_process');
+  const py = `
+import sys, json; sys.path.insert(0, "functions-py")
+import strava_core as SV
+a = {"id": 77, "name": "Morning Run", "sport_type": "Run", "start_date_local": "2026-11-13T06:05:00Z", "elapsed_time": 2900,
+     "distance": 9200.0, "average_speed": 3.17, "average_heartrate": 156.0, "max_heartrate": 182.0, "suffer_score": 120,
+     "map": {"summary_polyline": "_p~iF~ps|U_ulLnnqC"}}
+st = {"time": list(range(0, 600, 2)), "heartrate": [140 + (i % 30) for i in range(300)],
+      "latlng": [[10.79 + i * 1e-4, 106.76] for i in range(300)], "velocity_smooth": [3.0] * 300}
+ctx = {"rhr": 60, "hrMax": 186, "sex": "male"}
+full = SV.to_workout(a, st, [{"distM": 1000}], ctx)
+summ = SV.to_workout(a, None, None, ctx)
+again = SV.to_workout(a, None, None, ctx, {"id": "s77", "route": None, "laps": None, "zones": None})
+print(json.dumps({"full": {k: full[k] for k in ("id", "source", "at", "sport", "distM", "load", "laps")}, "fullSpd": len(full["route"]["spd"]),
+                  "strain": full.get("strain"), "summ": [("route" in summ), summ.get("summaryRoute")], "again": ["route" in again, again["route"]],
+                  "map": SV.SPORT["VirtualRun"]}))`;
+  const r = spawnSync('python3', ['-c', py], { cwd: path.join(__dirname, '..'), encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const j = JSON.parse(r.stdout);
+  assert.deepStrictEqual(j.full, { id: 's77', source: 'strava', at: '2026-11-13 06:05:00', sport: 'running', distM: 9200, load: 120, laps: [{ distM: 1000 }] });
+  assert.strictEqual(j.fullSpd, 300, 'ban do tu streams co toc do tung diem');
+  assert(j.strain > 0, 'strain tu nhip tim stream, cung cong thuc');
+  assert.deepStrictEqual(j.summ, [false, { poly: '_p~iF~ps|U_ulLnnqC', spd: [] }], 'qua gioi han -> ban do mot mau, lan sau keo chi tiet');
+  assert.deepStrictEqual(j.again, [true, null], 'da keo (route co mat, ke ca null) -> khong keo lai');
+  assert.strictEqual(j.map, 'treadmill_running');
+  const main = fs.readFileSync(path.join(__dirname, '..', 'functions-py', 'main.py'), 'utf8');
+  assert.match(main, /fresh = sorted\(\[a for a in acts if "route" not in/);
+  assert.match(main, /def stravaConnect[\s\S]*_authorize\(req, cid\)/, 'ket noi Strava: chi coach phu trach / chinh khach');
+  assert.match(main, /oauth\/deauthorize/, 'ngat ket noi thu hoi quyen ben Strava');
+});
+
+test('Strava phia app: OAuth co state chong gia mao, chi xin quyen doc, bo buoi trung voi Garmin, ghi cong Strava', () => {
+  const conn = cut('async function wlStravaConnect', '\n/** Bước 2');
+  assert.match(conn, /crypto\.getRandomValues/);
+  assert.match(conn, /scope: 'read,activity:read_all'/, 'chi doc, khong xin quyen ghi');
+  const cb = cut('async function wlStravaCallback', '\nasync function wlStravaDisconnect');
+  assert.match(cb, /saved\.state === q\.get\('state'\)/);
+  assert.match(cb, /< 30 \* 60000/, 'state het han sau 30 phut');
+  assert.match(s, /Math\.abs\(g - t\) <= 120000/, 'buoi Strava trung buoi Garmin (±2 phut) bi bo');
+  assert.match(s, /Powered by Strava/);
+  assert.match(s, /if \(q\.get\('state'\) && \(q\.get\('code'\) \|\| q\.get\('error'\)\)\)/);
+  const setApp = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'strava', 'set_app.py'), 'utf8');
+  assert.match(setApp, /getpass\.getpass/, 'Client Secret go an');
+  assert.match(setApp, /settings\/strava/, 'Client ID cong khai de app mo trang Strava');
 });

@@ -267,3 +267,182 @@ def garminSyncDaily(event: scheduler_fn.ScheduledEvent) -> None:
         except Exception as e:  # noqa: BLE001
             print("[garmin] sáng hỏng", cid, type(e).__name__, str(e)[:160], file=sys.stderr)
             db.document("clients/" + cid).set({"garmin": {"err": type(e).__name__, "errAt": datetime.now(timezone.utc).isoformat()}}, merge=True)
+
+
+# ══ STRAVA — lựa chọn thứ hai (API chính thức, OAuth) ════════════════════════════════════════════════════════════════
+import strava_core as SV  # noqa: E402
+
+
+def _strava_app(db) -> dict:
+    s = db.document("privateTokens/strava_app").get()
+    app = s.to_dict() if s.exists else None
+    if not app or not app.get("clientId") or not app.get("clientSecret"):
+        raise _err(E.FAILED_PRECONDITION, "Strava chưa được cấu hình (coach chạy scripts/strava/set-app.js).")
+    return app
+
+
+def _strava_sync(cid: str, history_days: int) -> dict:
+    """Kéo buổi tập Strava của một hồ sơ → activity/{ngày}.strava; khách KHÔNG có Polar / Garmin thì ghi thêm khuôn
+    Polar (workouts + strain vào recovery/{ngày}.load) để Recovery có vòng tải."""
+    db = firestore.client()
+    app = _strava_app(db)
+    tref = db.document("privateTokens/strava_" + cid)
+    ts = tref.get()
+    tok = ts.to_dict() if ts.exists else None
+    if not tok or not tok.get("refresh"):
+        raise RuntimeError("NO_TOKEN")
+    tok, changed = SV.fresh_token(app, tok)
+    if changed:
+        tref.set(tok, merge=True)
+    cref = db.document("clients/" + cid)
+    cd = cref.get().to_dict() or {}
+    now = time.time()
+    after = now - history_days * 86400
+    acts = SV.list_activities(tok["access"], after)
+    start = datetime.fromtimestamp(after, VN).date().isoformat()
+    cached = {}
+    for doc in cref.collection("activity").where("date", ">=", start).stream():
+        for w in ((doc.to_dict() or {}).get("strava") or {}).get("workouts") or []:
+            if w and w.get("id"):
+                cached[w["id"]] = w
+    prof = cd.get("garminProfile") or cd.get("polarProfile") or {}
+    observed = max([a.get("max_heartrate") or 0 for a in acts] or [0]) or None
+    hm = core.ST.resolve_hr_max(manual=cd.get("maxHr"), observed=observed, birthdate=prof.get("birthdate"),
+                                today=datetime.now(VN).date().isoformat())
+    # Strava KHÔNG có nhịp tim nghỉ: dùng số coach nhập (clients.restingHr), không có thì 60 — và ghi rõ là ước.
+    rhr = cd.get("restingHr") if isinstance(cd.get("restingHr"), (int, float)) else 60
+    ctx = {"rhr": rhr, "hrMax": hm.get("hrMax"), "hrMaxSource": hm.get("source"),
+           "rhrSource": "coach nhập" if isinstance(cd.get("restingHr"), (int, float)) else "ước 60 (Strava không đo)",
+           "sex": "female" if str(prof.get("gender") or "").upper() == "FEMALE" else "male"} if hm.get("hrMax") else None
+    # "Đã kéo chi tiết" = khoá route CÓ MẶT (kể cả None — buổi không GPS), không phải "route có giá trị".
+    fresh = sorted([a for a in acts if "route" not in (cached.get("s" + str(a.get("id"))) or {})],
+                   key=lambda a: str(a.get("start_date") or ""), reverse=True)[:SV.DETAIL_MAX]
+    detail = {}
+    for a in fresh:
+        st = SV._streams(tok["access"], a["id"])
+        lp = SV._laps(tok["access"], a["id"]) if SV.SPORT.get(a.get("sport_type")) in core.LAP_SPORTS else None
+        detail[a["id"]] = (st, lp)
+    workouts, samples = [], {}
+    for a in acts:
+        st, lp = detail.get(a["id"], (None, None))
+        w = SV.to_workout(a, st, lp, ctx, cached.get("s" + str(a.get("id"))))
+        if st:
+            hs = SV.hr_samples(a, st)
+            if len(hs) > 1:
+                samples[w["id"]] = hs
+        workouts.append(w)
+    mirror = not cd.get("polarProfile") and not (cd.get("garmin") or {}).get("connected")
+    loads = SV.day_loads(workouts, samples, ctx) if (mirror and ctx) else {}
+    at = datetime.now(timezone.utc).isoformat()
+    by = {}
+    for w in workouts:
+        by.setdefault(str(w["at"])[:10], []).append(w)
+    b, n = db.batch(), 0
+    for day, ws in sorted(by.items()):
+        data = {"date": day, "strava": {"workouts": ws, "at": at}}
+        if mirror:
+            data.update({"source": "strava", "workoutSec": sum(w.get("sec") or 0 for w in ws) or None,
+                         "workoutCalories": sum(w.get("calories") or 0 for w in ws) or None,
+                         "workouts": [{"at": w["at"].replace(" ", "T"), "sport": str(w["sport"]).upper(), "sec": w.get("sec"),
+                                       "calories": w.get("calories"), "hrAvg": w.get("hrAvg"), "hrMax": w.get("hrMax"),
+                                       "noHr": not w.get("hrAvg")} for w in ws]})
+        b.set(cref.collection("activity").document(day), data, merge=True)
+        n += 1
+        if day in loads:
+            b.set(cref.collection("recovery").document(day), {"date": day, "load": loads[day], "source": "strava"}, merge=True)
+            n += 1
+        if n >= 400:
+            b.commit()
+            b, n = db.batch(), 0
+    b.commit()
+    cref.set({"strava": {"connected": True, "err": None}, "stravaSync": {"at": at, "workouts": len(workouts)}}, merge=True)
+    return {"workouts": len(workouts), "detailed": len(fresh), "from": start}
+
+
+def _strava_mapped(e: Exception) -> https_fn.HttpsError:
+    if isinstance(e, https_fn.HttpsError):
+        return e
+    if str(e) == "NO_TOKEN":
+        return _err(E.FAILED_PRECONDITION, "Chưa kết nối Strava.")
+    st = getattr(e, "status", None)
+    if st in (401, 403):
+        return _err(E.UNAUTHENTICATED, "Strava từ chối (khách đã thu hồi quyền?). Kết nối lại Strava.")
+    if st == 429:
+        return _err(E.RESOURCE_EXHAUSTED, "Strava đang giới hạn lượt gọi — thử lại sau 15 phút.")
+    return _err(E.INTERNAL, "Đồng bộ Strava hỏng: " + type(e).__name__)
+
+
+@https_fn.on_call(region=REGION, timeout_sec=300, memory=options.MemoryOption.MB_512)
+def stravaConnect(req: https_fn.CallableRequest) -> dict:
+    """data: {clientId, code}. Đổi code (Strava trả sau khi khách bấm Cho phép) lấy token, rồi đồng bộ 60 ngày."""
+    data = req.data or {}
+    cid = _cid(data)
+    _authorize(req, cid)
+    code = str(data.get("code") or "").strip()
+    if not code or len(code) > 200:
+        raise _err(E.INVALID_ARGUMENT, "Thiếu mã từ Strava.")
+    db = firestore.client()
+    app = _strava_app(db)
+    try:
+        r = SV.exchange_code(app, code)
+    except Exception as e:  # noqa: BLE001 — KHÔNG in nội dung: có thể chứa token
+        print("[strava] đổi code hỏng:", cid, getattr(e, "status", type(e).__name__), file=sys.stderr)
+        raise _err(E.UNAUTHENTICATED, "Strava không chấp nhận lần kết nối này — thử kết nối lại.")
+    ath = r.get("athlete") or {}
+    db.document("privateTokens/strava_" + cid).set({"access": r.get("access_token"), "refresh": r.get("refresh_token"),
+                                                    "expiresAt": r.get("expires_at"), "athleteId": ath.get("id"),
+                                                    "scope": str(data.get("scope") or "")[:120], "updatedAt": firestore.SERVER_TIMESTAMP})
+    name = " ".join(x for x in (ath.get("firstname"), ath.get("lastname")) if x) or None
+    db.document("clients/" + cid).set({"strava": {"connected": True, "name": name, "athleteId": ath.get("id"),
+                                                  "at": datetime.now(timezone.utc).isoformat(), "err": None}}, merge=True)
+    try:
+        s = _strava_sync(cid, 60)
+    except Exception as e:  # noqa: BLE001 — đã kết nối; đồng bộ hỏng thì báo, khách bấm Đồng bộ lại sau
+        print("[strava] đồng bộ đầu hỏng:", cid, type(e).__name__, file=sys.stderr)
+        s = {"error": type(e).__name__}
+    return {"connected": True, "name": name, "sync": s}
+
+
+@https_fn.on_call(region=REGION, timeout_sec=60)
+def stravaDisconnect(req: https_fn.CallableRequest) -> dict:
+    cid = _cid(req.data or {})
+    _authorize(req, cid)
+    db = firestore.client()
+    ts = db.document("privateTokens/strava_" + cid).get()
+    tok = ts.to_dict() if ts.exists else None
+    if tok and tok.get("access"):
+        try:   # thu hồi quyền ở phía Strava luôn, để khách không phải tự vào Strava gỡ
+            SV._http("POST", "https://www.strava.com/oauth/deauthorize", data={"access_token": tok["access"]})
+        except Exception:  # noqa: BLE001
+            pass
+    db.document("privateTokens/strava_" + cid).delete()
+    db.document("clients/" + cid).set({"strava": {"connected": False, "at": datetime.now(timezone.utc).isoformat()}}, merge=True)
+    return {"connected": False}
+
+
+@https_fn.on_call(region=REGION, timeout_sec=300, memory=options.MemoryOption.MB_512)
+def stravaSyncNow(req: https_fn.CallableRequest) -> dict:
+    cid = _cid(req.data or {})
+    _authorize(req, cid)
+    try:
+        return _strava_sync(cid, 45)
+    except Exception as e:  # noqa: BLE001
+        print("[strava] sync hỏng:", cid, type(e).__name__, getattr(e, "status", ""), file=sys.stderr)
+        raise _strava_mapped(e)
+
+
+@scheduler_fn.on_schedule(schedule="40 6 * * *", timezone="Asia/Ho_Chi_Minh", region=REGION,
+                          timeout_sec=1800, memory=options.MemoryOption.MB_512)
+def stravaSyncDaily(event: scheduler_fn.ScheduledEvent) -> None:
+    """06:40 mỗi sáng: mọi hồ sơ đã kết nối Strava, 7 ngày gần nhất (giới hạn lượt gọi tính chung cả ứng dụng)."""
+    db = firestore.client()
+    ids = [d.id[len("strava_"):] for d in db.collection("privateTokens").list_documents()
+           if d.id.startswith("strava_") and d.id != "strava_app"]
+    for i, cid in enumerate(ids):
+        if i:
+            time.sleep(5)
+        try:
+            print("[strava] sáng", cid, json.dumps(_strava_sync(cid, 7)))
+        except Exception as e:  # noqa: BLE001
+            print("[strava] sáng hỏng", cid, type(e).__name__, getattr(e, "status", ""), file=sys.stderr)
+            db.document("clients/" + cid).set({"strava": {"err": type(e).__name__}}, merge=True)
