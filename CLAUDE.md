@@ -158,6 +158,12 @@ await loadStrengthHistory();
 await renderStats();
 ```
 - `_historyCache` object caches workoutHistory so `renderStats` reuses it without extra query
+- **Lịch sử sức mạnh chạy NỀN** (2026-11-15): `loadStrengthHistory` cần 2 lượt mạng nối tiếp → KHÔNG được chặn mở app
+  (`loadApp`), đổi khách (`switchClient`) hay đổi buổi (`setDay`). Gọi `strengthInBackground()` TRƯỚC `renderExercises()`
+  (nó xoá chỉ mục cũ ngay, tránh huy hiệu của khách/buổi cũ hiện trên bài trùng tên); xong thì tự vẽ lại bài + Stats.
+  `loadStrengthHistory` dựng vào biến riêng, chỉ ghi biến chung khi khách + buổi chưa đổi (trả false nếu đã đổi).
+  Tạ (`hydrate…`) + cân nặng (`loadClientBodyweight`) chạy SONG SONG và vẫn chặn — bài trọng lượng cơ thể cần cân nặng.
+  Đo trên máy tính: đổi khách ~800 ms → ~340 ms.
 - Clear cache on client switch: `_historyCache = null`
 
 ---

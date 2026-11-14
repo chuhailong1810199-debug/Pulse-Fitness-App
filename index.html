@@ -1014,16 +1014,16 @@ async function loadApp() {
   renderDayTabs();
   // ── Parallel fetch: loads + strength history run simultaneously ──
   // Baseline (khách) chỉ bật một màn phủ — chạy cùng lượt, không chặn trước.
+  // Lịch sử sức mạnh (huy hiệu ↑/↓ + Stats) KHÔNG chặn — strengthInBackground() vẽ lại khi xong.
   await Promise.all([
     hydrateExerciseLoadsForActiveDay(),
-    loadStrengthHistory(),
     loadClientBodyweight(),
     userRole === 'client' ? checkAndShowBaseline() : null
   ]);
+  strengthInBackground(); // TRƯỚC renderExercises: xoá chỉ mục cũ ngay; vẽ lại bài + Stats khi lịch sử về
   renderExercises();
   initDaySwipe();
   initNavAutoHide();
-  renderStats(); // non-blocking — stats update in background
   subscribeProgram();
   checkRecoveryTab();   // non-blocking — tab chỉ hiện nếu khách có dữ liệu Polar
   checkActiveTab();
@@ -1438,7 +1438,7 @@ async function switchClient(id) {
   // ── Fade out ──
   const pages = document.querySelectorAll('.workout-page, .progress-page, .log-page, #nutrition-page');
   pages.forEach(p => p.classList.add('switching'));
-  await new Promise(r => setTimeout(r, 180));
+  await new Promise(r => setTimeout(r, 120));   // đủ cho hiệu ứng mờ; nó cộng thẳng vào thời gian đổi khách
 
   // ── Switch data ──
   // Drop any pending debounced save — it would carry the OLD client's kg values
@@ -1462,13 +1462,14 @@ async function switchClient(id) {
 
   if (_programUnsub) _programUnsub();
   renderDayTabs(); // render tabs with correct day before hydration
-  await hydrateExerciseLoadsForActiveDay(); // hydrate first, then subscribe to avoid snapshot race
-  await loadStrengthHistory();
-  await loadClientBodyweight();             // before render: the +kg inputs need it
+  // Tạ + cân nặng SONG SONG (trước: tuần tự, cộng thêm 2 lượt lịch sử sức mạnh) — cả hai phải có trước khi vẽ
+  // (+kg của bài trọng lượng cơ thể cần cân nặng). Lịch sử sức mạnh chạy nền.
+  await Promise.all([hydrateExerciseLoadsForActiveDay(), loadClientBodyweight()]);
+  if (activeClient !== next) return;       // đã đổi sang khách khác trong lúc chờ — lượt đó tự vẽ
   loadStorageUsage(activeClient);
+  strengthInBackground(); // TRƯỚC renderExercises: xoá ngay huy hiệu của khách cũ (bài trùng tên)
   renderExercises();
   subscribeProgram(); // subscribe AFTER hydration so initial snapshot doesn't clear exerciseLoads
-  await renderStats();
   renderCoachDashboard();
   if (document.getElementById('log-page')?.classList.contains('active')) {
     renderWorkoutLog();
@@ -6201,24 +6202,29 @@ async function saveLoadsFB() {
 
 // ── STRENGTH PROGRESSION ───────────────────────────────
 async function loadStrengthHistory() {
-  if (!activeClient) return;
+  if (!activeClient) return false;
   // Every index resets together. This runs on each setDay() and client switch,
   // so a missed one accumulates duplicate entries and — because the name index
   // is not scoped by client or day — leaks one client's loads onto another's
   // identically named exercise.
+  // 2026-11-15: giờ chạy NỀN (không chặn mở app / đổi khách) → hai lượt có thể chồng nhau. Dựng vào biến
+  // riêng, chỉ ghi vào biến chung khi khách + buổi vẫn đúng như lúc bắt đầu; không thì bỏ (trả false).
+  const cid = activeClient.id, day = activeDay;
   strengthHistory = {}; strengthByName = {};
   strengthPosOk = new Set(); strengthDupNames = new Set();
+  const strengthHistoryL = {}, strengthByNameL = {}, strengthPosOkL = new Set(), strengthDupNamesL = new Set();
   try {
     const histSnap = await getDocs(query(
-      collection(db, 'clients', activeClient.id, 'workoutHistory'),
+      collection(db, 'clients', cid, 'workoutHistory'),
       orderBy('date', 'desc'),
       limit(40)
     ));
+    if (!activeClient || activeClient.id !== cid) return false;
     // Cache for renderStats to reuse — avoids a second network round-trip
-    _historyCache = { clientId: activeClient.id, docs: histSnap.docs.map(d => ({ id: d.id, ...d.data() })) };
+    _historyCache = { clientId: cid, docs: histSnap.docs.map(d => ({ id: d.id, ...d.data() })) };
     // Find sessions for this day (up to 8 most recent)
     const dayDocs = histSnap.docs
-      .filter(d => d.data().day === activeDay)
+      .filter(d => d.data().day === day)
       .slice(0, 8);
 
     // ── Parallel reads (was sequential — up to 8x faster) ──
@@ -6226,7 +6232,7 @@ async function loadStrengthHistory() {
       dayDocs.map(async sessionDoc => {
         const date = sessionDoc.data().date?.toDate?.() || new Date();
         const exSnap = await getDocs(
-          collection(db, 'clients', activeClient.id, 'workoutHistory', sessionDoc.id, 'exercises')
+          collection(db, 'clients', cid, 'workoutHistory', sessionDoc.id, 'exercises')
         );
         return { date, exSnap };
       })
@@ -6252,25 +6258,43 @@ async function loadStrengthHistory() {
         }});
       });
       rows.forEach(({ exerciseKey, n, entry }) => {
-        (strengthHistory[exerciseKey] = strengthHistory[exerciseKey] || []).push(entry);
-        if (n && hits[n] === 1) (strengthByName[n] = strengthByName[n] || []).push(entry);
-        else strengthPosOk.add(exerciseKey);  // unnamed or ambiguous — position is all it has
+        (strengthHistoryL[exerciseKey] = strengthHistoryL[exerciseKey] || []).push(entry);
+        if (n && hits[n] === 1) (strengthByNameL[n] = strengthByNameL[n] || []).push(entry);
+        else strengthPosOkL.add(exerciseKey);  // unnamed or ambiguous — position is all it has
       });
     });
 
     // A name the current day reuses can't be told apart by name either.
     const seen = {};
-    ((getProgram()[activeDay] || {}).phases || []).forEach(p =>
+    if (!activeClient || activeClient.id !== cid || activeDay !== day) return false;   // đổi khách / buổi giữa chừng
+    ((getProgram()[day] || {}).phases || []).forEach(p =>
       (p.exercises || []).forEach(e => {
         const n = _exNameKey(e.name);
         if (n) seen[n] = (seen[n] || 0) + 1;
       }));
-    Object.keys(seen).forEach(n => { if (seen[n] > 1) strengthDupNames.add(n); });
+    Object.keys(seen).forEach(n => { if (seen[n] > 1) strengthDupNamesL.add(n); });
 
     // Sort each array newest → oldest
-    [strengthHistory, strengthByName].forEach(idx =>
+    [strengthHistoryL, strengthByNameL].forEach(idx =>
       Object.keys(idx).forEach(k => idx[k].sort((a, b) => b.date - a.date)));
-  } catch (e) { console.warn('loadStrengthHistory:', e); }
+    strengthHistory = strengthHistoryL; strengthByName = strengthByNameL;
+    strengthPosOk = strengthPosOkL; strengthDupNames = strengthDupNamesL;
+    return true;
+  } catch (e) { console.warn('loadStrengthHistory:', e); return false; }
+}
+
+/**
+ * Huy hiệu ↑/↓ kg + Stats chạy NỀN (2026-11-15): lịch sử sức mạnh cần 2 lượt mạng NỐI TIẾP (danh sách buổi →
+ * bài của từng buổi). Trước đây mở app / đổi khách phải chờ nó — trên điện thoại là cả giây. Màn hình hiện
+ * ngay khi có tạ + cân nặng; xong lịch sử thì vẽ lại bài (huy hiệu) và Stats, nếu vẫn đúng khách đó.
+ */
+function strengthInBackground() {
+  const cid = activeClient && activeClient.id;
+  return loadStrengthHistory().then(() => {
+    if (!activeClient || activeClient.id !== cid) return;   // lỗi mạng vẫn vẽ Stats (nó tự đọc lại)
+    renderExercises();
+    renderStats();
+  }).catch((e) => console.warn('[strength] nền:', e && e.message));
 }
 
 /**
@@ -6413,9 +6437,12 @@ async function setDay(d) {
   _sessionLogged = false; // reset when switching day
   renderDayTabs();
   await hydrateExerciseLoadsForActiveDay();
-  await loadStrengthHistory();
+  if (activeDay !== d) return;              // đã vuốt sang buổi khác trong lúc chờ
+  // Huy hiệu ↑/↓ kg nạp nền (2 lượt mạng nối tiếp). Gọi TRƯỚC khi vẽ: nó xoá chỉ mục của buổi cũ ngay.
+  const sp = loadStrengthHistory();
   renderExercises();
   updateFinishBtn();
+  sp.then((ok) => { if (ok && activeDay === d) renderExercises(); });
 }
 
 // ── DAY SWIPE NAVIGATION ─────────────────────────────────────
