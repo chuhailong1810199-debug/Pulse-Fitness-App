@@ -2643,7 +2643,7 @@ async function wlSync() {
   if (_wl.syncing) return;
   _wl.syncing = true; _wl.syncMsg = ''; _wl.syncErr = ''; renderWorklist();
   try {
-    const fn = firebase.app().functions('asia-southeast1').httpsCallable('garminSyncNow', { timeout: 250000 });
+    const fn = firebase.app().functions('asia-southeast1').httpsCallable('garminSyncNow', { timeout: 540000 });
     const r = (await fn({ clientId: wlClientId() })).data || {};
     const c = clientsData.find((x) => x.id === wlClientId());
     if (c) c.garminSync = { at: new Date().toISOString() };
@@ -9340,7 +9340,7 @@ async function rcGarminSyncNow() {
   const set = (txt, busy) => { const b = document.querySelector('.rc-sync'); if (b) { b.textContent = txt; b.disabled = !!busy; } };
   set(T('Đang kéo…'), true);
   try {
-    const fn = firebase.app().functions('asia-southeast1').httpsCallable('garminSyncNow', { timeout: 250000 });
+    const fn = firebase.app().functions('asia-southeast1').httpsCallable('garminSyncNow', { timeout: 540000 });
     await fn({ clientId: activeClient.id });
     const cs = await getDoc(doc(db, 'clients', activeClient.id)).catch(() => null);
     if (cs && cs.exists) { const x = cs.data() || {}; activeClient.garminProfile = x.garminProfile || null; activeClient.garminSync = x.garminSync || null; }
