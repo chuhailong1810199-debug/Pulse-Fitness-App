@@ -60,15 +60,22 @@ def _authorize(req, cid: str) -> dict:
 
 
 def _sync(cid: str, health_days: int, history_days: int) -> dict:
+    """Đồng bộ một hồ sơ. Nhanh hơn (2026-11-14, đo trên Mac: ~28 s / 83 lần gọi lần lượt):
+      1. Gọi Garmin SONG SONG (core.pmap, 6 luồng, mỗi luồng một phiên riêng).
+      2. Buổi đã có chi tiết (zones / lap / bản đồ) thì dùng lại bản đã lưu — chỉ buổi MỚI mới gọi chi tiết.
+      3. Strain: ngày cũ đã tính thì giữ; chỉ tính lại hôm nay + hôm qua (buổi tập muộn / đồng hồ sync trễ).
+    """
     from garminconnect import Garmin
 
     db = firestore.client()
-    cdoc = db.document("clients/" + cid).get()
-    cd = cdoc.to_dict() or {} if cdoc.exists else {}
+    cref = db.document("clients/" + cid)
+    cdoc = cref.get()
+    cd = (cdoc.to_dict() or {}) if cdoc.exists else {}
     # Khách CHỈ dùng Garmin (không có polarProfile) → ghi thêm khuôn Polar cho Recovery / Health. Lần đầu kéo
     # 28 đêm để Recovery / Healthspan có đường nền ngay (Recovery đọc 28 ngày).
     mirror = not cd.get("polarProfile")
-    if mirror and not (cd.get("garminSync") or {}).get("at"):
+    first = not (cd.get("garminSync") or {}).get("at")
+    if mirror and first:
         health_days = max(health_days, 28)
     tref = db.document("privateTokens/garmin_" + cid)
     snap = tref.get()
@@ -77,49 +84,78 @@ def _sync(cid: str, health_days: int, history_days: int) -> dict:
         raise RuntimeError("NO_TOKEN")
     api = Garmin()
     api.login(tokens)                    # chuỗi JSON → nạp thẳng, tự làm mới khi sắp hết hạn
+    tok = api.client.dumps()             # token ĐÃ làm mới — các luồng phụ dùng bản này, không tự làm mới lần nữa
     today = datetime.now(VN).date()
-    days = [core.health_day(api, (today - timedelta(days=i)).isoformat()) for i in range(health_days - 1, -1, -1)]
     start = (today - timedelta(days=history_days)).isoformat()
-    acts = core.safe(api.get_activities_by_date, start, today.isoformat())
     cut = (today - timedelta(days=60)).isoformat()
+
+    dates = [(today - timedelta(days=i)).isoformat() for i in range(health_days - 1, -1, -1)]
+    days = core.pmap(tok, core.health_day, dates, fallback_api=api)
+    days = [d for d in days if d]
+    acts = core.safe(api.get_activities_by_date, start, today.isoformat())
+
+    # Bản đã lưu của các buổi trong khoảng này → dùng lại chi tiết, khỏi gọi lại Garmin.
+    cached = {}
+    for doc in cref.collection("activity").where("date", ">=", start).stream():
+        for w in ((doc.to_dict() or {}).get("garmin") or {}).get("workouts") or []:
+            if w and w.get("id"):
+                cached[str(w["id"])] = w
     # Kéo buổi tập HỎNG (None) ≠ không có buổi nào ([]): hỏng thì giữ nguyên workouts cũ.
-    workouts = None if acts is None else [core.workout(api, a, str(a.get("startTimeLocal") or "")[:10] >= cut)
-                                          for a in acts if isinstance(a, dict)]
+    workouts = None
+    if acts is not None:
+        acts = [a for a in acts if isinstance(a, dict)]
+        workouts = core.pmap(tok, lambda a_, x: core.workout(a_, x, str(x.get("startTimeLocal") or "")[:10] >= cut,
+                                                          cached.get(str(x.get("activityId") or ""))), acts, fallback_api=api)
     profile = core.profile_of(api) if mirror else None
     if mirror and acts:
-        _strain_days(api, cd, profile, days, acts, min(len(days), 14))
+        _strain_days(api, tok, cref, cd, profile, days, acts, min(len(days), 14), redo_all=first)
     n = core.write_firestore(db, cid, days, workouts, mirror=mirror, profile=profile)
     try:  # token đã làm mới phải lưu lại — không thì lần sau Garmin bắt đăng nhập lại
         tref.set({"tokens": api.client.dumps(), "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True)
     except Exception as e:  # noqa: BLE001
         print("[garmin] không lưu lại được token:", cid, type(e).__name__, file=sys.stderr)
-    db.document("clients/" + cid).set({"garmin": {"connected": True, "err": None}}, merge=True)
+    cref.set({"garmin": {"connected": True, "err": None}}, merge=True)
     if workouts is None:
         raise RuntimeError("Garmin không trả danh sách buổi tập")
-    return {"docs": n, "workouts": len(workouts), "from": start, "to": today.isoformat()}
+    return {"docs": n, "workouts": len(workouts), "from": start, "to": today.isoformat(),
+            "reused": sum(1 for a in acts if str(a.get("activityId") or "") in cached)}
 
 
-def _strain_days(api, cd: dict, profile: dict | None, days: list, acts: list, n: int) -> None:
+def _strain_days(api, tok: str, cref, cd: dict, profile: dict | None, days: list, acts: list, n: int, redo_all: bool) -> None:
     """Strain 0–21 cho N ngày gần nhất (khách Garmin) — gắn d["load"]; write_firestore đưa vào recovery/{ngày}.load.
 
     HR max: số coach nhập (clients.maxHr) > cao nhất Garmin ghi được trong các buổi đã kéo > ước theo tuổi.
+    Ngày đã có load (từ lần trước) thì bỏ qua, trừ hôm nay + hôm qua — d["load"] để trống nên bản đã lưu được giữ.
     """
     observed = max([a.get("maxHR") for a in acts if isinstance(a.get("maxHR"), (int, float))] or [0]) or None
     sex = "female" if str((profile or {}).get("gender") or "").upper() == "FEMALE" else "male"
-    for d in days[-n:]:
-        rhr = d.get("rhr")
-        if rhr is None:
+    window = days[-n:]
+    have = set()
+    if not redo_all and window:
+        for doc in cref.collection("recovery").where("date", ">=", window[0]["date"]).stream():
+            if ((doc.to_dict() or {}).get("load") or {}).get("source", "").startswith("garmin"):
+                have.add(doc.id)
+    keep = {window[-1]["date"], window[-2]["date"]} if len(window) >= 2 else {d["date"] for d in window}
+    todo = []
+    for d in window:
+        if d.get("rhr") is None or (d["date"] in have and d["date"] not in keep):
             continue
         hm = core.ST.resolve_hr_max(manual=cd.get("maxHr"), observed=observed,
                                     birthdate=(profile or {}).get("birthdate"), today=d["date"])
-        if not hm.get("hrMax"):
-            continue
-        ctx = {"rhr": rhr, "hrMax": hm["hrMax"], "hrMaxSource": hm["source"], "sex": sex}
-        day_acts = [a for a in acts if str(a.get("startTimeLocal") or "")[:10] == d["date"]]
+        if hm.get("hrMax"):
+            todo.append((d, {"rhr": d["rhr"], "hrMax": hm["hrMax"], "hrMaxSource": hm["source"], "sex": sex}))
+
+    def one(a_, item):
+        d, ctx = item
         try:
-            d["load"] = core.day_load(api, day_acts, core.all_day_hr(api, d["date"]), ctx)
+            return core.day_load(a_, [a for a in acts if str(a.get("startTimeLocal") or "")[:10] == d["date"]],
+                                 core.all_day_hr(a_, d["date"]), ctx)
         except Exception as e:  # noqa: BLE001 — strain hỏng một ngày không được làm hỏng cả lần đồng bộ
             print("[garmin] strain hỏng", d["date"], type(e).__name__, file=sys.stderr)
+            return None
+
+    for (d, _), load in zip(todo, core.pmap(tok, one, todo, fallback_api=api)):
+        d["load"] = load
 
 
 def _mapped(e: Exception) -> https_fn.HttpsError:
@@ -209,7 +245,8 @@ def garminSyncNow(req: https_fn.CallableRequest) -> dict:
     cid = _cid(data)
     _authorize(req, cid)
     try:
-        return _sync(cid, health_days=7, history_days=45)
+        # Nút Sync: 3 ngày sức khoẻ là đủ (đồng bộ 06:30 lo phần còn lại); 45 ngày buổi tập — buổi cũ dùng lại bản đã lưu.
+        return _sync(cid, health_days=3, history_days=45)
     except Exception as e:  # noqa: BLE001
         print("[garmin] sync hỏng:", cid, type(e).__name__, str(e)[:160], file=sys.stderr)
         raise _mapped(e)

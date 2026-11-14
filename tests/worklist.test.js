@@ -77,7 +77,7 @@ test('dong bo tren may chu: nut goi garminSyncNow, ham chi cho chu dong ho, keo 
   assert.match(main, /str\(d\.get\("email"\) or ""\)\.strip\(\)\.lower\(\) == em/, 'chinh khach (email khop) duoc');
   assert.match(main, /raise _err\(E\.PERMISSION_DENIED/, 'nguoi khac bi chan');
   assert.match(main, /schedule="30 6 \* \* \*", timezone="Asia\/Ho_Chi_Minh"/);
-  assert.match(main, /workouts = None if acts is None/);
+  assert.match(main, /workouts = None\n\s+if acts is not None:/, 'keo hong (None) -> khong ghi de workouts cu');
   const core = fs.readFileSync(path.join(__dirname, '..', 'functions-py', 'garmin_core.py'), 'utf8');
   assert.match(core, /if workouts is not None:\n\s+g_\["workouts"\] = s\["w"\]/, 'keo hong (None) thi giu workouts cu');
   const fb = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'firebase.json'), 'utf8'));
@@ -162,6 +162,40 @@ print(json.dumps({"ref": c.encode_polyline([(38.5, -120.2), (40.7, -120.95), (43
   assert.strictEqual(j.spd[0], null);
   assert(j.spd[1] > 9 && j.spd[1] < 11, 'toc do tu toa do (~53 m / 5 s): ' + j.spd[1]);
   const core = fs.readFileSync(path.join(__dirname, '..', 'functions-py', 'garmin_core.py'), 'utf8');
-  assert.match(core, /"route": route_of\(api, a\["activityId"\]\) if recent and a\.get\("hasPolyline"\)/);
+  assert.match(core, /else route_of\(api, a\["activityId"\]\) if recent and a\.get\("hasPolyline"\)/);
   assert.match(s, /js\.onerror = \(\) => \{ _leafletLoading = null; resolve\(false\); \}/, 'CDN hong -> ve SVG');
+});
+
+test('sync nhanh: buoi da co chi tiet thi KHONG goi Garmin lai; buoi moi thi goi; pmap giu dung thu tu', () => {
+  const { spawnSync } = require('child_process');
+  const py = `
+import sys, json; sys.path.insert(0, "functions-py")
+import garmin_core as c
+class Fake:
+    def __init__(self): self.calls = []
+    def __getattr__(self, name):
+        def f(*a, **k):
+            self.calls.append(name); return {}
+        return f
+api = Fake()
+a = {"activityId": 9, "activityType": {"typeKey": "running"}, "hasPolyline": True, "startTimeLocal": "2026-11-11 06:00:00",
+     "hrTimeInZone_1": 60}
+cached = {"id": "9", "route": {"poly": "abc", "spd": [1]}, "laps": [{"distM": 1000}], "zones": [60, 0, 0, 0, 0]}
+w = c.workout(api, a, True, cached)
+reuse_calls = list(api.calls)
+api.calls.clear()
+c.workout(api, a, True, None)
+print(json.dumps({"reuse_calls": reuse_calls, "route": w["route"], "laps": w["laps"], "fresh_calls": sorted(set(api.calls)),
+                  "order": c.pmap("x", lambda a_, x: x * 2, [3, 1, 2], fallback_api=Fake())}))`;
+  const r = spawnSync('python3', ['-c', py], { cwd: path.join(__dirname, '..'), encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const j = JSON.parse(r.stdout);
+  assert.deepStrictEqual(j.reuse_calls, [], 'buoi da luu: khong goi Garmin');
+  assert.deepStrictEqual(j.route, { poly: 'abc', spd: [1] });
+  assert.deepStrictEqual(j.laps, [{ distM: 1000 }]);
+  assert.deepStrictEqual(j.fresh_calls, ['get_activity_details', 'get_activity_splits'], 'buoi moi: keo lap + ban do');
+  assert.deepStrictEqual(j.order, [6, 2, 4], 'ket qua song song dung thu tu');
+  const main = fs.readFileSync(path.join(__dirname, '..', 'functions-py', 'main.py'), 'utf8');
+  assert.match(main, /return _sync\(cid, health_days=3, history_days=45\)/);
+  assert.match(main, /keep = \{window\[-1\]\["date"\], window\[-2\]\["date"\]\}/, 'strain: tinh lai hom nay + hom qua');
 });

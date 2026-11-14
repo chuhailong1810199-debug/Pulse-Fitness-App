@@ -7,11 +7,43 @@ KHÔNG đụng trường của Polar. Endpoint hỏng / đồng hồ không đo 
 import calendar
 import math
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import strain as ST
 
 LAP_SPORTS = ("running", "trail_running", "treadmill_running", "track_running", "cycling", "indoor_cycling", "road_biking")
+
+
+def pmap(tokens: str, fn, items: list, workers: int = 6, fallback_api=None) -> list:
+    """Chạy fn(api, x) cho từng x SONG SONG — mỗi luồng MỘT phiên Garmin riêng nạp từ cùng token (phiên của thư viện
+    không an toàn khi dùng chung giữa các luồng). Đo 2026-11-14: 12 lần gọi 4,3 s → 1,6 s với 6 luồng.
+    Không tạo được phiên phụ → luồng đó dùng fallback_api (khoá lại, chạy lần lượt) — chậm hơn chứ không hỏng."""
+    items = list(items)
+    if not items:
+        return []
+    loc, lock = threading.local(), threading.Lock()
+
+    def run(x):
+        if not hasattr(loc, "api"):
+            try:
+                from garminconnect import Garmin
+                a = Garmin()
+                a.login(tokens)
+                loc.api = a
+            except Exception as e:  # noqa: BLE001
+                print("[garmin] phiên phụ hỏng:", type(e).__name__, file=sys.stderr)
+                loc.api = None
+        if loc.api is None:
+            if fallback_api is None:
+                return None
+            with lock:
+                return fn(fallback_api, x)
+        return fn(loc.api, x)
+
+    with ThreadPoolExecutor(max_workers=max(1, min(workers, len(items)))) as ex:
+        return list(ex.map(run, items))
 
 
 def g(d, *path, default=None):
@@ -241,18 +273,22 @@ def _route_speeds(pts, window_ms: int = 20000):
     return out
 
 
-def workout(api, a: dict, recent: bool) -> dict:
+def workout(api, a: dict, recent: bool, cached: dict | None = None) -> dict:
+    """Một buổi tập. cached = bản đã lưu của CÙNG buổi (theo id): đã có chi tiết (khoá "route" có mặt, kể cả None)
+    thì dùng lại zones / lap / bản đồ, KHÔNG gọi Garmin lại — lần Sync sau chỉ tốn công cho buổi mới."""
     sport = g(a, "activityType", "typeKey")
+    reuse = bool(cached) and "route" in cached
     return {
         "id": str(a.get("activityId") or ""), "at": a.get("startTimeLocal"), "name": a.get("activityName"), "sport": sport,
         "sec": num(a.get("duration"), 0), "distM": num(a.get("distance"), 1), "speed": num(a.get("averageSpeed"), 3),
         "calories": num(a.get("calories"), 0), "hrAvg": num(a.get("averageHR"), 0), "hrMax": num(a.get("maxHR"), 0),
         "load": num(a.get("activityTrainingLoad"), 0),
         "teAer": num(a.get("aerobicTrainingEffect"), 1), "teAna": num(a.get("anaerobicTrainingEffect"), 1),
-        "zones": zones_of(api, a, recent),
-        "laps": laps_of(api, a) if recent and sport in LAP_SPORTS and a.get("activityId") else None,
+        "zones": (zones_of(api, a, False) or cached.get("zones")) if reuse else zones_of(api, a, recent),
+        "laps": cached.get("laps") if reuse else laps_of(api, a) if recent and sport in LAP_SPORTS and a.get("activityId") else None,
         # Bản đồ tuyến (tab Work list): chỉ buổi CÓ GPS (Garmin đánh dấu hasPolyline — chạy máy / trong nhà thì không).
-        "route": route_of(api, a["activityId"]) if recent and a.get("hasPolyline") and a.get("activityId") else None,
+        "route": cached.get("route") if reuse
+        else route_of(api, a["activityId"]) if recent and a.get("hasPolyline") and a.get("activityId") else None,
     }
 
 

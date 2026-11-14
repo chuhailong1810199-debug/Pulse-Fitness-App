@@ -317,6 +317,10 @@ Key routing rules:
   (haversine) + giờ, trượt 20 giây. App: Leaflet 1.9.4 (cdnjs, tải lười) + nền OpenStreetMap (ghi công), tuyến tô màu
   chậm→nhanh theo phân vị 10/90 của chính buổi đó; CDN hỏng → vẽ SVG. Toạ độ = dữ liệu vị trí (lộ nơi ở) — chỉ coach
   phụ trách + chính khách đọc (luật activity/).
+  **Sync nhanh** (2026-11-14): `core.pmap` gọi Garmin song song (6 luồng, MỖI LUỒNG MỘT PHIÊN Garmin riêng nạp từ token
+  đã làm mới — phiên thư viện không an toàn khi dùng chung); buổi đã lưu có khoá `route` → dùng lại zones / lap / bản đồ
+  (`workout(..., cached)`); strain chỉ tính lại hôm nay + hôm qua + ngày chưa có. Nút Sync: 3 ngày sức khoẻ. Đo trên
+  hồ sơ coach: ~28 s → ~7 s (lần đầu sau nâng cấp ~22 s vì bổ sung bản đồ cho buổi cũ).
 - **Lớp Hybrid / HYROX** (`groupFormat: hyrox`, 2026-10-19): label mỗi buổi bắt đầu bằng loại buổi
   (Compromised / Strength Endurance / Engine / Foundation / Race Sim / Partner); số buổi/tuần quyết định loại
   (form tự gán). Buổi Compromised / Engine / Race Sim: phút CHẠY ≥ phút TRẠM — `hybridIssues()` trong
