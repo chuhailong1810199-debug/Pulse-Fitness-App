@@ -128,6 +128,15 @@ await updateDoc(ref, { program: newProg });
 
 ---
 
+## Màn chờ không được im lặng (2026-11-15)
+Script ES5 đầu `<head>` (trước Firebase) ghi lỗi `error` / `unhandledrejection`; màn chờ còn sau 15 giây hoặc
+`window._bootFail(err)` được gọi → hộp "App tải lâu bất thường" (bước `window._bootStage` + lỗi + nút Tải lại /
+Xoá bộ nhớ tạm — chỉ `pulse_user_v2_*`, `pulse_prog_*`, KHÔNG đăng xuất). Nhánh coach của `_launchAfterProfile`
+giờ `.catch → _bootFail` (trước đây lỗi coach = đứng mãi ở logo). Kẹt trên máy khách / coach → xin ảnh chụp hộp đó.
+`tests/boot-watchdog.test.js`.
+
+---
+
 ## Performance: user profile cache
 - `loadUserProfile` now caches `{role, clientId}` in localStorage under key `pulse_user_v2_{uid}`
 - Returning users skip Firestore read → near-instant app load

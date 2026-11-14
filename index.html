@@ -23,6 +23,54 @@
 <link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300..900;1,300..900&display=swap" rel="stylesheet"/>
 <!-- Chart.js loaded lazily when Progress tab is first opened -->
 <script>
+/* Màn chờ không được im lặng mãi (2026-11-15). Coach mở app trên iPhone kẹt ở logo, không lỗi nào hiện ra —
+   trước đây lỗi nhánh coach của loadApp() không ai bắt. Script này chạy TRƯỚC mọi script khác, độc lập với chúng:
+   ghi lại lỗi, và nếu màn chờ còn sau 15 giây (hoặc khởi động báo hỏng qua _bootFail) thì hiện bước đang kẹt + lỗi
+   + nút thoát ngay trên màn chờ. Viết ES5, không dùng gì của app — app hỏng thì nó vẫn phải chạy được. */
+(function () {
+  var errs = [];
+  function rec(m) { m = String(m || '').slice(0, 300); if (m && errs.length < 6 && errs.indexOf(m) < 0) errs.push(m); }
+  window._bootStage = 'Tải trang + Firebase';
+  window.addEventListener('error', function (e) {
+    if (!e || !e.message) return;                     // ảnh / font hỏng: không phải lỗi script
+    rec(e.message + (e.filename ? ' @ ' + String(e.filename).split('/').pop() + ':' + e.lineno : ''));
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e && e.reason; rec('Promise: ' + ((r && (r.code ? r.code + ' ' : '') + (r.message || '')) || r));
+  });
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function show() {
+    var ls = document.getElementById('loading-screen');
+    if (!ls || ls.classList.contains('hidden') || document.getElementById('boot-help')) return;
+    var box = document.createElement('div');
+    box.id = 'boot-help';
+    box.setAttribute('role', 'alert');
+    box.setAttribute('data-i18n-skip', '');
+    box.style.cssText = 'position:fixed;z-index:2147483000;left:16px;right:16px;bottom:max(24px,env(safe-area-inset-bottom));max-width:420px;margin:0 auto;'
+      + 'background:#241c1c;border:1px solid rgba(255,255,255,.14);border-radius:16px;padding:16px;color:#f3eded;'
+      + "font:14px/1.45 'Figtree',-apple-system,sans-serif;text-align:left";
+    var btn = 'min-height:44px;padding:0 14px;border-radius:12px;font:700 14px inherit;cursor:pointer;margin:10px 8px 0 0;';
+    box.innerHTML = '<b style="font-size:15px">App tải lâu bất thường</b>'
+      + '<div style="margin-top:6px;opacity:.8">Đang kẹt ở: ' + esc(window._bootStage || '?') + '</div>'
+      + (errs.length ? '<div style="margin-top:8px;padding:8px 10px;border-radius:10px;background:rgba(238,90,79,.14);color:#ffb3ab;font-size:12px;word-break:break-word">'
+        + errs.map(esc).join('<br>') + '</div>' : '<div style="margin-top:6px;opacity:.8">Không có lỗi nào — có thể mạng chậm.</div>')
+      + '<div style="margin-top:6px;opacity:.6;font-size:12px">Chụp màn hình này gửi coach / người làm app.</div>'
+      + '<button type="button" id="boot-reload" style="' + btn + 'background:#8FDBFF;color:#161111;border:0">Tải lại</button>'
+      + '<button type="button" id="boot-clear" style="' + btn + 'background:transparent;color:inherit;border:1px solid rgba(255,255,255,.24)">Xoá bộ nhớ tạm rồi tải lại</button>';
+    document.body.appendChild(box);
+    document.getElementById('boot-reload').onclick = function () { location.reload(); };
+    document.getElementById('boot-clear').onclick = function () {
+      // Chỉ bộ nhớ tạm của Pulse (vai trò, giáo án cache). KHÔNG đăng xuất, không đụng dữ liệu trên máy chủ.
+      try { Object.keys(localStorage).forEach(function (k) { if (/^pulse_(user_v2|prog)_/.test(k)) localStorage.removeItem(k); }); } catch (_e) {}
+      try { sessionStorage.clear(); } catch (_e) {}
+      location.reload();
+    };
+  }
+  window._bootFail = function (err) { rec((err && (err.code ? err.code + ' ' : '') + (err.message || err)) || 'lỗi không rõ'); show(); };
+  setTimeout(show, 15000);
+})();
+</script>
+<script>
   // Block pinch-to-zoom on iOS Safari (ignores user-scalable=no since iOS 10)
   document.addEventListener('touchmove', function(e) {
     if (e.touches.length > 1) e.preventDefault();
@@ -403,8 +451,10 @@ auth.getRedirectResult().then(result => {
 // Track if we've already handled the initial auth state
 let _authInitialized = false;
 
+window._bootStage = 'Firebase xác định tài khoản đăng nhập';
 onAuthStateChanged(auth, async user => {
   if (user) {
+    window._bootStage = 'Đọc hồ sơ tài khoản';
     _authInitialized = true;
     currentUser = user;
     document.getElementById('login-screen')?.classList.add('hidden');
@@ -703,7 +753,11 @@ function _launchAfterProfile(user) {
   // Không còn màn chào (logo 2,3 giây + slide cũ): khách vào thẳng app như
   // coach. Khách vẫn giữ một lần thử lại nếu nạp hỏng — cache vai trò cũ hay
   // làm lần đầu hỏng, xoá rồi tải lại là qua.
-  if (userRole !== 'client') return loadApp();
+  window._bootStage = 'Tải dữ liệu app (' + (userRole || '?') + ')';
+  // Coach: lỗi ở đây trước kia không ai bắt → đứng mãi ở logo. Giờ hiện lỗi trên màn chờ (_bootFail, script đầu trang).
+  if (userRole !== 'client') return loadApp()
+    .then(() => { window._appLoaded = true; })
+    .catch(err => { console.error('[loadApp] fatal error (coach):', err); if (window._bootFail) window._bootFail(err); });
   showScreen('loading');
   return loadApp()
     .then(() => { window._appLoaded = true; })
@@ -808,7 +862,9 @@ async function loadApp() {
   }
 
   if (userRole === 'coach') {
+    window._bootStage = 'Tải danh sách khách';
     await Promise.all([loadAllClients(), _platformP]);
+    window._bootStage = 'Vẽ thanh khách + mở khách';
     renderClientBar(true);
     const schTab = document.getElementById('schedule-nav-tab');
     if (schTab) schTab.style.display = '';
@@ -953,6 +1009,7 @@ async function loadApp() {
     }
   }
 
+  window._bootStage = 'Tải giáo án + mức tạ của ' + (activeClient ? activeClient.id : '?');
   updateDateDisplay();
   renderDayTabs();
   // ── Parallel fetch: loads + strength history run simultaneously ──
