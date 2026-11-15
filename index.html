@@ -9968,6 +9968,8 @@ function showPage(page) {
   if (page === 'groups') renderGroups();
   document.getElementById('worklist-page').classList.toggle('active', page === 'worklist');
   if (page === 'worklist') loadWorklist();
+  document.getElementById('anatomy-page').classList.toggle('active', page === 'anatomy');
+  if (page === 'anatomy') renderAnatomy();
   if (page === 'chat') chatPageOpen(); else chatPageClose();
   if (page === 'platform') renderPlatform();
   if (page === 'dash') renderDashboard();
@@ -12540,6 +12542,499 @@ window._addDay = addDay;
 window._deleteDay = deleteDay;
 window._finishWorkout = finishWorkout;
 window.__finishWorkout = finishWorkout;
+
+// ── ANATOMY ─────────────────────────────────────────────────────────────────
+/*
+ * Tab Anatomy (2026-11-15): hình cơ thể nhìn trước / sau, kéo ngang để xoay 360°, chạm một cơ → tên, vị trí,
+ * chức năng, mẹo tập + bài gợi ý lấy từ THƯ VIỆN bài tập của app. Mọi người dùng (coach + khách), chỉ đọc.
+ *
+ * Hình: lib/anatomy-map.js (đường vẽ của "body-muscles", Ivan Vulović, Apache-2.0 — ghi công trong file đó + chân
+ * tab). Đó là bản đồ PHẲNG hai mặt: "xoay 360°" là lật tấm thẻ hai mặt trong 3D (CSS rotateY), không phải mô hình
+ * 3D — góc nghiêng thấy tấm hình mỏng lại. Tải lười lần đầu mở tab (~16 KB).
+ *
+ * AN_REGION: id vùng → khoá nhóm. Vùng không phải cơ (đầu, bàn tay, khớp gối…) = null → chỉ vẽ nền, không chạm.
+ * AN_GROUPS: nội dung từng nhóm. `lib` = vùng chuẩn của app (cdMapMuscle / MUSCLE_CANON_LABEL) để tìm bài trong
+ * thư viện theo vai trò P/S; `kw` = từ khoá tên bài ưu tiên; `alt` = gợi ý chung khi thư viện có quá ít bài.
+ */
+const AN_REGION = (id) => {
+  const b = id.replace(/-(left|right)$/, '');
+  const m = {
+    'neck': 'neck', 'nape': 'neck',
+    'shoulder-front': 'delt-f', 'shoulder-side': 'delt-s', 'deltoid-rear': 'delt-r',
+    'traps-upper': 'traps', 'traps-mid': 'traps-lo', 'traps-lower': 'traps-lo',
+    'lats-upper': 'lats', 'lats-mid': 'lats', 'lats-lower': 'lats',
+    'biceps': 'biceps', 'triceps-long': 'triceps', 'triceps-lateral': 'triceps',
+    'forearm': 'forearm-flex', 'forearm-flexors': 'forearm-flex', 'forearm-extensors': 'forearm-ext',
+    'chest-upper': 'chest-upper', 'chest-lower': 'chest-lower',
+    'abs-upper': 'abs', 'abs-lower': 'abs', 'obliques': 'obliques', 'serratus-anterior': 'serratus',
+    'hip-flexor': 'hip-flex', 'quads': 'quads', 'adductors': 'adductors', 'tibialis-anterior': 'tibialis',
+    'lower-back-erectors': 'erectors', 'lower-back-ql': 'ql',
+    'gluteus-maximus': 'glute-max', 'gluteus-medius': 'glute-med',
+    'hamstrings-medial': 'hams', 'hamstrings-lateral': 'hams',
+    'calves-gastroc-medial': 'gastroc', 'calves-gastroc-lateral': 'gastroc', 'calves-soleus': 'soleus',
+  };
+  return m[b] || null;
+};
+
+const AN_AREAS = [
+  ['upper', { vi: 'Thân trên', en: 'Upper body' }, ['chest-upper', 'chest-lower', 'delt-f', 'delt-s', 'delt-r', 'traps', 'traps-lo', 'lats', 'neck']],
+  ['arms', { vi: 'Tay', en: 'Arms' }, ['biceps', 'triceps', 'forearm-flex', 'forearm-ext']],
+  ['core', { vi: 'Bụng – lưng dưới', en: 'Core' }, ['abs', 'obliques', 'serratus', 'erectors', 'ql']],
+  ['legs', { vi: 'Hông – chân', en: 'Hips & legs' }, ['glute-max', 'glute-med', 'hip-flex', 'quads', 'hams', 'adductors', 'gastroc', 'soleus', 'tibialis']],
+];
+
+const AN_GROUPS = {
+  'chest-upper': {
+    vi: 'Ngực trên', en: 'Upper chest', la: 'Pectoralis major — đầu đòn (clavicular head)', lib: ['chest'],
+    kw: /incline|low.?to.?high|landmine press/i, kwOnly: true,   // thư viện không tách ngực trên / dưới → chỉ bài dốc
+    where: { vi: 'Phần ngực lớn bám từ nửa trong xương đòn, chạy chéo xuống bám vào xương cánh tay.', en: 'The part of the pec that starts on the inner half of the collarbone and runs to the upper arm bone.' },
+    fn: { vi: ['Gập vai — đưa tay ra trước và lên cao', 'Khép ngang — kéo tay từ ngoài vào trước ngực', 'Xoay trong cánh tay'], en: ['Shoulder flexion — raising the arm forward and up', 'Horizontal adduction — bringing the arm across the chest', 'Internal rotation of the arm'] },
+    tip: { vi: 'Ghế dốc 15–30° là đủ để nhấn ngực trên; dốc hơn thì vai trước gánh phần lớn.', en: 'A 15–30° incline is enough to bias the upper chest; steeper and the front delts take over.' },
+    alt: ['Incline Dumbbell Press', 'Incline Barbell Bench Press', 'Low-to-High Cable Fly'],
+  },
+  'chest-lower': {
+    vi: 'Ngực giữa – dưới', en: 'Mid & lower chest', la: 'Pectoralis major — đầu ức sườn (sternocostal head)', lib: ['chest'],
+    kw: /bench|push.?up|dip|decline|chest press|fly|high.?to.?low/i,
+    where: { vi: 'Phần lớn nhất của cơ ngực, bám từ xương ức và sụn sườn vào xương cánh tay.', en: 'The largest part of the pec, from the breastbone and rib cartilage to the upper arm bone.' },
+    fn: { vi: ['Khép ngang — đẩy / ôm tay vào trước ngực', 'Duỗi vai khi tay đang ở phía trước (kéo tay xuống)', 'Khép và xoay trong cánh tay'], en: ['Horizontal adduction — pushing or hugging the arms together', 'Shoulder extension from a raised position (pulling the arm down)', 'Adduction and internal rotation of the arm'] },
+    tip: { vi: 'Bench phẳng, chống đẩy, dips. Hạ tạ có kiểm soát và giãn ngực ở đáy — đó là phần kích thích nhiều nhất.', en: 'Flat bench, push-ups, dips. Lower under control and get a stretch at the bottom — that is where most of the stimulus is.' },
+    alt: ['Barbell Bench Press', 'Dumbbell Bench Press', 'Push-Up', 'Dips'],
+  },
+  'delt-f': {
+    vi: 'Vai trước', en: 'Front delts', la: 'Deltoideus — bó trước (anterior)', lib: ['delt-f'],
+    kw: /overhead|shoulder press|military|arnold|front raise|landmine press/i,
+    where: { vi: 'Bó trước của cơ delta, từ xương đòn phủ lên mặt trước khớp vai.', en: 'Front head of the deltoid, from the collarbone over the front of the shoulder joint.' },
+    fn: { vi: ['Gập vai — đưa tay ra trước, lên cao', 'Khép ngang (cùng ngực)', 'Xoay trong cánh tay'], en: ['Shoulder flexion — lifting the arm forward and overhead', 'Horizontal adduction (with the chest)', 'Internal rotation of the arm'] },
+    tip: { vi: 'Đã làm việc nhiều trong mọi bài đẩy ngực / đẩy vai — thường không cần thêm front raise.', en: 'It already works hard in every press — front raises are rarely needed.' },
+    alt: ['Overhead Press', 'Seated Dumbbell Shoulder Press', 'Landmine Press'],
+  },
+  'delt-s': {
+    vi: 'Vai giữa', en: 'Side delts', la: 'Deltoideus — bó giữa (lateral)', lib: ['delt-s'],
+    kw: /lateral raise|side raise|upright row|y.?raise|lu raise/i,
+    where: { vi: 'Bó giữa cơ delta, từ mỏm cùng vai xuống mặt ngoài cánh tay — tạo độ rộng vai.', en: 'Middle head of the deltoid, from the top of the shoulder blade to the outer upper arm — gives shoulder width.' },
+    fn: { vi: ['Dang vai — nâng tay sang ngang', 'Giữ khớp vai vững khi mang vác'], en: ['Shoulder abduction — raising the arm out to the side', 'Stabilises the shoulder when carrying'] },
+    tip: { vi: 'Ít được kích thích bởi bài đẩy — cần bài riêng: dang tay tạ đơn / cáp, tạ nhẹ, nhiều rep, nâng tới ngang vai.', en: 'Pressing barely hits it — it needs direct work: dumbbell or cable lateral raises, light weight, higher reps, up to shoulder height.' },
+    alt: ['Dumbbell Lateral Raise', 'Cable Lateral Raise', 'Machine Lateral Raise'],
+  },
+  'delt-r': {
+    vi: 'Vai sau', en: 'Rear delts', la: 'Deltoideus — bó sau (posterior)', lib: ['delt-r'],
+    kw: /rear|reverse fly|reverse pec|face pull|band pull.?apart/i,
+    where: { vi: 'Bó sau cơ delta, từ gai xương bả vai tới mặt sau cánh tay.', en: 'Rear head of the deltoid, from the spine of the shoulder blade to the back of the upper arm.' },
+    fn: { vi: ['Dang ngang — kéo tay ra sau theo phương ngang', 'Duỗi vai — kéo tay ra sau', 'Xoay ngoài cánh tay'], en: ['Horizontal abduction — pulling the arm back at shoulder height', 'Shoulder extension', 'External rotation of the arm'] },
+    tip: { vi: 'Cân bằng với khối ngực / vai trước, tốt cho tư thế. Face pull, reverse fly — khuỷu tay ngang vai.', en: 'Balances the chest and front delts and helps posture. Face pulls and reverse flyes with elbows at shoulder height.' },
+    alt: ['Face Pull', 'Reverse Dumbbell Fly', 'Reverse Pec Deck'],
+  },
+  traps: {
+    vi: 'Cơ thang trên', en: 'Upper traps', la: 'Trapezius — phần trên (descending)', lib: ['traps'],
+    kw: /shrug|farmer|carry|upright row|rack pull|deadlift/i,
+    where: { vi: 'Từ đáy hộp sọ và gáy chạy xuống bám vào xương đòn và mỏm cùng vai.', en: 'From the base of the skull and neck down to the collarbone and top of the shoulder.' },
+    fn: { vi: ['Nhún vai — nâng xương bả vai', 'Xoay xương bả vai lên khi giơ tay qua đầu (cùng cơ răng trước)', 'Hỗ trợ ngửa và nghiêng cổ'], en: ['Shrugging — elevating the shoulder blades', 'Upward rotation of the shoulder blade when reaching overhead (with serratus)', 'Helps extend and side-bend the neck'] },
+    tip: { vi: 'Deadlift, mang vác nặng đã tập nhiều. Nhún vai: giữ 1 giây ở đỉnh, không xoay vai.', en: 'Deadlifts and heavy carries already load it. For shrugs, pause at the top and do not roll the shoulders.' },
+    alt: ['Barbell Shrug', 'Dumbbell Shrug', "Farmer's Carry"],
+  },
+  'traps-lo': {
+    vi: 'Cơ thang giữa – dưới (và cơ trám)', en: 'Mid & lower traps (and rhomboids)', la: 'Trapezius (transverse, ascending) · Rhomboideus', lib: ['traps-lo', 'rhomboids'],
+    kw: /row|face pull|y.?raise|prone|retraction|band pull.?apart/i,
+    where: { vi: 'Giữa hai xương bả vai và dọc cột sống ngực; cơ trám nằm ngay dưới cơ thang giữa.', en: 'Between the shoulder blades and along the mid-back spine; the rhomboids lie just underneath.' },
+    fn: { vi: ['Khép xương bả vai — kéo hai bả vai vào nhau (thang giữa, cơ trám)', 'Hạ xương bả vai (thang dưới)', 'Xoay bả vai lên khi giơ tay qua đầu (thang dưới)'], en: ['Retracting the shoulder blades — squeezing them together (mid traps, rhomboids)', 'Depressing the shoulder blades (lower traps)', 'Upward rotation when reaching overhead (lower traps)'] },
+    tip: { vi: 'Quan trọng cho tư thế và vai khoẻ. Bài kéo ngang: kết thúc bằng khép bả vai, đừng chỉ kéo tay.', en: 'Key for posture and healthy shoulders. In rows, finish by squeezing the shoulder blades, not just pulling with the arms.' },
+    alt: ['Chest-Supported Row', 'Seated Cable Row', 'Prone Y Raise'],
+  },
+  lats: {
+    vi: 'Cơ lưng xô', en: 'Lats', la: 'Latissimus dorsi', lib: ['lats', 'teres'],
+    kw: /pull.?up|chin.?up|pulldown|pull.?down|row|pullover/i,
+    where: { vi: 'Cơ rộng nhất lưng: từ cột sống ngực dưới, thắt lưng, mào chậu, vòng qua nách bám vào xương cánh tay.', en: 'The widest back muscle: from the lower spine, low back and pelvis, wrapping under the armpit to the upper arm bone.' },
+    fn: { vi: ['Duỗi vai — kéo tay từ trên xuống / từ trước ra sau', 'Khép vai — kéo khuỷu sát sườn', 'Xoay trong cánh tay', 'Giúp giữ thân vững (qua mạc ngực thắt lưng)'], en: ['Shoulder extension — pulling the arm down or back', 'Shoulder adduction — pulling the elbow to the side', 'Internal rotation of the arm', 'Helps brace the trunk (via the thoracolumbar fascia)'] },
+    tip: { vi: 'Nghĩ "kéo khuỷu tay xuống túi quần". Hít xà, kéo xô, chèo — đủ biên độ, giãn hết ở trên.', en: 'Think "drive the elbows to your back pockets". Pull-ups, pulldowns and rows through a full range, with a full stretch at the top.' },
+    alt: ['Pull-Up', 'Lat Pulldown', 'Single-Arm Dumbbell Row'],
+  },
+  neck: {
+    vi: 'Cơ cổ', en: 'Neck', la: 'Sternocleidomastoideus · Splenius', lib: [],
+    kw: /neck (flexion|extension|curl|bridge|harness)|chin tuck/i,
+    where: { vi: 'Mặt trước: cơ ức đòn chũm (từ sau tai chéo xuống xương ức / đòn). Gáy: cơ gối đầu – gối cổ dưới cơ thang.', en: 'Front: sternocleidomastoid (behind the ear down to the breastbone and collarbone). Back: splenius muscles under the traps.' },
+    fn: { vi: ['Gập cổ, xoay đầu sang bên đối diện (ức đòn chũm)', 'Ngửa cổ, giữ đầu thẳng (cơ gáy)'], en: ['Neck flexion and turning the head to the opposite side (SCM)', 'Neck extension and holding the head upright (back of neck)'] },
+    tip: { vi: 'Tập nhẹ, chậm, tăng dần — đặc biệt với người chơi đối kháng / boxing.', en: 'Train light, slow and progressive — especially for combat sports and boxing.' },
+    alt: ['Neck Flexion (plate / band)', 'Neck Extension (band)', 'Chin Tuck'],
+  },
+  biceps: {
+    vi: 'Cơ nhị đầu', en: 'Biceps', la: 'Biceps brachii', lib: ['biceps'],
+    kw: /curl|chin.?up/i,
+    where: { vi: 'Mặt trước cánh tay, hai đầu bám ở xương bả vai, bám dưới vào xương quay cẳng tay.', en: 'Front of the upper arm; both heads start on the shoulder blade and insert on the forearm (radius).' },
+    fn: { vi: ['Gập khuỷu', 'Ngửa cẳng tay — xoay lòng bàn tay lên', 'Hỗ trợ gập vai'], en: ['Elbow flexion', 'Supination — turning the palm up', 'Assists shoulder flexion'] },
+    tip: { vi: 'Cuốn với lòng bàn tay ngửa hẳn. Cuốn ở ghế dốc (tay sau thân) giãn đầu dài nhiều hơn.', en: 'Curl with the palm fully turned up. Incline curls (arm behind the body) stretch the long head more.' },
+    alt: ['Dumbbell Curl', 'Barbell Curl', 'Incline Dumbbell Curl'],
+  },
+  triceps: {
+    vi: 'Cơ tam đầu', en: 'Triceps', la: 'Triceps brachii', lib: ['triceps'],
+    kw: /tricep|pushdown|push.?down|skull|overhead extension|close.?grip|dip/i,
+    where: { vi: 'Mặt sau cánh tay — chiếm khoảng 2/3 khối cánh tay. Đầu dài bám vào xương bả vai.', en: 'Back of the upper arm — about two thirds of arm size. The long head starts on the shoulder blade.' },
+    fn: { vi: ['Duỗi khuỷu', 'Đầu dài: hỗ trợ duỗi và khép vai'], en: ['Elbow extension', 'Long head: helps extend and adduct the shoulder'] },
+    tip: { vi: 'Bài tay qua đầu (overhead extension) giãn đầu dài — kết hợp với pushdown để đủ cả ba đầu.', en: 'Overhead extensions stretch the long head — pair them with pushdowns to cover all three heads.' },
+    alt: ['Cable Triceps Pushdown', 'Overhead Cable Triceps Extension', 'Close-Grip Bench Press'],
+  },
+  'forearm-flex': {
+    vi: 'Cẳng tay — nhóm gập', en: 'Forearm flexors', la: 'Flexor carpi · Flexor digitorum', lib: ['forearm'],
+    kw: /wrist curl|grip (trainer|squeeze|hold)|dead ?hang|farmer|carry|towel/i,
+    where: { vi: 'Mặt trong (phía lòng bàn tay) cẳng tay, từ mỏm trên lồi cầu trong xương cánh tay.', en: 'Palm side of the forearm, from the inner elbow.' },
+    fn: { vi: ['Gập cổ tay', 'Gập ngón tay — lực nắm', 'Giữ khuỷu vững khi kéo nặng'], en: ['Wrist flexion', 'Finger flexion — grip strength', 'Stabilise the elbow during heavy pulls'] },
+    tip: { vi: 'Lực nắm hay là giới hạn của deadlift / hít xà. Treo xà, farmer carry giữ lâu.', en: 'Grip is often what limits deadlifts and pull-ups. Dead hangs and long farmer carries.' },
+    alt: ["Farmer's Carry", 'Dead Hang', 'Wrist Curl'],
+  },
+  'forearm-ext': {
+    vi: 'Cẳng tay — nhóm duỗi', en: 'Forearm extensors', la: 'Extensor carpi · Brachioradialis', lib: ['forearm'],
+    kw: /reverse curl|hammer|wrist extension/i,
+    where: { vi: 'Mặt mu cẳng tay, từ mỏm trên lồi cầu ngoài; cơ cánh tay quay nằm phía ngón cái.', en: 'Back of the forearm, from the outer elbow; brachioradialis sits on the thumb side.' },
+    fn: { vi: ['Duỗi cổ tay và ngón tay', 'Cơ cánh tay quay: gập khuỷu với tay ở tư thế búa (ngón cái lên)'], en: ['Wrist and finger extension', 'Brachioradialis: elbow flexion with a neutral (hammer) grip'] },
+    tip: { vi: 'Cân bằng với nhóm gập — giúp phòng đau khuỷu ngoài (tennis elbow).', en: 'Balances the flexors and helps prevent outer-elbow pain (tennis elbow).' },
+    alt: ['Hammer Curl', 'Reverse Curl', 'Wrist Extension'],
+  },
+  abs: {
+    vi: 'Cơ bụng thẳng', en: 'Abs', la: 'Rectus abdominis', lib: ['abs'],
+    kw: /crunch|rollout|roll.?out|plank|dead.?bug|hollow|leg raise|ab wheel|sit.?up/i,
+    where: { vi: 'Hai dải cơ dọc giữa bụng, từ xương mu lên xương ức và sụn sườn 5–7 ("6 múi").', en: 'Two vertical bands down the middle of the belly, from the pubic bone to the breastbone and ribs 5–7 (the "six-pack").' },
+    fn: { vi: ['Gập thân — cuộn cột sống', 'Chống ưỡn lưng (anti-extension) — giữ thân thẳng khi chịu lực', 'Nghiêng khung chậu ra sau'], en: ['Trunk flexion — curling the spine', 'Resisting extension (anti-extension) — keeping the trunk rigid under load', 'Posterior pelvic tilt'] },
+    tip: { vi: 'Ưu tiên bài chống ưỡn: dead bug, plank, ab wheel. "Múi" lộ ra là chuyện mỡ, không phải số bài bụng.', en: 'Prioritise anti-extension: dead bugs, planks, ab wheel. Visible abs are about body fat, not how much ab work you do.' },
+    alt: ['Dead Bug', 'Ab Wheel Rollout', 'Hanging Knee Raise'],
+  },
+  obliques: {
+    vi: 'Cơ chéo bụng', en: 'Obliques', la: 'Obliquus externus / internus abdominis', lib: ['obliques'],
+    kw: /pallof|wood ?chop|side plank|suitcase|landmine (rotation|twist)|russian twist|anti.?rotation|cable rotation/i,
+    where: { vi: 'Hai bên hông bụng, thớ cơ chạy chéo — chéo ngoài nằm trên, chéo trong ngay dưới.', en: 'The sides of the waist with diagonal fibres — external on top, internal just beneath.' },
+    fn: { vi: ['Xoay thân', 'Nghiêng thân sang bên', 'Chống xoay / chống nghiêng — giữ thân không bị vặn khi chịu lực một bên'], en: ['Trunk rotation', 'Side bending', 'Anti-rotation / anti-lateral flexion — stopping the trunk twisting under one-sided load'] },
+    tip: { vi: 'Pallof press, side plank, suitcase carry — bài chống xoay an toàn hơn và chuyển sang thể thao tốt hơn gập vặn liên tục.', en: 'Pallof press, side plank, suitcase carry — anti-rotation is safer and transfers better to sport than repeated twisting crunches.' },
+    alt: ['Pallof Press', 'Side Plank', 'Suitcase Carry'],
+  },
+  serratus: {
+    vi: 'Cơ răng trước', en: 'Serratus anterior', la: 'Serratus anterior', lib: [],
+    kw: /serratus|push.?up plus|scap push|punch|wall slide|bear crawl|landmine press/i,
+    where: { vi: 'Bám từ 8–9 xương sườn trên (hình răng cưa ở mạn sườn) vào bờ trong xương bả vai.', en: 'From the upper 8–9 ribs (the saw-tooth pattern on the side of the ribcage) to the inner edge of the shoulder blade.' },
+    fn: { vi: ['Đẩy xương bả vai ra trước (vươn tay, đấm)', 'Xoay bả vai lên khi giơ tay qua đầu', 'Giữ bả vai áp sát lồng ngực — yếu thì bả vai bị "nhô cánh"'], en: ['Protracting the shoulder blade (reaching, punching)', 'Upward rotation when reaching overhead', 'Holding the shoulder blade flat on the ribs — weakness causes "winging"'] },
+    tip: { vi: 'Quan trọng cho vai khoẻ và cú đấm. Ở cuối chống đẩy, đẩy thêm sàn ra xa (push-up plus).', en: 'Important for shoulder health and punching. At the top of a push-up, push the floor away a little more (push-up plus).' },
+    alt: ['Push-Up Plus', 'Wall Slide', 'Landmine Press'],
+  },
+  erectors: {
+    vi: 'Cơ dựng sống', en: 'Spinal erectors', la: 'Erector spinae', lib: ['erectors'],
+    kw: /deadlift|good morning|back extension|hyperextension|rdl|romanian|superman|bird.?dog/i,
+    where: { vi: 'Hai cột cơ dọc hai bên cột sống, từ xương cùng lên tới gáy.', en: 'Two columns of muscle either side of the spine, from the sacrum up to the neck.' },
+    fn: { vi: ['Duỗi (ngửa) cột sống', 'Giữ lưng thẳng, chống gập khi cúi nhấc vật nặng', 'Nghiêng thân sang bên'], en: ['Extending the spine', 'Keeping the back straight and resisting rounding when you lift', 'Side bending'] },
+    tip: { vi: 'Làm việc ĐẲNG TRƯỜNG (giữ yên) trong deadlift, squat, chèo — lưng giữ trung tính, không cố ưỡn.', en: 'Works isometrically (holding still) in deadlifts, squats and rows — keep the spine neutral, not over-arched.' },
+    alt: ['Romanian Deadlift', 'Back Extension', 'Bird Dog'],
+  },
+  ql: {
+    vi: 'Cơ vuông thắt lưng', en: 'Quadratus lumborum', la: 'Quadratus lumborum', lib: [],
+    kw: /suitcase|side plank|side bend|single.?arm carry|copenhagen/i,
+    where: { vi: 'Sâu ở hai bên thắt lưng, từ mào chậu lên xương sườn 12 và các đốt sống thắt lưng.', en: 'Deep on each side of the low back, from the top of the pelvis to the 12th rib and lumbar vertebrae.' },
+    fn: { vi: ['Nghiêng thân sang bên', 'Nâng hông một bên ("hip hike")', 'Giữ cột sống thắt lưng và khung chậu vững khi đi, chạy, mang vác một bên'], en: ['Side bending', 'Hiking one hip', 'Stabilising the low spine and pelvis when walking, running or carrying on one side'] },
+    tip: { vi: 'Suitcase carry và side plank — tập giữ thân thẳng khi bị kéo lệch một bên.', en: 'Suitcase carries and side planks — train staying upright while pulled to one side.' },
+    alt: ['Suitcase Carry', 'Side Plank', 'Side Plank Hip Lift'],
+  },
+  'glute-max': {
+    vi: 'Mông lớn', en: 'Glute max', la: 'Gluteus maximus', lib: ['glutes'],
+    kw: /hip thrust|glute bridge|bridge|kickback|deadlift|rdl|romanian|squat|lunge|split|step.?up/i,
+    where: { vi: 'Cơ lớn nhất cơ thể, phủ toàn bộ mông, từ xương chậu và xương cùng vào xương đùi.', en: 'The largest muscle in the body, covering the buttock, from the pelvis and sacrum to the thigh bone.' },
+    fn: { vi: ['Duỗi hông — đứng dậy, đẩy hông ra trước, chạy, nhảy', 'Xoay ngoài đùi', 'Phần trên: dang hông'], en: ['Hip extension — standing up, driving the hips forward, sprinting, jumping', 'External rotation of the thigh', 'Upper fibres: hip abduction'] },
+    tip: { vi: 'Hip thrust (siết đỉnh), squat sâu, split squat, RDL — kết hợp bài tải ở tư thế giãn và tư thế co.', en: 'Hip thrusts (squeeze at the top), deep squats, split squats, RDLs — mix exercises loaded in the stretch and the squeeze.' },
+    alt: ['Barbell Hip Thrust', 'Bulgarian Split Squat', 'Romanian Deadlift'],
+  },
+  'glute-med': {
+    vi: 'Mông nhỡ', en: 'Glute med', la: 'Gluteus medius', lib: ['glutes'],
+    kw: /abduct|clam|monster|lateral band|band walk|side.?lying|single.?leg|step.?up|side plank|cossack/i,
+    where: { vi: 'Mặt ngoài phía trên hông, một phần nằm dưới mông lớn.', en: 'The upper outer hip, partly beneath the glute max.' },
+    fn: { vi: ['Dang hông — đưa chân sang ngang', 'Giữ khung chậu thăng bằng khi đứng một chân (đi, chạy)', 'Giữ gối không đổ vào trong'], en: ['Hip abduction — moving the leg out to the side', 'Keeping the pelvis level on one leg (walking, running)', 'Keeping the knee from caving in'] },
+    tip: { vi: 'Yếu → gối đổ vào trong khi squat / tiếp đất. Bài một chân + dang hông có kháng lực.', en: 'Weakness shows as knees caving on squats and landings. Single-leg work plus resisted abduction.' },
+    alt: ['Banded Lateral Walk', 'Side-Lying Hip Abduction', 'Single-Leg Romanian Deadlift'],
+  },
+  'hip-flex': {
+    vi: 'Cơ gập hông', en: 'Hip flexors', la: 'Iliopsoas (iliacus + psoas major)', lib: [],
+    kw: /hip flexor|knee raise|leg raise|march|\bl-?sit\b|psoas/i,
+    where: { vi: 'Sâu ở nếp gấp háng: cơ thắt lưng chậu từ cột sống thắt lưng và lòng xương chậu xuống xương đùi.', en: 'Deep in the front of the hip: iliopsoas runs from the lumbar spine and inner pelvis to the thigh bone.' },
+    fn: { vi: ['Gập hông — co gối lên ngực, bước chạy', 'Giữ ổn định cột sống thắt lưng'], en: ['Hip flexion — bringing the knee up, the running stride', 'Helps stabilise the lumbar spine'] },
+    tip: { vi: 'Ngồi nhiều làm cơ này ngắn và cứng — giãn gập hông + tập nâng gối có kiểm soát.', en: 'Long sitting leaves it short and stiff — stretch the hip flexors and train controlled knee raises.' },
+    alt: ['Hanging Knee Raise', 'Banded Hip March', 'Half-Kneeling Hip Flexor Stretch'],
+  },
+  quads: {
+    vi: 'Đùi trước', en: 'Quads', la: 'Quadriceps femoris', lib: ['quads'],
+    kw: /squat|lunge|split|leg press|leg extension|step.?up|hack|sissy/i,
+    where: { vi: '4 cơ mặt trước đùi (thẳng đùi, rộng ngoài, rộng trong, rộng giữa), hội tụ vào gân bánh chè.', en: 'Four muscles on the front of the thigh (rectus femoris and three vasti), joining at the kneecap tendon.' },
+    fn: { vi: ['Duỗi gối — đứng lên, nhảy, đạp', 'Thẳng đùi: thêm gập hông', 'Hãm gối khi tiếp đất / xuống dốc'], en: ['Knee extension — standing up, jumping, pedalling', 'Rectus femoris also flexes the hip', 'Controls the knee when landing and going downhill'] },
+    tip: { vi: 'Gối đi qua mũi chân là bình thường và cần thiết để tập đùi trước. Squat sâu, split squat, leg extension.', en: 'Knees going past the toes is normal and needed to train the quads. Deep squats, split squats, leg extensions.' },
+    alt: ['Back Squat', 'Bulgarian Split Squat', 'Leg Extension'],
+  },
+  hams: {
+    vi: 'Đùi sau', en: 'Hamstrings', la: 'Biceps femoris · Semitendinosus · Semimembranosus', lib: ['hams'],
+    kw: /leg curl|hamstring curl|nordic|rdl|romanian|good morning|stiff.?leg|deadlift/i,
+    where: { vi: 'Mặt sau đùi, từ ụ ngồi (xương ngồi) xuống dưới gối. Phía ngoài: nhị đầu đùi; phía trong: bán gân, bán màng.', en: 'Back of the thigh, from the sit bone to below the knee. Outer: biceps femoris; inner: semitendinosus and semimembranosus.' },
+    fn: { vi: ['Gập gối', 'Duỗi hông (cùng mông lớn)', 'Hãm cẳng chân khi chạy nước rút — nơi hay bị chấn thương'], en: ['Knee flexion', 'Hip extension (with the glutes)', 'Braking the lower leg when sprinting — a common injury spot'] },
+    tip: { vi: 'Cần CẢ bài gập gối (leg curl, nordic) lẫn bài duỗi hông (RDL). Nordic giảm rõ nguy cơ rách đùi sau.', en: 'Needs both knee-flexion work (leg curls, Nordics) and hip-hinge work (RDLs). Nordics clearly reduce hamstring strain risk.' },
+    alt: ['Romanian Deadlift', 'Seated Leg Curl', 'Nordic Hamstring Curl'],
+  },
+  adductors: {
+    vi: 'Cơ khép đùi', en: 'Adductors', la: 'Adductor magnus / longus / brevis · Gracilis', lib: ['adductors'],
+    kw: /adduct|copenhagen|sumo|cossack|lateral lunge|side lunge/i,
+    where: { vi: 'Mặt trong đùi, từ xương mu và ụ ngồi xuống mặt trong xương đùi.', en: 'Inner thigh, from the pubic bone and sit bone to the inner thigh bone.' },
+    fn: { vi: ['Khép đùi — kéo chân vào trong', 'Khép lớn: hỗ trợ mạnh duỗi hông (đứng dậy từ squat sâu)', 'Giữ khung chậu vững khi đổi hướng'], en: ['Hip adduction — pulling the leg in', 'Adductor magnus is a strong hip extender (standing up from a deep squat)', 'Stabilises the pelvis when changing direction'] },
+    tip: { vi: 'Copenhagen plank giảm chấn thương háng ở môn đổi hướng nhiều (bóng đá…).', en: 'Copenhagen planks reduce groin injuries in change-of-direction sports (football…).' },
+    alt: ['Copenhagen Plank', 'Sumo Squat', 'Cossack Squat'],
+  },
+  gastroc: {
+    vi: 'Bắp chân (cơ bụng chân)', en: 'Calves — gastrocnemius', la: 'Gastrocnemius', lib: ['calves'],
+    kw: /standing calf|calf raise|jump|skip|pogo/i,
+    where: { vi: 'Khối cơ hai đầu ở bắp chân, từ trên gối xuống gân gót (Achilles).', en: 'The two-headed calf muscle, from above the knee to the Achilles tendon.' },
+    fn: { vi: ['Duỗi cổ chân (kiễng gót) — đẩy người khi đi, chạy, nhảy', 'Hỗ trợ gập gối'], en: ['Plantarflexion (rising onto the toes) — propulsion in walking, running and jumping', 'Assists knee flexion'] },
+    tip: { vi: 'Tập với gối THẲNG (nhón gót đứng). Hạ sâu, dừng 1–2 giây ở đáy.', en: 'Train with the knee straight (standing calf raises). Go deep and pause 1–2 s at the bottom.' },
+    alt: ['Standing Calf Raise', 'Single-Leg Calf Raise', 'Pogo Hops'],
+  },
+  soleus: {
+    vi: 'Cơ dép', en: 'Soleus', la: 'Soleus', lib: ['calves'],
+    kw: /seated calf|bent.?knee calf|soleus/i,
+    where: { vi: 'Nằm dưới cơ bụng chân, từ xương chày / mác xuống gân gót.', en: 'Under the gastrocnemius, from the shin bones to the Achilles tendon.' },
+    fn: { vi: ['Duỗi cổ chân — nhất là khi gối gập', 'Giữ thăng bằng khi đứng; chịu tải lớn nhất khi chạy'], en: ['Plantarflexion — especially with the knee bent', 'Keeps you balanced standing; takes the biggest load when running'] },
+    tip: { vi: 'Tập với gối GẬP (nhón gót ngồi). Quan trọng cho người chạy bộ.', en: 'Train with the knee bent (seated calf raises). Important for runners.' },
+    alt: ['Seated Calf Raise', 'Bent-Knee Calf Raise'],
+  },
+  tibialis: {
+    vi: 'Cơ chày trước', en: 'Tibialis anterior', la: 'Tibialis anterior', lib: [],
+    kw: /tibialis|tib raise|toe raise|dorsiflex/i,
+    where: { vi: 'Mặt trước ống chân, sát bờ ngoài xương chày, xuống mu bàn chân.', en: 'Front of the shin, alongside the shin bone, down to the top of the foot.' },
+    fn: { vi: ['Gập mu cổ chân — kéo mũi chân lên', 'Nghiêng bàn chân vào trong', 'Hãm bàn chân khi tiếp đất — giúp phòng đau ống chân'], en: ['Dorsiflexion — pulling the toes up', 'Turning the sole inward', 'Controls the foot on landing — helps prevent shin splints'] },
+    tip: { vi: 'Tib raise dựa tường: lưng tựa tường, gót cách tường ~30 cm, nâng mũi chân.', en: 'Wall tib raises: back against a wall, heels ~30 cm out, lift the toes.' },
+    alt: ['Tibialis Raise', 'Heel Walk'],
+  },
+};
+
+let _an = { sel: null, ang: 0, loaded: false, exReady: false };
+
+function anLang() { return (typeof _lang !== 'undefined' && _lang === 'vi') ? 'vi' : 'en'; }
+function anL(o) { return o ? (o[anLang()] || o.vi || '') : ''; }
+function anS(vi, en) { return anLang() === 'vi' ? vi : en; }
+
+let _anMapLoading = null;
+function anLoadMap() {
+  if (window.ANATOMY_MAP) return Promise.resolve(true);
+  if (_anMapLoading) return _anMapLoading;
+  _anMapLoading = new Promise((resolve) => {
+    const js = document.createElement('script');
+    js.src = '/lib/anatomy-map.js';
+    js.onload = () => resolve(!!window.ANATOMY_MAP);
+    js.onerror = () => { _anMapLoading = null; resolve(false); };
+    document.head.appendChild(js);
+  });
+  return _anMapLoading;
+}
+
+/** Mặt (f = trước, b = sau) đang hướng về người xem với góc hiện tại. */
+function anFacing(ang) { const a = ((ang % 360) + 360) % 360; return (a < 90 || a >= 270) ? 'f' : 'b'; }
+
+async function renderAnatomy() {
+  const el = document.getElementById('anatomy-body');
+  if (!el) return;
+  if (!_an.loaded) {
+    el.innerHTML = '<div class="an-empty">' + escHtml(anS('Đang tải hình cơ thể…', 'Loading body map…')) + '</div>';
+    const ok = await anLoadMap();
+    if (!ok) { el.innerHTML = '<div class="an-empty">' + escHtml(anS('Không tải được hình cơ thể. Kiểm tra mạng rồi mở lại tab.', 'Could not load the body map. Check your connection and reopen the tab.')) + '</div>'; return; }
+    _an.loaded = true;
+  }
+  const svg = (v) => {
+    const vb = v === 'f' ? '0 0 35 93' : '37 0 35 93';
+    const paths = window.ANATOMY_MAP.filter((r) => r[1] === v).map((r) => {
+      const g = AN_REGION(r[0]);
+      return g ? '<path class="an-m" data-g="' + g + '" d="' + r[2] + '"><title>' + escHtml(anL(AN_GROUPS[g])) + '</title></path>'
+        : '<path class="an-bg" d="' + r[2] + '"/>';
+    }).join('');
+    // Mặt là <div> bọc <svg>: Safari bỏ qua backface-visibility trên chính thẻ <svg> → mặt trước lộ xuyên qua mặt sau.
+    return '<div class="an-face an-' + v + '"><svg viewBox="' + vb + '" role="presentation">' + paths + '</svg></div>';
+  };
+  const chips = AN_AREAS.map(([k, name, gs]) => '<div class="an-area"><span class="an-area-h">' + escHtml(anL(name)) + '</span><div class="an-chips">'
+    + gs.map((g) => '<button type="button" class="an-chip" data-g="' + g + '" aria-pressed="false" onclick="anSelect(\'' + g + '\', true)">' + escHtml(anL(AN_GROUPS[g])) + '</button>').join('')
+    + '</div></div>').join('');
+  el.innerHTML = '<header class="an-head"><h1>' + escHtml(anS('Giải phẫu cơ', 'Anatomy')) + '</h1>'
+    + '<p>' + escHtml(anS('Kéo ngang để xoay người. Chạm vào một cơ để xem chức năng và bài tập.', 'Drag sideways to turn the body. Tap a muscle to see what it does and how to train it.')) + '</p></header>'
+    + '<div class="an-cols"><section class="an-fig">'
+    + '<div class="an-stage" id="an-stage"><div class="an-rot" id="an-rot">' + svg('f') + svg('b') + '</div></div>'
+    + '<div class="an-ctl"><button type="button" class="an-btn" id="an-face-f" onclick="anTurn(0)">' + escHtml(anS('Mặt trước', 'Front')) + '</button>'
+    + '<button type="button" class="an-btn an-spin" onclick="anSpin()" aria-label="' + escHtml(anS('Xoay một vòng', 'Spin around')) + '">⟳ 360°</button>'
+    + '<button type="button" class="an-btn" id="an-face-b" onclick="anTurn(180)">' + escHtml(anS('Mặt sau', 'Back')) + '</button></div>'
+    + '</section><section class="an-side"><div id="an-info" class="an-info" aria-live="polite"></div>' + chips + '</section></div>'
+    + '<p class="an-credit">' + escHtml(anS('Hình vùng cơ: ', 'Muscle map: ')) + '<a href="https://github.com/vulovix/body-muscles" target="_blank" rel="noopener">body-muscles</a> · Ivan Vulović · Apache-2.0</p>';
+  anBindStage();
+  anApplyAngle();
+  anRenderInfo();
+}
+
+/**
+ * Đặt góc xoay. Mặt quay đi bị ẨN bằng visibility ở MỖI khung hình — không dựa vào backface-visibility: WebKit
+ * (iPhone) bỏ qua nó khi có filter / SVG và mặt trước lộ xuyên qua mặt sau. Vì vậy hoạt ảnh cũng chạy bằng JS
+ * (anAnimateTo), không bằng CSS transition — để mặt được đổi đúng lúc tấm hình nằm nghiêng 90°.
+ */
+function anApplyAngle() {
+  const rot = document.getElementById('an-rot');
+  if (!rot) return;
+  rot.style.transform = 'rotateY(' + _an.ang + 'deg)';
+  const face = anFacing(_an.ang);
+  const f = rot.querySelector('.an-f'), b = rot.querySelector('.an-b');
+  f.style.visibility = face === 'f' ? 'visible' : 'hidden';
+  b.style.visibility = face === 'b' ? 'visible' : 'hidden';
+  ['f', 'b'].forEach((v) => { const el = document.getElementById('an-face-' + v); if (el) el.setAttribute('aria-pressed', String(face === v)); });
+}
+
+let _anAnim = 0;
+function anAnimateTo(target, ms) {
+  cancelAnimationFrame(_anAnim);
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const from = _an.ang;
+  if (reduce || !ms || from === target) { _an.ang = target; anApplyAngle(); return; }
+  const t0 = performance.now();
+  const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+  const step = (now) => {
+    const t = Math.min(1, (now - t0) / ms);
+    _an.ang = from + (target - from) * ease(t);
+    anApplyAngle();
+    if (t < 1) _anAnim = requestAnimationFrame(step); else { _an.ang = target; anApplyAngle(); }
+  };
+  _anAnim = requestAnimationFrame(step);
+}
+
+/** Quay tới mặt trước (0) / sau (180) theo đường ngắn nhất từ góc hiện tại. */
+function anTurn(target) {
+  anAnimateTo(target + Math.round((_an.ang - target) / 360) * 360, 550);
+}
+function anSpin() { anAnimateTo(Math.round(_an.ang / 180) * 180 + 360, 1600); }
+
+let _anDrag = null;   // { x0, a0, moved } — kéo xoay; bộ nghe trên window gắn MỘT lần (renderAnatomy vẽ lại nhiều lần)
+let _anWinBound = false;
+function anBindStage() {
+  const st = document.getElementById('an-stage');
+  if (!st) return;
+  st.addEventListener('pointerdown', (e) => { cancelAnimationFrame(_anAnim); _anDrag = { x0: e.clientX, a0: _an.ang, moved: false }; });
+  st.addEventListener('click', (e) => {
+    if (_an.dragged && Date.now() - _an.dragged < 300) return;   // vừa kéo xoay, không phải chạm chọn
+    const p = e.target.closest && e.target.closest('.an-m');
+    if (p) anSelect(p.getAttribute('data-g'), false);
+  });
+  if (_anWinBound) return;
+  _anWinBound = true;
+  window.addEventListener('pointermove', (e) => {
+    const d = _anDrag;
+    if (!d) return;
+    const dx = e.clientX - d.x0;
+    if (!d.moved && Math.abs(dx) < 6) return;
+    d.moved = true;
+    _an.ang = d.a0 + dx * 0.9;
+    anApplyAngle();
+  });
+  const end = () => {
+    const d = _anDrag;
+    _anDrag = null;
+    if (!d || !d.moved) return;
+    _an.dragged = Date.now();
+    anTurn(anFacing(_an.ang) === 'f' ? 0 : 180);   // thả tay → dừng thẳng mặt gần nhất để đọc được
+  };
+  window.addEventListener('pointerup', end);
+  window.addEventListener('pointercancel', end);
+}
+
+/** Chọn nhóm cơ. fromList: chọn từ danh sách → nếu cơ đó chỉ có ở mặt kia thì quay sang. */
+function anSelect(g, fromList) {
+  if (!AN_GROUPS[g]) return;
+  _an.sel = _an.sel === g && !fromList ? null : g;
+  document.querySelectorAll('#anatomy-body .an-m').forEach((p) => p.classList.toggle('on', p.getAttribute('data-g') === _an.sel));
+  document.querySelectorAll('#anatomy-body .an-chip').forEach((c) => { const on = c.getAttribute('data-g') === _an.sel; c.classList.toggle('on', on); c.setAttribute('aria-pressed', String(on)); });
+  if (_an.sel && fromList) {
+    const face = anFacing(_an.ang);
+    const here = document.querySelector('#anatomy-body .an-' + face + ' .an-m[data-g="' + g + '"]');
+    if (!here) anTurn(face === 'f' ? 180 : 0);
+  }
+  anRenderInfo();
+  if (_an.sel) {
+    loadExerciseCache().then(() => { _an.exReady = true; if (_an.sel === g) anRenderInfo(); });
+    if (!fromList && window.matchMedia('(max-width: 760px)').matches) {
+      const info = document.getElementById('an-info');
+      if (info) setTimeout(() => info.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+    }
+  }
+}
+
+const AN_STOP = new Set(['barbell', 'dumbbell', 'cable', 'machine', 'band', 'bodyweight', 'plate', 'kettlebell', 'the', 'with', 'and', 'of', 'a']);
+const anTok = (n) => String(n).toLowerCase().replace(/\([^)]*\)/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter((w) => w && !AN_STOP.has(w));
+/**
+ * Bài trong thư viện cho nhóm cơ. Điểm: cơ chính (P) 3 / cơ phụ (S) 1,5, + 2 nếu tên khớp từ khoá của nhóm,
+ * + 2 nếu trùng bài kinh điển trong `alt`, + 0,5 dụng cụ phổ biến. Mỗi "kiểu động tác" (tên bỏ dụng cụ và bổ ngữ
+ * đứng trước) tối đa 2 bài — không thì 8 dòng toàn biến thể chống đẩy. Hoà điểm: tên ngắn trước (thường là bản gốc).
+ */
+function anExercises(g) {
+  const G = AN_GROUPS[g];
+  const lib = (typeof _exerciseCache !== 'undefined' && Array.isArray(_exerciseCache)) ? _exerciseCache : [];
+  const me = currentUser && currentUser.uid, coach = activeClient && activeClient.coachUid;
+  const alts = G.alt.map(anTok);
+  const seen = new Set(), cand = [];
+  lib.forEach((e) => {
+    if (!e || !e.name) return;
+    if (e.ownerUid && e.ownerUid !== me && e.ownerUid !== coach) return;   // bài riêng của coach khác
+    const key = String(e.name).trim().toLowerCase();
+    if (seen.has(key)) return;
+    let role = null;
+    Object.entries(e.muscles || {}).forEach(([m, r]) => {
+      if (!G.lib.length || (r !== 'P' && r !== 'S') || role === 'P') return;
+      const regs = typeof cdMapMuscle === 'function' ? cdMapMuscle(m).regions : [];
+      if (regs.some((x) => G.lib.includes(x))) role = r;
+    });
+    const kw = G.kw && G.kw.test(e.name);
+    if (!role && !kw) return;
+    if (!G.lib.length && !kw) return;
+    if (G.kwOnly && !(kw && role)) return;   // ngực trên: bài dốc VÀ đúng là bài ngực (không phải "incline curl")
+    const tok = anTok(e.name);
+    let score = (role === 'P' ? 3 : role === 'S' ? 1.5 : 0) + (kw ? 2 : 0);
+    if (alts.some((a) => a.length && a.every((w) => tok.includes(w)))) score += 2;
+    if (/barbell|dumbbell|cable|machine|bodyweight/i.test(e.name)) score += 0.5;
+    if (score < 2) return;
+    seen.add(key);
+    cand.push({ name: e.name, role, score, tk: tok.join(' '), fam: tok.slice(-2).join(' ') });
+  });
+  cand.sort((a, b) => b.score - a.score || a.name.length - b.name.length);
+  const perFam = {}, tks = new Set(), out = [];
+  for (const c of cand) {
+    if (tks.has(c.tk)) continue;               // "Pull Up (Bodyweight)" / "Pull-up" / "Pull Up (Band)": giữ bản điểm cao nhất
+    tks.add(c.tk);
+    if ((perFam[c.fam] = (perFam[c.fam] || 0) + 1) > 2) continue;
+    out.push(c);
+    if (out.length === 8) break;
+  }
+  return out;
+}
+
+function anRenderInfo() {
+  const box = document.getElementById('an-info');
+  if (!box) return;
+  const g = _an.sel, G = AN_GROUPS[g];
+  if (!G) {
+    box.innerHTML = '<div class="an-hint">' + escHtml(anS('Chọn một cơ trên hình hoặc trong danh sách bên dưới.', 'Pick a muscle on the body or from the list below.')) + '</div>';
+    return;
+  }
+  const fn = (G.fn[anLang()] || G.fn.vi).map((x) => '<li>' + escHtml(x) + '</li>').join('');
+  let ex;
+  if (!_an.exReady) ex = '<p class="an-muted">' + escHtml(anS('Đang tìm bài trong thư viện…', 'Searching the exercise library…')) + '</p>';
+  else {
+    const list = anExercises(g);
+    const roleTag = (r) => r === 'P' ? '<span class="an-role p">' + escHtml(anS('Chính', 'Primary')) + '</span>' : r === 'S' ? '<span class="an-role s">' + escHtml(anS('Phụ', 'Secondary')) + '</span>' : '';
+    ex = list.length
+      ? '<ul class="an-ex">' + list.map((x) => '<li><span class="an-ex-n">' + escHtml(x.name) + '</span>' + roleTag(x.role) + '</li>').join('') + '</ul>'
+      : '';
+    if (list.length < 3) {
+      const have = new Set(list.map((x) => x.name.toLowerCase()));
+      const alt = G.alt.filter((n) => !have.has(n.toLowerCase()));
+      if (alt.length) ex += '<p class="an-muted">' + escHtml(anS('Gợi ý chung (chưa có trong thư viện):', 'General ideas (not in the library yet):')) + '</p><ul class="an-ex alt">'
+        + alt.map((n) => '<li><span class="an-ex-n">' + escHtml(n) + '</span></li>').join('') + '</ul>';
+    }
+  }
+  box.innerHTML = '<div class="an-card">'
+    + '<div class="an-card-h"><h2>' + escHtml(anL(G)) + '</h2><button type="button" class="an-x" onclick="anSelect(\'' + g + '\', false)" aria-label="' + escHtml(anS('Bỏ chọn', 'Clear')) + '">×</button></div>'
+    + '<div class="an-la">' + escHtml(G.la) + '</div>'
+    + '<h3>' + escHtml(anS('Vị trí', 'Where')) + '</h3><p>' + escHtml(anL(G.where)) + '</p>'
+    + '<h3>' + escHtml(anS('Chức năng', 'What it does')) + '</h3><ul class="an-fn">' + fn + '</ul>'
+    + '<h3>' + escHtml(anS('Tập thế nào', 'How to train it')) + '</h3><p>' + escHtml(anL(G.tip)) + '</p>'
+    + '<h3>' + escHtml(anS('Bài tập gợi ý', 'Suggested exercises')) + '</h3>' + ex
+    + '</div>';
+}
 
 // ── EXERCISE LIBRARY CACHE (Step 6) ───────────────────
 async function loadExerciseCache() {
@@ -16517,6 +17012,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
     <div class="nav-tab" id="groups-nav-tab" data-page="groups" style="display:none" onclick="showPage('groups')">Lớp nhóm</div>
     <div class="nav-tab" id="worklist-nav-tab" data-page="worklist" style="display:none" onclick="showPage('worklist')">Work list</div>
     <div class="nav-tab" data-page="progress" onclick="showPage('progress')">Progress</div>
+    <div class="nav-tab" id="anatomy-nav-tab" data-page="anatomy" onclick="showPage('anatomy')">Anatomy</div>
     <div class="nav-tab" id="recovery-nav-tab" data-page="recovery" style="display:none" onclick="showPage('recovery')">Recovery</div>
     <div class="nav-tab" id="health-nav-tab" data-page="health" style="display:none" onclick="showPage('health')">Health</div>
     <div class="nav-tab" id="active-nav-tab" data-page="active" style="display:none" onclick="showPage('active')">Active</div>
@@ -16582,6 +17078,8 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 
   <!-- WORK LIST — lịch sử buổi tập từ đồng hồ Garmin của coach -->
   <div id="worklist-page"><div id="worklist-body"></div></div>
+  <!-- Anatomy: nội dung tự chọn ngôn ngữ (anLang) — bộ dịch DOM bỏ qua để không dịch chồng. -->
+  <div id="anatomy-page" data-i18n-skip><div id="anatomy-body"></div></div>
 
   <!-- LỚP NHÓM — dashboard riêng của lớp (coach) -->
   <div id="groups-page"><div id="groups-body"></div></div>
@@ -19506,6 +20004,65 @@ button.cd-av:focus-visible{outline:2px solid #8FDBFF;outline-offset:2px;}
 body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-events: none; }
 
 /* ── Tab Work list (renderWorklist) — thiết kế claude.ai/artifact/EAzFcgtXxCcwkf8Pdsb5ua; dùng chung .gp-* của tab Lớp nhóm ── */
+/* ── Tab Anatomy (2026-11-15) ── */
+#anatomy-page{display:none;padding:16px 16px 140px;max-width:1100px;margin:0 auto;color:#fff;font-family:'Figtree',system-ui,sans-serif;}
+#anatomy-page.active{display:block;}
+#anatomy-page *{box-sizing:border-box;}
+.an-head{margin:4px 0 14px;}
+.an-head h1{margin:0;font-size:32px;font-weight:800;letter-spacing:-.5px;}
+.an-head p{margin:6px 0 0;font-size:15px;line-height:1.45;color:rgba(255,255,255,.75);}
+.an-empty{padding:40px 0;color:rgba(255,255,255,.7);font-size:15px;}
+.an-cols{display:grid;grid-template-columns:minmax(260px,400px) 1fr;gap:24px;align-items:start;}
+.an-fig{position:sticky;top:12px;}
+.an-stage{perspective:1400px;touch-action:pan-y;user-select:none;-webkit-user-select:none;cursor:grab;
+  height:min(70vh,640px);display:flex;justify-content:center;align-items:center;
+  background:radial-gradient(60% 55% at 50% 45%,rgba(143,219,255,.10),transparent 70%);border-radius:20px;}
+.an-stage:active{cursor:grabbing;}
+.an-rot{position:relative;height:100%;aspect-ratio:35/93;transform-style:preserve-3d;-webkit-transform-style:preserve-3d;}
+.an-face{position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;transform:rotateY(0deg) translateZ(.1px);}
+.an-face.an-b{transform:rotateY(180deg) translateZ(.1px);}
+.an-face svg{display:block;width:100%;height:100%;overflow:visible;filter:drop-shadow(0 6px 24px rgba(0,0,0,.45));}
+.an-bg{fill:rgba(255,255,255,.07);stroke:#161111;stroke-width:.12;}
+.an-m{fill:rgba(255,255,255,.2);stroke:#161111;stroke-width:.12;cursor:pointer;transition:fill .15s;}
+.an-m:hover{fill:rgba(143,219,255,.42);}
+.an-m.on{fill:#8FDBFF;stroke:#fff;stroke-width:.18;}
+.an-ctl{display:flex;justify-content:center;gap:8px;margin-top:12px;flex-wrap:wrap;}
+.an-btn{min-height:44px;padding:0 16px;border-radius:999px;border:1px solid rgba(255,255,255,.2);background:transparent;color:#fff;font:700 14px 'Figtree',sans-serif;cursor:pointer;}
+.an-btn[aria-pressed="true"]{background:rgba(143,219,255,.16);border-color:#8FDBFF;color:#8FDBFF;}
+.an-btn.an-spin{background:#8FDBFF;border-color:#8FDBFF;color:#161111;}
+.an-btn:focus-visible,.an-chip:focus-visible,.an-x:focus-visible{outline:2px solid #fff;outline-offset:2px;}
+.an-info{margin-bottom:18px;scroll-margin-top:12px;}
+.an-hint{padding:18px;border-radius:16px;border:1px dashed rgba(255,255,255,.2);color:rgba(255,255,255,.72);font-size:15px;}
+.an-card{padding:20px;border-radius:18px;background:#211b1b;border:1px solid rgba(255,255,255,.1);}
+.an-card-h{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
+.an-card h2{margin:0;font-size:24px;font-weight:800;line-height:1.2;}
+.an-x{flex:none;width:44px;height:44px;margin:-8px -8px 0 0;border:0;border-radius:12px;background:transparent;color:rgba(255,255,255,.7);font-size:26px;line-height:1;cursor:pointer;}
+.an-la{margin-top:4px;font-size:13.5px;font-style:italic;color:#8FDBFF;}
+.an-card h3{margin:16px 0 6px;font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.6);}
+.an-card p{margin:0;font-size:15px;line-height:1.55;color:rgba(255,255,255,.88);}
+.an-fn{margin:0;padding-left:18px;font-size:15px;line-height:1.55;color:rgba(255,255,255,.88);}
+.an-fn li{margin:2px 0;}
+.an-muted{margin:6px 0!important;font-size:13px!important;color:rgba(255,255,255,.6)!important;}
+.an-ex{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;}
+.an-ex li{display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:44px;padding:8px 12px;border-radius:12px;background:rgba(255,255,255,.05);font-size:15px;font-weight:600;}
+.an-ex.alt li{background:transparent;border:1px dashed rgba(255,255,255,.16);font-weight:500;color:rgba(255,255,255,.8);}
+.an-role{flex:none;padding:2px 8px;border-radius:999px;font-size:11.5px;font-weight:800;}
+.an-role.p{background:rgba(143,219,255,.16);color:#8FDBFF;}
+.an-role.s{background:rgba(255,255,255,.08);color:rgba(255,255,255,.7);}
+.an-area{margin-top:14px;}
+.an-area-h{display:block;margin-bottom:8px;font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.6);}
+.an-chips{display:flex;flex-wrap:wrap;gap:8px;}
+.an-chip{min-height:40px;padding:0 14px;border-radius:999px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.04);color:#fff;font:600 14px 'Figtree',sans-serif;cursor:pointer;}
+.an-chip.on{background:#8FDBFF;border-color:#8FDBFF;color:#161111;}
+.an-credit{margin:28px 0 0;font-size:12px;color:rgba(255,255,255,.5);}
+.an-credit a{color:rgba(143,219,255,.85);}
+@media (max-width:760px){
+  #anatomy-page{padding:12px 16px 150px;}
+  .an-head h1{font-size:26px;}
+  .an-cols{grid-template-columns:1fr;gap:12px;}
+  .an-fig{position:static;}
+  .an-stage{height:min(56vh,520px);}
+}
 #worklist-page{display:none;padding:16px 16px 140px;max-width:1200px;margin:0 auto;color:#fff;font-family:'Figtree',system-ui,sans-serif;}
 #worklist-page.active{display:block;}
 #worklist-page *{box-sizing:border-box;}

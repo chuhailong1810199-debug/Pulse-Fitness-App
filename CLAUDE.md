@@ -382,6 +382,13 @@ Key routing rules:
   `t == request.time`, ≤ 2000 ký tự, không sửa/xoá. Push: `notifyChatMessage` (khách → coachUid; coach → users có
   clientId VÀ email khớp hồ sơ — users.clientId tự khai được). Khách coach-managed (`email: ''`) không chat được.
   `subscribeProgram` bỏ qua snapshot khi giáo án không đổi — ghi `chat` lên doc khách không được vẽ lại bài đang gõ kg.
+- **Tab Anatomy** (2026-11-15): mọi người (coach + khách), chỉ đọc. Hình = `lib/anatomy-map.js` (đường vẽ 89 vùng của
+  body-muscles · Ivan Vulović · **Apache-2.0** — giữ ghi công trong file, `lib/anatomy-map.LICENSE.txt`, dòng chân tab),
+  tải lười. Bản đồ PHẲNG 2 mặt: "xoay 360°" = lật thẻ (rotateY) — không phải mô hình 3D. Hoạt ảnh chạy bằng JS
+  (`anAnimateTo`) và mặt quay đi ẩn bằng `visibility` mỗi khung: WebKit/iPhone bỏ qua backface-visibility → mặt trước
+  lộ xuyên mặt sau. `AN_REGION` (vùng → nhóm), `AN_GROUPS` (27 nhóm, vi + en: vị trí, chức năng, mẹo tập), bài gợi ý
+  = `anExercises()` từ thư viện (`cdMapMuscle`, P > S, từ khoá, tối đa 2 bài/kiểu động tác; ẩn bài riêng của coach khác);
+  thư viện thiếu thì hiện `alt` "gợi ý chung". `tests/anatomy.test.js`.
 - **Chat theo khách**: tab tên khách trong khung trợ lý (hoặc nút "Hỏi AI về khách này" trên hồ sơ). Lưu ở
   `clients/{id}/aiChat` — chỉ hàm nền `coachAssistant` ghi (`thread: true`), coach của khách + admin đọc, KHÁCH
   KHÔNG đọc. Form "Hôm nay khách không khoẻ" → chỉnh buổi cho hôm nay theo `EXPLAIN_METHOD`, KHÔNG đổi giáo án gốc.
