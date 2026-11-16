@@ -12885,7 +12885,7 @@ const AN_GROUPS = {
   },
   gastroc: {
     vi: 'Bắp chân (cơ bụng chân)', en: 'Calves — gastrocnemius', la: 'Gastrocnemius', lib: ['calves'],
-    kw: /standing calf|calf raise|jump|skip|pogo/i,
+    kw: /standing calf|calf raise|jump rope|skipping|pogo/i,   // không lấy "jump" chung: Jumping Jack, Jumping Lunge
     where: { vi: 'Khối cơ hai đầu ở bắp chân, từ trên gối xuống gân gót (Achilles).', en: 'The two-headed calf muscle, from above the knee to the Achilles tendon.' },
     fn: { vi: ['Duỗi cổ chân (kiễng gót) — đẩy người khi đi, chạy, nhảy', 'Hỗ trợ gập gối'], en: ['Plantarflexion (rising onto the toes) — propulsion in walking, running and jumping', 'Assists knee flexion'] },
     tip: { vi: 'Tập với gối THẲNG (nhón gót đứng). Hạ sâu, dừng 1–2 giây ở đáy.', en: 'Train with the knee straight (standing calf raises). Go deep and pause 1–2 s at the bottom.' },
@@ -13219,8 +13219,8 @@ function anExercises(g) {
     const tok = anTok(e.name);
     let score = (role === 'P' ? 3 : role === 'S' ? 1.5 : 0) + (kw ? 2 : 0);
     if (alts.some((a) => a.length && a.every((w) => tok.includes(w)))) score += 2;
+    if (score < 2) return;   // xét TRƯỚC điểm dụng cụ: bài chỉ là cơ phụ (1,5) không được lọt nhờ +0,5 "Bodyweight"
     if (/barbell|dumbbell|cable|machine|bodyweight/i.test(e.name)) score += 0.5;
-    if (score < 2) return;
     seen.add(key);
     cand.push({ name: e.name, role, score, tk: tok.join(' '), fam: tok.slice(-2).join(' ') });
   });

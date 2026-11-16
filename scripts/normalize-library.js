@@ -55,6 +55,10 @@ const FIX = {
   "Back Extension (Machine)": { "Erector Spinae": "P", Glutes: "S", Hamstrings: "S" },
   "Back Extension Hold (Bodyweight)": { "Erector Spinae": "P", Glutes: "S" },
   "Back Extension Hold (Weighted)": { "Erector Spinae": "P", Glutes: "S" },
+  // 2026-11-16: bài thể lực từng ghi bắp chân là cơ CHÍNH → tab Anatomy gợi ý Burpee / Jumping Jack cho cơ dép.
+  // Burpee: đứng dậy bằng đùi trước + mông, chống đẩy bằng ngực / tay sau; bắp chân chỉ phụ. Jumping jack: tải nhẹ, mọi cơ phụ.
+  "Burpee (Bodyweight)": { Quads: "P", Glutes: "P", Chest: "S", Triceps: "S", "Front Delts": "S", Calves: "S" },
+  "Jumping Jack (Bodyweight)": { Calves: "S", Glutes: "S", "Side Delts": "S" },
   // Mang vác: tay cầm + cầu vai là chính, cơ bụng giữ thân.
   "Farmer's Carry (Dumbbell)": { Forearms: "P", Traps: "S", Abs: "S" },
   "Suitcase Carry (Kettlebell)": { Obliques: "P", Forearms: "S", Traps: "S" },

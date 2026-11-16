@@ -113,4 +113,13 @@ assert.strictEqual(anSportLevel('running', 'biceps'), 0);
 ['anSetMode(', 'anSetSport(', "' an-k' + lv", 'anSportCard()', 'an-sp-role', 'an-legend'].forEach((t) => assert.ok(html.includes(t), 'wiring ' + t));
 assert.ok(/\.an-m\.an-k1\{/.test(html) && /\.an-m\.an-k1\.on/.test(html), 'css k1 + selected');
 assert.ok(html.includes(".an-chip[data-g]').forEach"), 'chọn cơ không được tắt chip môn');
+// 2026-11-16: bài cơ PHỤ không lọt danh sách nhờ điểm dụng cụ; "jump" chung không kéo Jumping Jack vào bắp chân.
+{
+  const save = ctx._exerciseCache;
+  ctx._exerciseCache = [{ name: 'Seated Calf Raise (Machine)', muscles: { Calves: 'P' } }, { name: 'Burpee (Bodyweight)', muscles: { Quads: 'P', Glutes: 'P', Calves: 'S' } },
+    { name: 'Jumping Jack (Bodyweight)', muscles: { Calves: 'S', Glutes: 'S' } }, { name: 'Jump Rope', muscles: { Calves: 'P' } }];
+  vm.runInContext('_exerciseCache = this._exerciseCache;', ctx);
+  ['soleus', 'gastroc'].forEach((g) => { const n = anExercises(g).map((x) => x.name).join('|'); assert.ok(!/Burpee|Jumping Jack/.test(n), g + ': ' + n); });
+  ctx._exerciseCache = save; vm.runInContext('_exerciseCache = this._exerciseCache;', ctx);
+}
 console.log('anatomy ok');
