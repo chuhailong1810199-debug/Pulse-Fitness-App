@@ -403,6 +403,10 @@ Key routing rules:
   `AN_GROUPS` (29 nhóm, thêm chóp xoay & cơ tròn, cơ cánh tay; vi + en: vị trí, chức năng, mẹo tập), bài gợi ý
   = `anExercises()` từ thư viện (`cdMapMuscle`, P > S, từ khoá, tối đa 2 bài/kiểu động tác; ẩn bài riêng của coach khác);
   thư viện thiếu thì hiện `alt` "gợi ý chung". `tests/anatomy.test.js`.
+  **Chế độ Thể thao** (2026-11-16): công tắc "Cơ bắp | Thể thao" đầu tab. `AN_SPORTS` (boxing, running — thêm môn = thêm
+  mục + `AN_SPORT_ORDER`): `key` (cơ chủ lực + vai trò, tô đậm `an-k1`), `k2` (hỗ trợ, tô nhạt), demands / risk / plan,
+  `blocks` (bài + liều; liều viết tiếng Việt, `anDose()` dịch). Không chọn cơ → thẻ môn (`anSportCard`, nhãn "Thư viện"
+  khi bài có trong thư viện); chọn cơ → thẻ cơ + "Trong <môn>". Chỉ đọc, khung chung — chưa nối trợ lý soạn buổi.
 - **Chat theo khách**: tab tên khách trong khung trợ lý (hoặc nút "Hỏi AI về khách này" trên hồ sơ). Lưu ở
   `clients/{id}/aiChat` — chỉ hàm nền `coachAssistant` ghi (`thread: true`), coach của khách + admin đọc, KHÁCH
   KHÔNG đọc. Form "Hôm nay khách không khoẻ" → chỉnh buổi cho hôm nay theo `EXPLAIN_METHOD`, KHÔNG đổi giáo án gốc.

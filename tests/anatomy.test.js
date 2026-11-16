@@ -18,8 +18,8 @@ vm.createContext(ctx);
 vm.runInContext(mapSrc.replace('window.ANATOMY_MAP', 'this.ANATOMY_MAP'), ctx);
 vm.runInContext([fn('escHtml'), block('var CD_MUSCLE_MAP = {'), block('var CD_MUSCLE_GUESS = ['), fn('cdFold'),
   'var _cdMapMemo = {}, _cdWarned = {};', fn('cdMapMuscle'), mod,
-  'this.AN_REGION = AN_REGION; this.AN_GROUPS = AN_GROUPS; this.AN_AREAS = AN_AREAS; this.anExercises = anExercises; this.anFacing = anFacing;'].join('\n'), ctx);
-const { AN_REGION, AN_GROUPS, AN_AREAS, anExercises, anFacing, ANATOMY_MAP } = ctx;
+  'this.AN_REGION = AN_REGION; this.AN_GROUPS = AN_GROUPS; this.AN_AREAS = AN_AREAS; this.anExercises = anExercises; this.anFacing = anFacing; this.AN_SPORTS = AN_SPORTS; this.AN_SPORT_ORDER = AN_SPORT_ORDER; this.anSportLevel = anSportLevel; this.anDose = anDose; this.anExName = anExName;'].join('\n'), ctx);
+const { AN_REGION, AN_GROUPS, AN_AREAS, anExercises, anFacing, ANATOMY_MAP, AN_SPORTS, AN_SPORT_ORDER, anSportLevel, anDose, anExName } = ctx;
 
 // 3. Hình (scripts/anatomy/build-map.js): mỗi mục hoặc không phải cơ (null) hoặc thuộc một nhóm có nội dung.
 assert.ok(ANATOMY_MAP.length >= 89, 'map entries');
@@ -87,4 +87,30 @@ assert.ok(/if \(page === 'anatomy'\) renderAnatomy\(\);/.test(html));
 assert.ok(html.includes("js.src = '/lib/anatomy-map.js'"));
 // Không dựa vào backface-visibility (WebKit bỏ qua) — mặt quay đi phải bị ẩn bằng visibility.
 assert.ok(/f\.style\.visibility = face === 'f'/.test(html));
-console.log('anatomy OK');
+
+// Thể thao (2026-11-16): Boxing + Chạy bộ — cơ tham chiếu phải có thật, nội dung đủ 2 thứ tiếng, liều dịch được.
+assert.deepStrictEqual(JSON.stringify(AN_SPORT_ORDER), JSON.stringify(['boxing', 'running']));
+AN_SPORT_ORDER.forEach((k) => {
+  const S = AN_SPORTS[k];
+  assert.ok(S.vi && S.en && S.sum.vi && S.sum.en, k + ' names');
+  ['demands', 'risk', 'plan'].forEach((f) => assert.ok(S[f].vi.length >= 3 && S[f].vi.length === S[f].en.length, k + ' ' + f));
+  Object.entries(S.key).forEach(([g, r]) => { assert.ok(AN_GROUPS[g], k + ' key ' + g); assert.ok(r.vi && r.en, k + ' role ' + g); });
+  S.k2.forEach((g) => { assert.ok(AN_GROUPS[g], k + ' k2 ' + g); assert.ok(!S.key[g], k + ' ' + g + ' cả k1 lẫn k2'); });
+  assert.ok(Object.keys(S.key).length >= 5, k + ' key muscles');
+  // Cơ chủ lực phải chạm được trên hình.
+  Object.keys(S.key).forEach((g) => assert.ok(ANATOMY_MAP.some((r) => r[3] === g), k + ' ' + g + ' not on map'));
+  assert.ok(S.blocks.length >= 4, k + ' blocks');
+  S.blocks.forEach((b) => {
+    assert.ok(b.vi && b.en && b.why.vi && b.why.en && b.ex.length >= 3, k + ' block ' + b.vi);
+    b.ex.forEach(([n, d]) => { assert.ok(n && d, k + ' ex'); assert.ok(!/bên|giây|phút|nghỉ|lần|bước|hướng|nặng|hiệp|làm/.test(anDose(d) + ' ' + anExName(n)), 'EN chưa dịch: ' + n + ' ' + anDose(d)); });
+  });
+});
+assert.strictEqual(anSportLevel('boxing', 'serratus'), 1);
+assert.strictEqual(anSportLevel('running', 'soleus'), 1);
+assert.strictEqual(anSportLevel('running', 'tibialis'), 2);
+assert.strictEqual(anSportLevel('running', 'biceps'), 0);
+// Nối dây: công tắc chế độ, chọn môn, tô cơ, thẻ môn, vai trò cơ trong môn.
+['anSetMode(', 'anSetSport(', "' an-k' + lv", 'anSportCard()', 'an-sp-role', 'an-legend'].forEach((t) => assert.ok(html.includes(t), 'wiring ' + t));
+assert.ok(/\.an-m\.an-k1\{/.test(html) && /\.an-m\.an-k1\.on/.test(html), 'css k1 + selected');
+assert.ok(html.includes(".an-chip[data-g]').forEach"), 'chọn cơ không được tắt chip môn');
+console.log('anatomy ok');
