@@ -2818,6 +2818,7 @@ function briefTrainingText(T) {
     + ` · tổng tải ${d.loadN ? d.load : "—"} · ${d.hard} buổi nặng
 trung bình ${T.prevWeeks || 0} tuần trước đó: ${a.sessions} buổi/tuần · chạy ${a.runKm} km · ${a.min} phút · tải ${a.load}
 tuần này so với trung bình: ${T.ratio != null ? "×" + T.ratio + " (theo " + (T.ratioBasis === "load" ? "tải" : "phút") + ")" : "chưa tính được (cần ≥ 2 tuần dữ liệu trước đó)"}
+tuần lịch (T2 → CN): tuần này ${T.calWeeks.this.from}…${T.calWeeks.this.to}: ${T.calWeeks.this.sessions} buổi, chạy ${T.calWeeks.this.runKm} km, ${T.calWeeks.this.strengthDays} ngày tạ · tuần trước ${T.calWeeks.last.from}…${T.calWeeks.last.to}: ${T.calWeeks.last.sessions} buổi, chạy ${T.calWeeks.last.runKm} km, ${T.calWeeks.last.strengthDays} ngày tạ
 cách đây: buổi gần nhất ${T.daysSince.any ?? "—"} ngày · chạy ${T.daysSince.run ?? "—"} ngày · tạ ${T.daysSince.strength ?? "—"} ngày · buổi NẶNG ${T.daysSince.hard ?? "—"} ngày${T.lastHard ? ` (${T.lastHard.date} ${T.lastHard.cat}${T.lastHard.name ? " \"" + T.lastHard.name + "\"" : ""})` : ""}
 48 giờ qua: ${T.recent.length ? T.recent.map(line).join(" ; ") : "không có buổi Work list"}${T.recentApp.length ? " ; buổi tạ trong app: " + T.recentApp.map((x) => `${x.date} ${x.day || ""} ${x.done}/${x.total} bài — set nhiều nhất: ${x.top.join(", ") || "—"}`).join(" ; ") : ""}
 (NẶNG = Training Effect Garmin aerobic ≥ 3,5 hoặc anaerobic ≥ 2,5; buổi không có TE: tải ≥ 1,5 lần trung vị 28 ngày)

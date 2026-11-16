@@ -54,6 +54,24 @@ assert.strictEqual(srv.trainingSummary(ws.filter((w) => w.date >= '2026-11-10'),
 assert.notStrictEqual(srv.trainingSig(ws, sessions), srv.trainingSig(ws.slice(1), sessions));
 assert.strictEqual(srv.trainingSig(ws, sessions), srv.trainingSig(ws.slice(0, 3), sessions));
 
+// 3b. Tuần lịch T2 → CN (coach 2026-11-16, thứ Hai): 7 ngày trượt bỏ mất buổi tạ thứ Hai tuần trước, tuần lịch thì không.
+{ const real = srv.worklistWorkouts([
+    { date: '2026-11-09', garmin: { workouts: [{ at: '2026-11-09 14:47:35', sport: 'strength_training', sec: 3000 }] } },
+    { date: '2026-11-10', garmin: { workouts: [{ at: '2026-11-10 14:42:27', sport: 'treadmill_running', sec: 3540, distM: 9000 }] } },
+    { date: '2026-11-11', garmin: { workouts: [{ at: '2026-11-11 16:26:23', sport: 'running', sec: 2880, distM: 8000 }] } },
+    { date: '2026-11-13', garmin: { workouts: [{ at: '2026-11-13 17:16:46', sport: 'running', sec: 4140, distM: 10000 }] } },
+    { date: '2026-11-14', garmin: { workouts: [{ at: '2026-11-14 16:02:47', sport: 'strength_training', sec: 3420 }] } }]);
+  const t = srv.trainingSummary(real, [], '2026-11-16');
+  assert.strictEqual(t.d7.strengthDays, 1, '7 ngày trượt 10–16/11');
+  assert.strictEqual(t.calWeeks.last.from, '2026-11-09'); assert.strictEqual(t.calWeeks.last.to, '2026-11-15');
+  assert.strictEqual(t.calWeeks.last.strengthDays, 2); assert.strictEqual(t.calWeeks.last.byCat.run, 3);
+  assert.strictEqual(t.calWeeks.this.from, '2026-11-16'); assert.strictEqual(t.calWeeks.this.sessions, 0);
+  const b2 = ctx.S(ctx.W([{ date: '2026-11-09', garmin: { workouts: [{ at: '2026-11-09 14:47:35', sport: 'strength_training', sec: 3000 }] } }]), [], '2026-11-16');
+  assert.strictEqual(b2.calWeeks.last.strengthDays, 1, 'app copy có tuần lịch'); }
+// Khối Recovery viết sẵn 2 thứ tiếng, không để bộ tự dịch ghép mảnh ("ON tập tạ", "8 day").
+assert.ok(/box\.setAttribute\('data-i18n-skip', ''\)/.test(html) && /_rcL\('Ngày tập tạ', 'Strength days'\)/.test(html));
+assert.ok(/tuần lịch \(T2 → CN\)/.test(idx), 'tuần lịch vào bản tin');
+
 // 4. Máy chủ: bản tin có mục tập luyện Work list + luật hai trục; lời khuyên lưu chữ ký và báo stale.
 assert.ok(/8\. TẬP LUYỆN — Work list/.test(idx) && /briefTrainingText\(ctx\.training\)/.test(idx));
 assert.ok(/11\. Lời khuyên phải bám HAI trục/.test(idx) && /13\. nextSession không lặp lại/.test(idx));

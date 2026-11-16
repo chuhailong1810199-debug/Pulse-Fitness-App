@@ -11,6 +11,7 @@
  */
 
 const DAY = 864e5;
+const TR_DAY_MS = DAY;
 
 function trCat(sport) {
   const s = String(sport || "").toLowerCase();
@@ -95,6 +96,13 @@ function trainingSummary(workouts, sessions, today) {
   const byLoad = d7.loadN > 0 && prev.loadN > 0 && d7.loadN >= (d7.sessions - d7.strengthDays) / 2;
   const base = byLoad ? avg3.load : avg3.min, cur = byLoad ? d7.load : d7.min;
   const ratio = prevWeeks >= 2 && base > 0 ? Math.round((cur / base) * 100) / 100 : null;
+  // Tuần LỊCH (T2 → CN) — người tập nghĩ theo "tuần này / tuần trước", còn tải dùng 7 ngày trượt. Hôm nay thứ Hai thì
+  // 7 ngày trượt đã bỏ mất thứ Hai tuần trước; dòng tuần lịch giữ con số khớp cách người ta đếm.
+  const tp = String(today).split("-").map(Number), dow = new Date(Date.UTC(tp[0], tp[1] - 1, tp[2])).getUTCDay();
+  const off = (dow + 6) % 7;                       // số ngày từ thứ Hai tuần này tới hôm nay
+  const ymd = (back) => new Date(Date.UTC(tp[0], tp[1] - 1, tp[2]) - back * TR_DAY_MS).toISOString().slice(0, 10);
+  const weekOf = (lo, hi) => ({ ...win(lo, hi), from: ymd(hi - 1), to: ymd(lo) });
+  const calWeeks = { this: weekOf(0, off + 1), last: weekOf(off + 1, off + 8) };
   const since = (pred) => { const w = ws.find(pred); return w ? trDays(today, w.date) : null; };
   const lastHardW = ws.find(hard);
   const lastApp = ss.slice().sort((a, b) => String(b.date).localeCompare(String(a.date)))[0];
@@ -102,7 +110,7 @@ function trainingSummary(workouts, sessions, today) {
   const sAgo = since((w) => w.cat === "strength");
   return {
     today,
-    d7, avg3, ratio, ratioBasis: ratio == null ? null : byLoad ? "load" : "min",
+    d7, avg3, ratio, calWeeks, ratioBasis: ratio == null ? null : byLoad ? "load" : "min",
     prevWeeks,
     daysSince: {
       any: [since(() => true), appStrengthAgo].filter((v) => v != null).sort((a, b) => a - b)[0] ?? null,

@@ -179,6 +179,22 @@ hiện kg gợi ý làm placeholder. Lịch sử dùng `reps` của GIÁO ÁN l�
 
 ---
 
+## Recovery đọc Work list (2026-11-16)
+Lời khuyên Recovery (`recoveryBrief` + `generateBriefIfMissing`) bám HAI trục: hồi phục (Polar / Garmin: Recharge,
+HRV, Body Battery, Stress, Training Readiness) và TẬP LUYỆN đọc từ đúng nguồn của tab Work list —
+`activity/{ngày}.garmin|strava.workouts` 28 ngày (bỏ Strava trùng Garmin ±2'; hồ sơ chỉ Polar → `workouts` gốc) + buổi
+tạ ghi trong app (`workoutHistory`, kèm `volumeByMuscle`). `functions/training-context.js` (`worklistWorkouts`,
+`trainingSummary`, `trainingSig`) → `briefInputs()` → mục 8 của bản tin + luật 11–13 (why nêu số của CẢ hai trục,
+loadRead đọc Work list, không lặp kiểu tải nặng trong 48h). Buổi NẶNG = TE Garmin aerobic ≥ 3,5 / anaerobic ≥ 2,5,
+không có TE thì tải ≥ 1,5 × trung vị 28 ngày. Tải tuần so với TB các tuần TRƯỚC có dữ liệu (tối đa 3, cần ≥ 2 mới so).
+Ô số = 7 ngày TRƯỢT (cho tải); thêm `calWeeks` = tuần LỊCH T2 → CN ("Tuần này / Tuần trước") vì coach đếm theo tuần —
+thứ Hai thì 7 ngày trượt đã bỏ mất thứ Hai tuần trước. Lời khuyên lưu `brief.sig` (buổi mới nhất lúc phân tích): có
+buổi mới → mở tab trả `stale` (dải vàng + "Cập nhật lời khuyên"), sau đồng bộ ('auto') thì tự sinh lại.
+Tab Recovery: khối "Tập luyện · 7 ngày qua" (`_rcMountTraining`) dưới ba vòng — BẢN SAO của training-context trong
+index.html (`tests/training-context.test.js` bắt hai bản ra cùng số). Khối viết sẵn 2 thứ tiếng (`_rcL`) và mang
+`data-i18n-skip`: để bộ tự dịch thì ra chữ lai "ON tập tạ", "8 day".
+Chưa làm: buổi CHỈ có trong Polar (vd boxing) khi doc đã có Garmin bị bỏ — tab Work list cũng không hiện chúng.
+
 ## Nutrition tab + Gemini
 
 Own top-level tab (`#nutrition-page`, between Progress and Log). Daily macro bars, meal log,
