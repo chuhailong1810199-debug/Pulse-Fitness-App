@@ -6298,7 +6298,13 @@ let _kgSug = {};                      // exerciseKey → gợi ý đang hiện (
 let _kgAge = { cid: null, minor: null };
 function kgPct(r) { return 97.5 - 3.5 * (r - 1) + 0.05 * (r - 1) * (r - 1); }
 function kgWeekKey(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x.getTime(); }
-function kgStep(name) { return /dumbbell|\bdb\b|kettlebell|\bkb\b|tạ đơn|tạ ấm/i.test(String(name || '')) ? 1 : 2.5; }
+// Tên ghi CẢ hai dụng cụ ("Barbell Bench Press (hoặc Dumbbell)") → theo dụng cụ đứng TRƯỚC (cái giáo án chọn).
+function kgStep(name) {
+  const n = String(name || '').toLowerCase();
+  const at = (re) => { const m = n.match(re); return m ? m.index : Infinity; };
+  const small = at(/dumbbell|\bdb\b|kettlebell|\bkb\b|tạ đơn|tạ ấm/), bar = at(/barbell|\bbb\b|thanh đòn|đòn tạ|smith|trap bar/);
+  return small < bar ? 1 : 2.5;
+}
 /** hist: [{date, kg, reps}] mới → cũ. Trả {kg, reps, mode: up|light|hold|same, last} hoặc null. */
 function kgSuggestCore(hist, setsReps, name, now) {
   const rx = parsePrescription(setsReps);

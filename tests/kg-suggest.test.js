@@ -49,6 +49,10 @@ assert.strictEqual(s.kg, 102.5);
 assert.strictEqual(core([h(7, 40)], '3 x 5', 'Overhead Press', NOW).kg, 42.5);
 assert.strictEqual(core([h(7, 20, 10)], '3 x 10', 'Dumbbell Row', NOW).kg, 21);
 
+// 8b. Tên ghi cả hai dụng cụ → theo cái đứng trước: 55 × 0,95 = 52,25 → 52,5 (thanh đòn), không phải 52.
+assert.strictEqual(core([h(30, 55, 8)], '3 x 8', 'Barbell Bench Press (hoặc Dumbbell)', NOW).kg, 52.5);
+assert.strictEqual(core([h(30, 20, 8)], '3 x 8', 'Dumbbell Press (hoặc Barbell)', NOW).kg, 19);
+
 // 9. Không gợi ý: chưa có lịch sử, rep > 12, chuỗi không phải rep (giây / mét).
 assert.strictEqual(core([], '4 x 5', 'Squat', NOW), null);
 assert.strictEqual(core([h(7, 20, 15)], '3 x 15', 'Leg Press', NOW), null);
