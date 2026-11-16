@@ -89,7 +89,7 @@ assert.ok(html.includes("js.src = '/lib/anatomy-map.js'"));
 assert.ok(/f\.style\.visibility = face === 'f'/.test(html));
 
 // Thể thao (2026-11-16): Boxing + Chạy bộ — cơ tham chiếu phải có thật, nội dung đủ 2 thứ tiếng, liều dịch được.
-assert.deepStrictEqual(JSON.stringify(AN_SPORT_ORDER), JSON.stringify(['boxing', 'running']));
+assert.deepStrictEqual(JSON.stringify(AN_SPORT_ORDER), JSON.stringify(['boxing', 'running', 'basketball']));
 AN_SPORT_ORDER.forEach((k) => {
   const S = AN_SPORTS[k];
   assert.ok(S.vi && S.en && S.sum.vi && S.sum.en, k + ' names');
@@ -109,6 +109,8 @@ assert.strictEqual(anSportLevel('boxing', 'serratus'), 1);
 assert.strictEqual(anSportLevel('running', 'soleus'), 1);
 assert.strictEqual(anSportLevel('running', 'tibialis'), 2);
 assert.strictEqual(anSportLevel('running', 'biceps'), 0);
+assert.strictEqual(anSportLevel('basketball', 'glute-med'), 1);
+assert.strictEqual(anSportLevel('basketball', 'tibialis'), 2);
 // Nối dây: công tắc chế độ, chọn môn, tô cơ, thẻ môn, vai trò cơ trong môn.
 ['anSetMode(', 'anSetSport(', "' an-k' + lv", 'anSportCard()', 'an-sp-role', 'an-legend'].forEach((t) => assert.ok(html.includes(t), 'wiring ' + t));
 assert.ok(/\.an-m\.an-k1\{/.test(html) && /\.an-m\.an-k1\.on/.test(html), 'css k1 + selected');

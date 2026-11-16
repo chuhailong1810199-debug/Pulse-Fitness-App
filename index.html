@@ -13196,8 +13196,43 @@ const AN_SPORTS = {
     plan: { vi: ['Giai đoạn nền: 2 buổi/tuần. Gần giải: 1 buổi/tuần để giữ, ngưng 10–14 ngày trước race.', 'Tập tạ CÙNG ngày với buổi chạy nặng (cách ≥ 6 giờ) để ngày nhẹ được nhẹ thật.', 'Không tập chân nặng hôm trước long run hoặc buổi interval.', '5–10K cần nhiều plyo / tốc độ hơn; half / marathon nặng về bắp chân và độ bền cơ; trail thêm step-down, xuống dốc, cổ chân.'],
       en: ['Base phase: 2 sessions a week. Near a race: 1 a week to maintain, stop 10–14 days out.', 'Lift on the SAME day as hard runs (≥ 6 h apart) so easy days stay easy.', 'No heavy legs the day before a long run or interval session.', '5–10K wants more plyo / speed; half / marathon leans on calves and muscular endurance; trail adds step-downs, downhill and ankle work.'] },
   },
+  basketball: {
+    vi: 'Bóng rổ', en: 'Basketball',
+    sum: { vi: 'Bóng rổ là chuỗi nỗ lực ngắn lặp lại: bật nhảy, tiếp đất, tăng tốc, phanh gấp, đổi hướng — hàng trăm lần mỗi trận. Bổ trợ nhắm vào sức bật, khả năng TIẾP ĐẤT và PHANH an toàn (nơi phần lớn chấn thương gối – cổ chân xảy ra), và thể lực chạy – nghỉ ngắt quãng.',
+      en: 'Basketball is short efforts on repeat: jump, land, accelerate, brake, change direction — hundreds of times a game. S&C targets jump power, safe LANDING and BRAKING (where most knee and ankle injuries happen), and stop-start conditioning.' },
+    demands: { vi: ['Sức bật: nhảy hai chân (rebound, block) và một chân (lên rổ)', 'Giảm tốc & đổi hướng: phanh từ chạy nhanh, trượt ngang phòng thủ', 'Tiếp đất vững: gối thẳng hàng mũi chân, không đổ vào trong', 'Thể lực ngắt quãng: bứt tốc vài giây, nghỉ ngắn, lặp lại cả trận', 'Thân vững khi va chạm, giữ thăng bằng để ném'],
+      en: ['Jump power: two-foot (rebounds, blocks) and one-foot (layups)', 'Deceleration & change of direction: braking from a sprint, defensive slides', 'Solid landings: knee tracks over the toes, no caving in', 'Intermittent conditioning: seconds-long bursts, short rests, all game', 'A stable trunk through contact, balance to shoot'] },
+    key: {
+      quads: { vi: 'Phanh khi tiếp đất và đổi hướng, bật nhảy — chịu tải nhiều nhất ở gối.', en: 'Brakes landings and cuts, drives the jump — takes the most load at the knee.' },
+      'glute-max': { vi: 'Duỗi hông khi bật nhảy và tăng tốc; giữ gối không đổ vào trong khi tiếp đất.', en: 'Extends the hip to jump and accelerate; keeps the knee from caving on landing.' },
+      'glute-med': { vi: 'Giữ khung chậu và gối thẳng hàng khi đứng một chân, đổi hướng — liên quan trực tiếp tới rách dây chằng chéo trước (ACL).', en: 'Holds pelvis and knee aligned on one leg and when cutting — directly linked to ACL tears.' },
+      hams: { vi: 'Kéo cẳng chân ra sau, "đỡ" dây chằng chéo trước khi tiếp đất; hay căng khi bứt tốc.', en: 'Pulls the shin back and protects the ACL on landing; commonly strained in sprints.' },
+      gastroc: { vi: 'Bật nhảy từ mũi chân, bước chân nhanh.', en: 'Jumps off the forefoot, quick feet.' },
+      soleus: { vi: 'Hấp thụ lực tiếp đất, giữ cổ chân vững — cổ chân yếu dễ lật.', en: 'Absorbs landing forces and steadies the ankle — weak ankles roll.' },
+      adductors: { vi: 'Trượt ngang và đổi hướng; hay căng háng khi đẩy sang bên.', en: 'Lateral slides and cuts; groin strains on hard side pushes.' },
+    },
+    k2: ['tibialis', 'hip-flex', 'abs', 'obliques', 'erectors', 'lats', 'delt-f', 'rotator', 'triceps', 'forearm-flex', 'chest-upper'],
+    risk: { vi: ['Lật cổ chân — chấn thương hay gặp nhất', 'Đau gân bánh chè (jumper\'s knee) do nhảy lặp lại', 'Rách dây chằng chéo trước (ACL) khi tiếp đất / đổi hướng sai — nữ có nguy cơ cao hơn', 'Kẹt / bong gân ngón tay', 'Căng háng, căng đùi sau; đau lưng dưới'],
+      en: ['Ankle sprains — the most common injury', 'Patellar tendon pain (jumper\'s knee) from repeated jumping', 'ACL tears on poor landings / cuts — higher risk in women', 'Jammed / sprained fingers', 'Groin and hamstring strains; low back pain'] },
+    blocks: [
+      { vi: 'Sức mạnh nền', en: 'Base strength', why: { vi: 'Chân khoẻ thì nhảy cao hơn và tiếp đất, phanh an toàn hơn. Tạ nặng, ít rep, không tới thất bại.', en: 'Stronger legs jump higher and land and brake more safely. Heavy, low reps, not to failure.' },
+        ex: [['Trap Bar Deadlift', '3–4×3–5'], ['Front Squat', '3–4×3–5'], ['Bulgarian Split Squat', '3×6/bên'], ['Nordic Hamstring Curl', '3×4–6'], ['Pull-Up', '3×5–8']] },
+      { vi: 'Bật nhảy & tiếp đất', en: 'Jumping & landing', why: { vi: 'HỌC TIẾP ĐẤT trước khi nhảy cao: đáp êm, gối thẳng hàng mũi chân, giữ 2 giây. Ít lần, chất lượng; đầu buổi khi còn tươi. Mùa giải đã nhảy nhiều khi tập đội — giảm phần này.', en: 'LEARN TO LAND before jumping high: soft, knee over toes, hold 2 s. Few reps, high quality, first while fresh. In season, practice already has lots of jumps — cut this back.' },
+        ex: [['Drop Landing', '3×5'], ['Countermovement Jump', '3×5'], ['Box Jump', '3×4'], ['Single-Leg Hop and Stick', '3×4/bên'], ['Lateral Bound', '3×5/bên']] },
+      { vi: 'Giảm tốc & đổi hướng', en: 'Deceleration & change of direction', why: { vi: 'Phần lớn chấn thương gối xảy ra lúc PHANH và xoay người, không phải lúc chạy. Tập dừng gấp có kiểm soát: hạ thấp người, bước ngắn dần.', en: 'Most knee injuries happen when BRAKING and turning, not while running. Practise controlled hard stops: get low, shorten the steps.' },
+        ex: [['Sprint rồi dừng gấp', '6×10–15 m'], ['5-10-5 Pro Agility', '4–6×'], ['Lateral Lunge', '3×6/bên'], ['Copenhagen Plank', '2×20 giây/bên']] },
+      { vi: 'Cổ chân & gối — phòng chấn thương', en: 'Ankle & knee — injury prevention', why: { vi: 'Thăng bằng một chân + bắp chân khoẻ giảm rõ số lần lật cổ chân; giữ gân bánh chè chịu tải tốt. Nhẹ, làm đều mỗi buổi.', en: 'Single-leg balance plus strong calves clearly cut ankle sprains; loaded tendon work keeps the patellar tendon resilient. Light, every session.' },
+        ex: [['Đứng một chân trên đệm', '3×30 giây/bên'], ['Seated Calf Raise', '3×12–15'], ['Spanish Squat', '3×30–45 giây'], ['Single-Leg Romanian Deadlift', '3×8/bên'], ['Tibialis Raise', '2×15']] },
+      { vi: 'Core & thân trên', en: 'Core & upper body', why: { vi: 'Thân vững khi va chạm dưới rổ; vai khoẻ cân bằng cho ném và chuyền.', en: 'A stable trunk for contact under the rim; balanced shoulders for shooting and passing.' },
+        ex: [['Pallof Press', '3×10/bên'], ['Dead Bug', '3×8/bên'], ['Side Plank', '3×30 giây/bên'], ['Push-Up', '3×8–12'], ['Face Pull', '3×15']] },
+      { vi: 'Thể lực theo trận', en: 'Game conditioning', why: { vi: 'Trận đấu là bứt tốc ngắn – nghỉ ngắn. Tập đúng nhịp đó thay cho chạy dài đều.', en: 'Games are short bursts, short rests. Train that rhythm instead of long steady runs.' },
+        ex: [['Chạy con thoi hết sân', '8–10 × 15 giây, nghỉ 30–45 giây'], ['Sprint ngắn', '8–10 × 10–15 giây, nghỉ 45 giây'], ['Trượt ngang phòng thủ', '6 × 15 giây, nghỉ 30 giây']] },
+    ],
+    plan: { vi: ['Ngoài mùa giải: 3 buổi S&C/tuần, xây sức mạnh và sức bật. Trong mùa: 1–2 buổi ngắn, giữ tạ nặng nhưng bớt set, gần như bỏ plyo thêm.', 'Trong buổi: tiếp đất / bật nhảy → sức mạnh → phòng chấn thương. Thể lực cuối buổi hoặc ngày riêng.', 'Không tập chân nặng trong 48 giờ trước trận.'],
+      en: ['Off-season: 3 S&C sessions a week to build strength and jump. In season: 1–2 short sessions, keep loads heavy but cut sets, little extra plyo.', 'Within a session: landing / jumps → strength → prehab. Conditioning last or on its own day.', 'No heavy legs within 48 h of a game.'] },
+  },
 };
-const AN_SPORT_ORDER = ['boxing', 'running'];
+const AN_SPORT_ORDER = ['boxing', 'running', 'basketball'];
 function anDose(s) {
   if (anLang() === 'vi') return s;
   return String(s).replace(/\/bên/g, '/side').replace(/ bước/g, ' steps').replace(/ giây/g, ' s').replace(/ phút/g, ' min')
@@ -13206,7 +13241,9 @@ function anDose(s) {
 function anExName(s) {
   if (anLang() === 'vi') return s;
   const m = { 'Interval bao cát / Assault Bike': 'Heavy bag / Assault Bike intervals', 'Sprint ngắn': 'Short sprints', 'Nhảy dây': 'Jump rope',
-    'Chạy nhẹ (nói chuyện được)': 'Easy run (conversational)', 'Neck Isometrics (4 hướng)': 'Neck isometrics (4 directions)' };
+    'Chạy nhẹ (nói chuyện được)': 'Easy run (conversational)', 'Neck Isometrics (4 hướng)': 'Neck isometrics (4 directions)',
+    'Sprint rồi dừng gấp': 'Sprint to hard stop', 'Đứng một chân trên đệm': 'Single-leg balance on a pad', 'Chạy con thoi hết sân': 'Full-court shuttle runs',
+    'Trượt ngang phòng thủ': 'Defensive slides' };
   return m[s] || s;
 }
 /** Bài trong thư viện có tên chứa đủ các từ của bài gợi ý (bỏ dụng cụ / từ nối) → hiện nhãn "Thư viện". */
