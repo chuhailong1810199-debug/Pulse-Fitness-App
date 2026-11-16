@@ -16,6 +16,7 @@ const { buildLibIndex, resolveProgram, PHASE_TAGS, normalizePhaseTag, squash, su
 const { getFirestore } = require("firebase-admin/firestore");
 const { fold } = require("./log-reminder.js");
 const PC = require("./program-check.js");
+const SPORT = require("./sports.js");
 
 /**
  * Schema ĐẦY ĐỦ của một giáo án cho tool đề xuất. Trước để `{ type: "object" }` trống → Gemini tự đoán: gửi pha dưới
@@ -76,7 +77,7 @@ const CHECK_PARAMS = {
     description: "nhóm cơ coach CHỦ Ý dồn volume vượt khung trình độ → lý do. VD {\"Glutes\": \"coach muốn ưu tiên mông\"}. Hiện trên thẻ duyệt." },
   coverageExceptions: { type: "object",
     description: "mẫu chuyển động BỎ vì chấn thương/hạn chế → lý do. Khoá: " + PC.PATTERN_KEYS.join(" | ")
-      + ". VD {\"vpush\": \"vai phải đang hồi phục\"}." },
+      + ". VD {\"vpush\": \"vai phải đang hồi phục\"}. Khách gắn môn thể thao: khoá \"sport:<id khối>\" để bỏ một khối bắt buộc của môn (kèm lý do)." },
 };
 
 /** Trần số vòng gọi tool cho một câu hỏi. */
@@ -214,6 +215,22 @@ const TOOLS = [
       type: "object",
       properties: { clientId: { type: "string", description: "id của khách, ví dụ 'kem'" } },
       required: ["clientId"],
+    },
+  },
+  {
+    type: "function",
+    name: "get_sport_guide",
+    description:
+      "Khung bổ trợ S&C của một MÔN THỂ THAO (" + SPORT.SPORT_ORDER.join(", ") + "): cơ chủ lực, yêu cầu thể chất, chấn thương hay gặp, " +
+      "các khối tập (khối nào BẮT BUỘC, bài ĐÚNG tên thư viện + liều), cách xếp theo giai đoạn mùa. Khách có `sport` trong " +
+      "get_client thì BẮT BUỘC gọi với clientId của khách trước khi soạn (server từ chối propose_program nếu chưa đọc).",
+    parameters: {
+      type: "object",
+      properties: {
+        clientId: { type: "string", description: "khách đã gắn môn — lấy môn + giai đoạn từ hồ sơ" },
+        sport: { type: "string", description: "id môn khi hỏi chung, không theo khách: " + SPORT.SPORT_ORDER.join(" | ") },
+        phase: { type: "string", description: "off | pre | in (ngoài mùa / trước giải / trong mùa) — bỏ trống thì theo hồ sơ khách hoặc off" },
+      },
     },
   },
   {
@@ -645,6 +662,9 @@ async function execTool(db, name, a, role, ctx) {
       notes: v.notes || null,
       lastWorkoutAt: iso(v.lastWorkoutAt),
       program: progSummary(v.program),
+      sport: SPORT.clientSport(v) ? { ...SPORT.clientSport(v), name: SPORT.SPORTS[SPORT.clientSport(v).id].vi,
+        phaseName: SPORT.SPORT_PHASES[SPORT.clientSport(v).phase].vi,
+        note: "Khách tập bổ trợ cho môn này — gọi get_sport_guide(clientId) và soạn theo khung đó." } : null,
       group: v.isGroup === true ? {
         isGroup: true, format: v.groupFormat || null, size: num(v.groupSize),
         durationMin: num(v.durationMin), equipment: v.equipment || null,
@@ -662,6 +682,22 @@ async function execTool(db, name, a, role, ctx) {
       baseline: base.exists ? base.data() : null,
       latestCheckpoint: cps.empty ? null : cps.docs[0].data(),
     };
+  }
+
+  if (name === "get_sport_guide") {
+    let id = a.sport ? String(a.sport).toLowerCase() : null, phase = a.phase || null;
+    if (a.clientId) {
+      const c = await db.collection("clients").doc(a.clientId).get();
+      const cs = c.exists ? SPORT.clientSport(c.data() || {}) : null;
+      if (cs && !id) id = cs.id;
+      if (cs && cs.id === id && !phase) phase = cs.phase;
+      if (!id) return { error: `Khách '${a.clientId}' chưa gắn môn thể thao (coach gắn ở tab Anatomy → Thể thao). Hỏi chung thì truyền sport.` };
+    }
+    if (!id) return { error: "Thiếu sport. Có: " + SPORT.SPORT_ORDER.join(", ") };
+    return { ...SPORT.sportGuide(id, phase),
+      rules: "Mỗi khối required phải có ≥ 1 bài trong tuần (server chặn). Dùng ĐÚNG tên bài trong exercises (đã khớp thư viện); "
+        + "bài outsideLibrary chỉ đặt ở pha circuit. Khối plyometric: khách < 18 tuổi theo trần tiếp đất YOUTH. Liều là khung — chỉnh theo "
+        + "trình độ, chấn thương, mức tạ thật của khách. Giai đoạn mùa quyết định số buổi và khối lượng (seasonNow)." };
   }
 
   if (name === "show_program") {
@@ -819,6 +855,7 @@ async function execTool(db, name, a, role, ctx) {
     if (ctx && ctx.read) {
       // Lớp nhóm không có "mức tạ của khách" — mỗi học viên một mức — nên chỉ đòi hồ sơ lớp.
       const need = isGroup ? ["get_client"] : ["get_client", "get_exercise_loads"];
+      if (!isGroup && SPORT.clientSport(c0.data() || {})) need.push("get_sport_guide");
       const miss = need.filter((t) => !ctx.read[t + ":" + a.clientId]);
       if (miss.length) {
         return { rejected: true, errors: [`Chưa đọc ${miss.join(" và ")} của khách '${a.clientId}' trong lượt này. `
@@ -866,7 +903,7 @@ async function execTool(db, name, a, role, ctx) {
     // Kiểm theo khung (volume, mẫu chuyển động, thời lượng) trên CẢ TUẦN sau khi ghép.
     const cd = c.data() || {};
     const minor = cd.isGroup === true ? false : await isMinorClient(db, a.clientId, cd);
-    const opts = { level: cd.level, isGroup: cd.isGroup === true, requireBlocks: cd.isGroup === true, groupFormat: cd.groupFormat || null, minor, plyoLevel: a.plyoLevel,
+    const opts = { sport: cd.isGroup === true ? null : SPORT.clientSport(cd), level: cd.level, isGroup: cd.isGroup === true, requireBlocks: cd.isGroup === true, groupFormat: cd.groupFormat || null, minor, plyoLevel: a.plyoLevel,
       minutes: Number(a.sessionMinutes) || Number(cd.durationMin) || null,
       volumeExceptions: a.volumeExceptions, coverageExceptions: a.coverageExceptions };
     const chk = PC.checkProgram(program, opts);
@@ -899,6 +936,7 @@ async function execTool(db, name, a, role, ctx) {
         minutes: chk.est,
         runSplit: chk.runSplit || null,
         youth: chk.youth || null,
+        sport: chk.sport || null,
         waived: chk.waived,
         warnings: [...chk.warnings, ...inherited.map((m) => "Có sẵn từ giáo án cũ: " + m)].slice(0, 12),
         // Lớp nhóm soạn 1 buổi mỗi lệnh: thẻ chỉ vẽ ĐÚNG buổi đổi. Vẽ cả giáo án đã ghép thì buổi cũ giữ nguyên
@@ -1393,6 +1431,17 @@ Mục tiêu: kỹ năng vận động, sức mạnh nền, sức bật an toàn,
 // ── Lớp nhóm ────────────────────────────────────────────────────────────
 // Một hồ sơ clients có isGroup:true = MỘT LỚP. Giáo án dùng chung cho mọi
 // học viên có mặt, trình độ trộn lẫn, dụng cụ có hạn — khác hẳn soạn 1-1.
+// Khung chi tiết từng môn ở functions/sports.js (tool get_sport_guide); đây chỉ là luật dùng khung.
+const SPORT_METHOD = `BỔ TRỢ THEO MÔN THỂ THAO (hồ sơ khách có sport — coach gắn ở tab Anatomy → Thể thao; môn có khung: ${SPORT.SPORT_ORDER.join(", ")})
+- Khách có sport: gọi get_sport_guide(clientId) CÙNG lượt với get_client / get_exercise_loads / get_program. Không đoán khung môn từ trí nhớ.
+- Giáo án = khung studio (METHOD, CORE, youth) + khung môn: mỗi khối required có ≥ 1 bài trong tuần; ưu tiên bài trong khung môn,
+  đúng tên khung đưa (đã khớp thư viện). Khối công suất / plyo / tiếp đất đặt ĐẦU buổi sau khởi động, khi còn tươi.
+- Số buổi và khối lượng theo giai đoạn (seasonNow): ngoài mùa xây nền, trước giải chuyển sang công suất + thể lực môn, trong mùa
+  GIỮ (ít set, tạ vẫn nặng). Lịch tập môn của khách (sparring, trận, long run) quyết định ngày tập chân nặng — hỏi coach nếu chưa rõ.
+- focus mỗi buổi nói buổi này phục vụ gì cho môn; why của bài nhắc vai trò với môn (VD "Copenhagen — háng chịu đổi hướng").
+- Bỏ khối bắt buộc (chấn thương, coach muốn) → coverageExceptions["sport:<id khối>"] = lý do.
+- Khách KHÔNG gắn môn mà mục tiêu nhắc môn thể thao: hỏi coach có muốn gắn môn không; vẫn soạn được, gọi get_sport_guide(sport) để tham khảo.`;
+
 const GROUP_METHOD = `LỚP NHÓM (hồ sơ có isGroup, hoặc coach nói "lớp", "group class")
 - MỖI LỆNH ĐÚNG 1 BUỔI. Coach chỉnh lớp liên tục: chỉ soạn buổi coach yêu cầu (một khoá SessionX), KHÔNG soạn cả
   tuần, KHÔNG đụng buổi khác của lớp (server chặn đề xuất lớp có > 1 buổi). Coach không nói buổi nào → buổi mới
@@ -1560,6 +1609,8 @@ ${PLAYBOOK}
 ${EDIT_METHOD}
 
 ${YOUTH_METHOD}
+
+${SPORT_METHOD}
 
 ${GROUP_METHOD}
 
@@ -1910,5 +1961,5 @@ function buildMorningPush({ bookings, rec }) {
   return { title, body: lines.join("\n") };
 }
 
-module.exports = { groupOneSession, blockFields, PHASE_FORMATS, CLIENT_TOOLS, CLIENT_TOOL_NAMES, CLIENT_SYSTEM, runClientTool, TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, METHOD, GROUP_METHOD, EXPLAIN_METHOD, FORMAT_RULES, compactProgram, checkRationale, GROUP_FORMATS, groupName, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, THINK_DESIGN, designIntent, runTool, runAssistant, progSummary, shapeReply,
+module.exports = { SPORT_METHOD, groupOneSession, blockFields, PHASE_FORMATS, CLIENT_TOOLS, CLIENT_TOOL_NAMES, CLIENT_SYSTEM, runClientTool, TOOLS, buildMorningPush, REC_LABEL, emailKey, SYSTEM, METHOD, GROUP_METHOD, EXPLAIN_METHOD, FORMAT_RULES, compactProgram, checkRationale, GROUP_FORMATS, groupName, MAX_STEPS, THINK_DISPATCH, THINK_COMPOSE, THINK_DESIGN, designIntent, runTool, runAssistant, progSummary, shapeReply,
   validateProgram, validateNewClient, makeClientId, LEVELS, CHECK_PARAMS, PROGRAM_SCHEMA, liftProgramParams, PLAYBOOK, EDIT_METHOD, YOUTH_METHOD, CORE_METHOD, isMinorClient, namedClientId, fillMuscles, programDiff, MAX_STEPS_DESIGN, TIME_BUDGET_MS, HARD_STOP_MS, mergeProgram, exerciseHit, targetMismatch, nameInText };

@@ -8,6 +8,7 @@
  * bỏ pha warmup + circuit, cơ chính 1 set, cơ phụ 0,5, cơ ổn định 0.
  */
 const { normalizePhaseTag } = require("./program-lib.js");
+const { sportIssues } = require("./sports.js");
 
 const MUSCLE_WEIGHTS = { P: 1, S: 0.5, T: 0, Q: 0 };
 /** Khoảng set làm việc / nhóm cơ / tuần (METHOD mục 1). */
@@ -605,11 +606,14 @@ function checkProgram(program, o = {}) {
   const d = durationIssues(program, o.minutes);
   const st = structureIssues(program, o.minutes, Number(o.minutes) > 0);
   const y = o.minor ? youthIssues(program, o.plyoLevel) : null;
+  // Khách gắn môn thể thao (clients.sport): tuần phải có khối bổ trợ bắt buộc của môn (functions/sports.js).
+  const sp = o.sport ? sportIssues(program, o.sport, o.coverageExceptions) : null;
   return {
-    errors: [...v.errors, ...c.errors, ...d.errors, ...st.errors, ...(y ? y.errors : [])],
+    errors: [...v.errors, ...c.errors, ...d.errors, ...st.errors, ...(y ? y.errors : []), ...(sp ? sp.errors : [])],
     warnings: [...v.warnings, ...d.warnings, ...st.warnings, ...pushPullWarning(program), ...(y ? y.warnings : [])],
     youth: y ? { level: y.level, contacts: y.contacts } : null,
-    volume: v.totals, est: d.est, waived: [...v.waived, ...c.waived],
+    volume: v.totals, est: d.est, waived: [...v.waived, ...c.waived, ...(sp ? sp.waived : [])],
+    sport: sp ? { id: o.sport.id, phase: o.sport.phase, hits: sp.hits } : null,
   };
 }
 

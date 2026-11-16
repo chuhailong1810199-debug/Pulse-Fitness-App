@@ -419,10 +419,18 @@ Key routing rules:
   `AN_GROUPS` (29 nhóm, thêm chóp xoay & cơ tròn, cơ cánh tay; vi + en: vị trí, chức năng, mẹo tập), bài gợi ý
   = `anExercises()` từ thư viện (`cdMapMuscle`, P > S, từ khoá, tối đa 2 bài/kiểu động tác; ẩn bài riêng của coach khác);
   thư viện thiếu thì hiện `alt` "gợi ý chung". `tests/anatomy.test.js`.
-  **Chế độ Thể thao** (2026-11-16): công tắc "Cơ bắp | Thể thao" đầu tab. `AN_SPORTS` (boxing, running, basketball — thêm môn = thêm
-  mục + `AN_SPORT_ORDER`): `key` (cơ chủ lực + vai trò, tô đậm `an-k1`), `k2` (hỗ trợ, tô nhạt), demands / risk / plan,
+  **Chế độ Thể thao** (2026-11-16): công tắc "Cơ bắp | Thể thao" đầu tab. `AN_SPORTS` (= SPORTS của functions/sports.js — xem mục Bổ trợ theo môn): `key` (cơ chủ lực + vai trò, tô đậm `an-k1`), `k2` (hỗ trợ, tô nhạt), demands / risk / plan,
   `blocks` (bài + liều; liều viết tiếng Việt, `anDose()` dịch). Không chọn cơ → thẻ môn (`anSportCard`, nhãn "Thư viện"
   khi bài có trong thư viện); chọn cơ → thẻ cơ + "Trong <môn>". Chỉ đọc, khung chung — chưa nối trợ lý soạn buổi.
+- **Bổ trợ theo môn thể thao** (2026-11-16): NGUỒN DUY NHẤT `functions/sports.js` (SPORTS: boxing, running, basketball —
+  cơ chủ lực, khối tập có `id` / tag pha / `need` bắt buộc / `plyo`, bài `[tên hiển thị, liều, tên ĐÚNG thư viện]`, `season`
+  off/pre/in). index.html chép phần dữ liệu (khối `// ── SPORTS — TẠO TỪ`) bằng `node scripts/sports/sync.js` — `tests/sports.test.js`
+  bắt lệch. Khách gắn môn = `clients.sport {id, phase}`, coach gắn ở Anatomy → Thể thao (thẻ môn: "Gắn … cho khách này", chọn
+  giai đoạn, "Nhờ Pulse soạn bổ trợ"; chỉ coach phụ trách, khách 1-1). Trợ lý: `get_client` trả `sport`, tool `get_sport_guide`,
+  `SPORT_METHOD`; `propose_program` đòi đọc `get_sport_guide` khi khách có môn; `sportIssues` (program-check) chặn tuần thiếu khối
+  `need` — miễn bằng `coverageExceptions["sport:<id khối>"]`. Bài môn chưa có trong thư viện → `NEW_LIBRARY`, ghi bằng
+  `node scripts/sports/add-library.js --write` (chỉ tạo doc mới, doc id = slug, mang `sports: [...]`). Thêm môn = thêm vào
+  SPORTS + SPORT_ORDER + bài thiếu vào NEW_LIBRARY → sync → add-library.
 - **Chat theo khách**: tab tên khách trong khung trợ lý (hoặc nút "Hỏi AI về khách này" trên hồ sơ). Lưu ở
   `clients/{id}/aiChat` — chỉ hàm nền `coachAssistant` ghi (`thread: true`), coach của khách + admin đọc, KHÁCH
   KHÔNG đọc. Form "Hôm nay khách không khoẻ" → chỉnh buổi cho hôm nay theo `EXPLAIN_METHOD`, KHÔNG đổi giáo án gốc.

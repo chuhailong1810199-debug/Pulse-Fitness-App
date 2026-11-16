@@ -13129,110 +13129,593 @@ const AN_GROUPS = {
  * theo khách. Khách < 18: plyo + tạ theo luật youth (YOUTH_METHOD), không theo liều ở đây.
  * key: vai trò của từng cơ k1; k2: chỉ liệt kê. ex: [tên bài, liều] — liều viết tiếng Việt, anDose() đổi sang tiếng Anh.
  */
-const AN_SPORTS = {
+// ── SPORTS — TẠO TỪ functions/sports.js (node scripts/sports/sync.js) — đừng sửa tay
+const SPORTS = {
   boxing: {
-    vi: 'Boxing', en: 'Boxing',
-    sum: { vi: 'Cú đấm mạnh đi từ chân lên: đạp đất → xoay hông → xoắn thân → đẩy vai → nắm tay. Bổ trợ nhắm vào lực đó, sức bền theo hiệp, và đôi vai – cổ chịu được va chạm.',
-      en: 'A hard punch starts at the floor: drive the legs → turn the hips → twist the trunk → push through the shoulder → fist. S&C trains that chain, round-by-round endurance, and shoulders and a neck that tolerate impact.' },
-    demands: { vi: ['Công suất (sinh lực nhanh) theo chuỗi chân – hông – thân – tay', 'Lặp lại nỗ lực cường độ cao: hiệp 2–3 phút, nghỉ 1 phút — cần cả nền aerobic lẫn sức chịu yếm khí', 'Vai bền để giữ guard suốt hiệp', 'Bước chân nhanh, bắp chân – cổ chân khoẻ', 'Cổ khoẻ để chịu đòn vào đầu'],
-      en: ['Power (force produced fast) through the leg – hip – trunk – arm chain', 'Repeated high-intensity efforts: 2–3 min rounds, 1 min rest — needs both an aerobic base and anaerobic capacity', 'Shoulder endurance to keep the guard up all round', 'Quick footwork, strong calves and ankles', 'A strong neck to tolerate head impacts'] },
+    vi: 'Boxing',
+    en: 'Boxing',
+    sum: {
+      vi: 'Cú đấm mạnh đi từ chân lên: đạp đất → xoay hông → xoắn thân → đẩy vai → nắm tay. Bổ trợ nhắm vào lực đó, sức bền theo hiệp, và đôi vai – cổ chịu được va chạm.',
+      en: 'A hard punch starts at the floor: drive the legs → turn the hips → twist the trunk → push through the shoulder → fist. S&C trains that chain, round-by-round endurance, and shoulders and a neck that tolerate impact.',
+    },
+    demands: {
+      vi: [
+        'Công suất (sinh lực nhanh) theo chuỗi chân – hông – thân – tay',
+        'Lặp lại nỗ lực cường độ cao: hiệp 2–3 phút, nghỉ 1 phút — cần cả nền aerobic lẫn sức chịu yếm khí',
+        'Vai bền để giữ guard suốt hiệp',
+        'Bước chân nhanh, bắp chân – cổ chân khoẻ',
+        'Cổ khoẻ để chịu đòn vào đầu',
+      ],
+      en: [
+        'Power (force produced fast) through the leg – hip – trunk – arm chain',
+        'Repeated high-intensity efforts: 2–3 min rounds, 1 min rest — needs both an aerobic base and anaerobic capacity',
+        'Shoulder endurance to keep the guard up all round',
+        'Quick footwork, strong calves and ankles',
+        'A strong neck to tolerate head impacts',
+      ],
+    },
     key: {
-      'glute-max': { vi: 'Đạp đất và xoay hông — nguồn lực đầu tiên của cú đấm.', en: 'Drives off the floor and turns the hips — where the punch starts.' },
-      obliques: { vi: 'Truyền lực xoay từ hông lên vai; cũng là cơ "phanh" sau cú đấm.', en: 'Carries rotation from hips to shoulders, and brakes it after the punch.' },
-      serratus: { vi: 'Đẩy xương bả vai ra trước ở cuối cú đấm — "cơ của võ sĩ".', en: 'Drives the shoulder blade forward at the end of the punch — the "boxer\'s muscle".' },
-      'delt-f': { vi: 'Đưa tay lên và ra trước; giữ guard cả hiệp nên cần bền.', en: 'Lifts the arm forward; holds the guard all round, so it needs endurance.' },
-      triceps: { vi: 'Duỗi khuỷu ở cú thẳng (jab, cross) — nhanh, không cần to.', en: 'Straightens the elbow on jab and cross — speed matters more than size.' },
-      gastroc: { vi: 'Nhón gót, nảy bước chân, đẩy từ mũi chân khi ra đòn.', en: 'Keeps you on the balls of the feet, bounces the footwork, pushes off into punches.' },
-      neck: { vi: 'Giữ đầu vững khi trúng đòn; cổ khoẻ hơn = đầu ít bị giật hơn.', en: 'Braces the head on impact; a stronger neck means less head whip.' },
+      'glute-max': {
+        vi: 'Đạp đất và xoay hông — nguồn lực đầu tiên của cú đấm.',
+        en: 'Drives off the floor and turns the hips — where the punch starts.',
+      },
+      obliques: {
+        vi: 'Truyền lực xoay từ hông lên vai; cũng là cơ "phanh" sau cú đấm.',
+        en: 'Carries rotation from hips to shoulders, and brakes it after the punch.',
+      },
+      serratus: {
+        vi: 'Đẩy xương bả vai ra trước ở cuối cú đấm — "cơ của võ sĩ".',
+        en: 'Drives the shoulder blade forward at the end of the punch — the "boxer\'s muscle".',
+      },
+      'delt-f': {
+        vi: 'Đưa tay lên và ra trước; giữ guard cả hiệp nên cần bền.',
+        en: 'Lifts the arm forward; holds the guard all round, so it needs endurance.',
+      },
+      triceps: {
+        vi: 'Duỗi khuỷu ở cú thẳng (jab, cross) — nhanh, không cần to.',
+        en: 'Straightens the elbow on jab and cross — speed matters more than size.',
+      },
+      gastroc: {
+        vi: 'Nhón gót, nảy bước chân, đẩy từ mũi chân khi ra đòn.',
+        en: 'Keeps you on the balls of the feet, bounces the footwork, pushes off into punches.',
+      },
+      neck: {
+        vi: 'Giữ đầu vững khi trúng đòn; cổ khoẻ hơn = đầu ít bị giật hơn.',
+        en: 'Braces the head on impact; a stronger neck means less head whip.',
+      },
     },
     k2: ['quads', 'hams', 'glute-med', 'adductors', 'abs', 'lats', 'rotator', 'delt-r', 'traps', 'chest-lower', 'forearm-flex', 'soleus'],
-    risk: { vi: ['Vai: chóp xoay, chèn ép — vai trước làm việc nhiều, vai sau ít', 'Cổ tay, đốt bàn tay (gãy ngón 5 khi đấm sai)', 'Cổ', 'Lưng dưới do xoay lặp lại', 'Lật cổ chân khi di chuyển'],
-      en: ['Shoulder: rotator cuff, impingement — front works a lot, back very little', 'Wrist and knuckles (5th metacarpal fracture on a bad punch)', 'Neck', 'Lower back from repeated rotation', 'Ankle sprains from footwork'] },
+    risk: {
+      vi: [
+        'Vai: chóp xoay, chèn ép — vai trước làm việc nhiều, vai sau ít',
+        'Cổ tay, đốt bàn tay (gãy ngón 5 khi đấm sai)',
+        'Cổ',
+        'Lưng dưới do xoay lặp lại',
+        'Lật cổ chân khi di chuyển',
+      ],
+      en: [
+        'Shoulder: rotator cuff, impingement — front works a lot, back very little',
+        'Wrist and knuckles (5th metacarpal fracture on a bad punch)',
+        'Neck',
+        'Lower back from repeated rotation',
+        'Ankle sprains from footwork',
+      ],
+    },
     blocks: [
-      { vi: 'Sức mạnh nền', en: 'Base strength', why: { vi: 'Lực tối đa là trần của công suất. Tạ nặng, ít rep, nghỉ đủ — không tập tới thất bại.', en: 'Max strength is the ceiling for power. Heavy, low reps, full rest — never to failure.' },
-        ex: [['Trap Bar Deadlift', '3–5×3–5'], ['Front Squat', '3–5×3–5'], ['Bulgarian Split Squat', '3×6/bên'], ['Landmine Press', '3×6/bên'], ['Pull-Up', '3×5–8']] },
-      { vi: 'Công suất xoay & cú đấm', en: 'Rotational & punching power', why: { vi: 'Tập NHANH và hết sức, ít rep, nghỉ 60–90 giây. Đặt đầu buổi khi còn tươi.', en: 'Move FAST with full intent, few reps, 60–90 s rest. Do it first while fresh.' },
-        ex: [['Med Ball Rotational Scoop Toss', '3×5/bên'], ['Med Ball Shot Put', '3×5/bên'], ['Landmine Rotation', '3×5/bên'], ['Box Jump', '3×3–5'], ['Plyometric Push-Up', '3×5']] },
-      { vi: 'Core chống xoay', en: 'Anti-rotation core', why: { vi: 'Thân cứng thì lực từ hông không bị "rò" trước khi tới tay, và lưng dưới được bảo vệ.', en: 'A stiff trunk stops force leaking between hips and fist, and protects the lower back.' },
-        ex: [['Pallof Press', '3×10/bên'], ['Cable Woodchop', '3×8/bên'], ['Dead Bug', '3×8/bên'], ['Side Plank', '3×30 giây/bên']] },
-      { vi: 'Vai, cổ, cổ tay — phòng chấn thương', en: 'Shoulder, neck, wrist — injury prevention', why: { vi: 'Cân lại vai trước – vai sau, giữ xương bả vai khoẻ, cổ và cẳng tay chịu va chạm. Làm đều mỗi buổi, nhẹ.', en: 'Balances front vs back shoulder, keeps the shoulder blade strong, and toughens neck and forearms. Light, every session.' },
-        ex: [['Face Pull', '3×15'], ['Cable External Rotation', '2–3×12–15'], ['Push-Up Plus', '2×12'], ['Neck Isometrics (4 hướng)', '3×15–20 giây'], ['Farmer Carry', '3×30 m']] },
-      { vi: 'Thể lực theo hiệp', en: 'Round-based conditioning', why: { vi: 'Khớp với nhịp trận: làm đúng thời lượng hiệp, nghỉ đúng 1 phút. Thêm sprint ngắn cho bùng nổ và chạy nhẹ cho nền aerobic.', en: 'Match the fight: work the length of a round, rest exactly 1 min. Add short sprints for bursts and easy runs for the aerobic base.' },
-        ex: [['Interval bao cát / Assault Bike', '3 phút làm / 1 phút nghỉ × số hiệp thi đấu'], ['Sprint ngắn', '8–10 × 10–15 giây, nghỉ 45 giây'], ['Nhảy dây', '3 × 3 phút'], ['Chạy nhẹ (nói chuyện được)', '30–40 phút, 1–2 lần/tuần']] },
+      {
+        id: 'strength',
+        vi: 'Sức mạnh nền',
+        en: 'Base strength',
+        tag: 'strength',
+        need: true,
+        why: {
+          vi: 'Lực tối đa là trần của công suất. Tạ nặng, ít rep, nghỉ đủ — không tập tới thất bại.',
+          en: 'Max strength is the ceiling for power. Heavy, low reps, full rest — never to failure.',
+        },
+        ex: [
+          ['Trap Bar Deadlift', '3–5×3–5', 'Deadlift (Trap Bar)'],
+          ['Front Squat', '3–5×3–5', 'Front Squat (Barbell)'],
+          ['Bulgarian Split Squat', '3×6/bên', 'Bulgarian Split Squat'],
+          ['Landmine Press', '3×6/bên', 'Standing Landmine Shoulder Press (Barbell)'],
+          ['Pull-Up', '3×5–8', 'Pull-up'],
+        ],
+      },
+      {
+        id: 'power',
+        vi: 'Công suất xoay & cú đấm',
+        en: 'Rotational & punching power',
+        tag: 'strength',
+        need: true,
+        plyo: true,
+        why: {
+          vi: 'Tập NHANH và hết sức, ít rep, nghỉ 60–90 giây. Đặt đầu buổi khi còn tươi.',
+          en: 'Move FAST with full intent, few reps, 60–90 s rest. Do it first while fresh.',
+        },
+        ex: [
+          ['Med Ball Rotational Scoop Toss', '3×5/bên', 'Med Ball Side Throw (Med Ball)'],
+          ['Med Ball Shot Put', '3×5/bên', 'Shot Put Throw (Med Ball)'],
+          ['Landmine Rotation', '3×5/bên', 'Landmine Twist'],
+          ['Box Jump', '3×3–5', 'Box Jump'],
+          ['Plyometric Push-Up', '3×5', 'Plyometric Push Up (Bodyweight)'],
+        ],
+      },
+      {
+        id: 'core',
+        vi: 'Core chống xoay',
+        en: 'Anti-rotation core',
+        tag: 'accessories',
+        why: {
+          vi: 'Thân cứng thì lực từ hông không bị "rò" trước khi tới tay, và lưng dưới được bảo vệ.',
+          en: 'A stiff trunk stops force leaking between hips and fist, and protects the lower back.',
+        },
+        ex: [
+          ['Pallof Press', '3×10/bên', 'Pallof Press (Cable)'],
+          ['Cable Woodchop', '3×8/bên', 'Wood Chop (Cable Machine)'],
+          ['Dead Bug', '3×8/bên', 'Dead Bug (Bodyweight)'],
+          ['Side Plank', '3×30 giây/bên', 'Side Plank (Bodyweight)'],
+        ],
+      },
+      {
+        id: 'prehab',
+        vi: 'Vai, cổ, cổ tay — phòng chấn thương',
+        en: 'Shoulder, neck, wrist — injury prevention',
+        tag: 'accessories',
+        need: true,
+        why: {
+          vi: 'Cân lại vai trước – vai sau, giữ xương bả vai khoẻ, cổ và cẳng tay chịu va chạm. Làm đều mỗi buổi, nhẹ.',
+          en: 'Balances front vs back shoulder, keeps the shoulder blade strong, and toughens neck and forearms. Light, every session.',
+        },
+        ex: [
+          ['Face Pull', '3×15', 'Face Pull'],
+          ['Cable External Rotation', '2–3×12–15', 'External Rotation (Cable)'],
+          ['Push-Up Plus', '2×12', 'Push Up Plus (Bodyweight)'],
+          ['Neck Isometrics (4 hướng)', '3×15–20 giây', 'Neck Isometric Hold (Bodyweight)'],
+          ['Farmer Carry', '3×30 m', 'Farmer\'s Carry (Dumbbell)'],
+        ],
+      },
+      {
+        id: 'cond',
+        vi: 'Thể lực theo hiệp',
+        en: 'Round-based conditioning',
+        tag: 'circuit',
+        why: {
+          vi: 'Khớp với nhịp trận: làm đúng thời lượng hiệp, nghỉ đúng 1 phút. Thêm sprint ngắn cho bùng nổ và chạy nhẹ cho nền aerobic.',
+          en: 'Match the fight: work the length of a round, rest exactly 1 min. Add short sprints for bursts and easy runs for the aerobic base.',
+        },
+        ex: [
+          ['Interval bao cát / Assault Bike', '3 phút làm / 1 phút nghỉ × số hiệp thi đấu'],
+          ['Sprint ngắn', '8–10 × 10–15 giây, nghỉ 45 giây', 'Sprint (Bodyweight)'],
+          ['Nhảy dây', '3 × 3 phút', 'Jump Rope'],
+          ['Chạy nhẹ (nói chuyện được)', '30–40 phút, 1–2 lần/tuần'],
+        ],
+      },
     ],
-    plan: { vi: ['Ngoài mùa thi đấu: 2–3 buổi S&C/tuần. Gần trận: 1–2 buổi, giữ tạ nặng nhưng bớt set.', 'Trong buổi: công suất → sức mạnh → core / phòng chấn thương. Thể lực để cuối hoặc buổi riêng.', 'Không tập chân nặng ngay trước buổi sparring.', '7–10 ngày trước trận: giảm khối lượng, giữ cường độ.'],
-      en: ['Off-season: 2–3 S&C sessions a week. Near a fight: 1–2, keep the heavy loads but cut sets.', 'Within a session: power → strength → core / prehab. Conditioning last or on its own day.', 'No heavy leg day right before sparring.', '7–10 days out: cut volume, keep intensity.'] },
+    plan: {
+      vi: [
+        'Ngoài mùa thi đấu: 2–3 buổi S&C/tuần. Gần trận: 1–2 buổi, giữ tạ nặng nhưng bớt set.',
+        'Trong buổi: công suất → sức mạnh → core / phòng chấn thương. Thể lực để cuối hoặc buổi riêng.',
+        'Không tập chân nặng ngay trước buổi sparring.',
+        '7–10 ngày trước trận: giảm khối lượng, giữ cường độ.',
+      ],
+      en: [
+        'Off-season: 2–3 S&C sessions a week. Near a fight: 1–2, keep the heavy loads but cut sets.',
+        'Within a session: power → strength → core / prehab. Conditioning last or on its own day.',
+        'No heavy leg day right before sparring.',
+        '7–10 days out: cut volume, keep intensity.',
+      ],
+    },
+    season: {
+      off: {
+        vi: '2–3 buổi/tuần: xây sức mạnh nền + công suất. Thể lực chủ yếu do tập võ lo.',
+        en: '2–3 sessions a week: build base strength and power. Boxing practice covers most conditioning.',
+      },
+      pre: {
+        vi: '6–8 tuần trước trận: 2 buổi/tuần, chuyển dần sang công suất + thể lực theo hiệp; tạ nặng giữ, bớt set.',
+        en: '6–8 weeks out: 2 sessions a week, shift toward power and round-based conditioning; keep heavy loads, fewer sets.',
+      },
+      in: {
+        vi: '1–2 buổi ngắn để GIỮ. 7–10 ngày trước trận giảm khối lượng, giữ cường độ.',
+        en: '1–2 short sessions to MAINTAIN. 7–10 days out cut volume, keep intensity.',
+      },
+    },
   },
   running: {
-    vi: 'Chạy bộ', en: 'Running',
-    sum: { vi: 'Mỗi bước chạy đè lên một chân lực khoảng 2–3 lần cân nặng; riêng cơ dép (soleus) có thể tới 6–8 lần khi chạy nhanh. Tập tạ nặng + plyo giúp chạy "kinh tế" hơn (tốn ít năng lượng hơn ở cùng tốc độ) và giảm chấn thương do quá tải — không làm chậm đi.',
-      en: 'Every stride loads one leg with about 2–3× body weight; the soleus alone can reach 6–8× at faster paces. Heavy lifting + plyometrics make running more economical (less energy at the same pace) and cut overuse injuries — without slowing you down.' },
-    demands: { vi: ['Nền aerobic — phần lớn do chính việc chạy lo', 'Bắp chân và gân Achilles chịu lực lặp lại rất lớn', 'Ổn định trên MỘT chân: hông giữ khung chậu, gối không đổ vào trong', 'Độ "nảy" (độ cứng gân): tiếp đất ngắn, trả lực tốt', 'Thân giữ thẳng khi mỏi về cuối'],
-      en: ['Aerobic base — mostly built by running itself', 'Calves and Achilles take huge repeated loads', 'Single-leg stability: hips hold the pelvis level, knee does not cave in', 'Springiness (tendon stiffness): short ground contact, good energy return', 'A trunk that holds posture when tired'] },
+    vi: 'Chạy bộ',
+    en: 'Running',
+    sum: {
+      vi: 'Mỗi bước chạy đè lên một chân lực khoảng 2–3 lần cân nặng; riêng cơ dép (soleus) có thể tới 6–8 lần khi chạy nhanh. Tập tạ nặng + plyo giúp chạy "kinh tế" hơn (tốn ít năng lượng hơn ở cùng tốc độ) và giảm chấn thương do quá tải — không làm chậm đi.',
+      en: 'Every stride loads one leg with about 2–3× body weight; the soleus alone can reach 6–8× at faster paces. Heavy lifting + plyometrics make running more economical (less energy at the same pace) and cut overuse injuries — without slowing you down.',
+    },
+    demands: {
+      vi: [
+        'Nền aerobic — phần lớn do chính việc chạy lo',
+        'Bắp chân và gân Achilles chịu lực lặp lại rất lớn',
+        'Ổn định trên MỘT chân: hông giữ khung chậu, gối không đổ vào trong',
+        'Độ "nảy" (độ cứng gân): tiếp đất ngắn, trả lực tốt',
+        'Thân giữ thẳng khi mỏi về cuối',
+      ],
+      en: [
+        'Aerobic base — mostly built by running itself',
+        'Calves and Achilles take huge repeated loads',
+        'Single-leg stability: hips hold the pelvis level, knee does not cave in',
+        'Springiness (tendon stiffness): short ground contact, good energy return',
+        'A trunk that holds posture when tired',
+      ],
+    },
     key: {
-      soleus: { vi: 'Cơ chịu lực lớn nhất khi chạy — đẩy người tiến lên ở mỗi bước. Tập bằng calf raise GỐI GẬP.', en: 'The highest-loaded muscle in running — propels you forward each step. Train with BENT-knee calf raises.' },
-      gastroc: { vi: 'Cùng cơ dép tạo lực đẩy; quan trọng hơn khi chạy nhanh và lên dốc.', en: 'Works with the soleus on push-off; matters more for speed and hills.' },
-      'glute-max': { vi: 'Duỗi hông đẩy người về trước; chạy nhanh và lên dốc dùng rất nhiều.', en: 'Extends the hip to drive you forward; heavily used in sprints and hills.' },
-      'glute-med': { vi: 'Giữ khung chậu thẳng khi đứng một chân — yếu thì hông xệ, gối đổ vào trong.', en: 'Keeps the pelvis level on one leg — weak means a dropping hip and caving knee.' },
-      quads: { vi: 'Đỡ lực lúc tiếp đất, giữ gối; chạy xuống dốc làm việc nặng nhất.', en: 'Absorbs landing and controls the knee; downhills work it hardest.' },
-      hams: { vi: 'Phanh cẳng chân cuối pha vung; hay căng / rách khi tăng tốc.', en: 'Brakes the lower leg at the end of the swing; the classic strain when speeding up.' },
-      'hip-flex': { vi: 'Kéo đùi ra trước mỗi bước; quan trọng cho sải và tần số bước.', en: 'Pulls the thigh through each stride; matters for stride and cadence.' },
+      soleus: {
+        vi: 'Cơ chịu lực lớn nhất khi chạy — đẩy người tiến lên ở mỗi bước. Tập bằng calf raise GỐI GẬP.',
+        en: 'The highest-loaded muscle in running — propels you forward each step. Train with BENT-knee calf raises.',
+      },
+      gastroc: {
+        vi: 'Cùng cơ dép tạo lực đẩy; quan trọng hơn khi chạy nhanh và lên dốc.',
+        en: 'Works with the soleus on push-off; matters more for speed and hills.',
+      },
+      'glute-max': {
+        vi: 'Duỗi hông đẩy người về trước; chạy nhanh và lên dốc dùng rất nhiều.',
+        en: 'Extends the hip to drive you forward; heavily used in sprints and hills.',
+      },
+      'glute-med': {
+        vi: 'Giữ khung chậu thẳng khi đứng một chân — yếu thì hông xệ, gối đổ vào trong.',
+        en: 'Keeps the pelvis level on one leg — weak means a dropping hip and caving knee.',
+      },
+      quads: {
+        vi: 'Đỡ lực lúc tiếp đất, giữ gối; chạy xuống dốc làm việc nặng nhất.',
+        en: 'Absorbs landing and controls the knee; downhills work it hardest.',
+      },
+      hams: {
+        vi: 'Phanh cẳng chân cuối pha vung; hay căng / rách khi tăng tốc.',
+        en: 'Brakes the lower leg at the end of the swing; the classic strain when speeding up.',
+      },
+      'hip-flex': {
+        vi: 'Kéo đùi ra trước mỗi bước; quan trọng cho sải và tần số bước.',
+        en: 'Pulls the thigh through each stride; matters for stride and cadence.',
+      },
     },
     k2: ['tibialis', 'adductors', 'abs', 'obliques', 'erectors', 'ql', 'lats', 'delt-r'],
-    risk: { vi: ['Đau quanh xương bánh chè (runner\'s knee)', 'Gân Achilles, cân gan chân', 'Đau mặt trong cẳng chân (shin splints), gãy xương do mỏi', 'Dải chậu chày (đau mặt ngoài gối)', 'Căng cơ đùi sau khi chạy nhanh'],
-      en: ['Pain around the kneecap (runner\'s knee)', 'Achilles tendon, plantar fascia', 'Shin splints, bone stress injuries', 'IT band (outer knee pain)', 'Hamstring strains at speed'] },
+    risk: {
+      vi: [
+        'Đau quanh xương bánh chè (runner\'s knee)',
+        'Gân Achilles, cân gan chân',
+        'Đau mặt trong cẳng chân (shin splints), gãy xương do mỏi',
+        'Dải chậu chày (đau mặt ngoài gối)',
+        'Căng cơ đùi sau khi chạy nhanh',
+      ],
+      en: [
+        'Pain around the kneecap (runner\'s knee)',
+        'Achilles tendon, plantar fascia',
+        'Shin splints, bone stress injuries',
+        'IT band (outer knee pain)',
+        'Hamstring strains at speed',
+      ],
+    },
     blocks: [
-      { vi: 'Sức mạnh nặng', en: 'Heavy strength', why: { vi: 'Tạ nặng (~80–85% 1RM), ít rep, không tới thất bại — tăng lực mà gần như không thêm cân. Đây là phần cải thiện "kinh tế chạy" rõ nhất.', en: 'Heavy (~80–85% 1RM), low reps, not to failure — more force with almost no added body weight. The clearest boost to running economy.' },
-        ex: [['Back Squat', '3–4×4–6'], ['Trap Bar Deadlift', '3×4–6'], ['Bulgarian Split Squat', '3×6/bên'], ['Romanian Deadlift', '3×6–8'], ['Hip Thrust', '3×6–8']] },
-      { vi: 'Bắp chân & gân Achilles', en: 'Calves & Achilles', why: { vi: 'Đa số người chạy tập bắp chân quá nhẹ. Tập nặng, cả gối thẳng (bắp chân) và gối gập (cơ dép).', en: 'Most runners train calves far too light. Go heavy, both straight-knee (gastrocnemius) and bent-knee (soleus).' },
-        ex: [['Seated Calf Raise', '3×10–15 nặng'], ['Standing Calf Raise', '3×10–15'], ['Single-Leg Eccentric Heel Drop', '3×12/bên'], ['Tibialis Raise', '2×15']] },
-      { vi: 'Plyometric — độ nảy', en: 'Plyometrics — springiness', why: { vi: 'Tiếp đất ngắn, nảy lên ngay. Ít tiếp đất mỗi buổi, làm sau khởi động khi chân còn tươi; người mới bắt đầu bằng pogo nhẹ.', en: 'Short contacts, bounce straight back up. Few contacts per session, right after the warm-up while fresh; beginners start with light pogos.' },
-        ex: [['Pogo Jumps', '3×15–20'], ['Bounding', '3×20 m'], ['Single-Leg Hop', '3×6/bên'], ['Box Jump', '3×4']] },
-      { vi: 'Hông & ổn định một chân', en: 'Hips & single-leg control', why: { vi: 'Giữ khung chậu thẳng và gối thẳng hàng mũi chân — nhắm thẳng vào đau gối và dải chậu chày.', en: 'Keeps the pelvis level and knee over toes — aimed squarely at knee and IT band pain.' },
-        ex: [['Single-Leg Romanian Deadlift', '3×8/bên'], ['Step-Down', '3×8/bên'], ['Banded Lateral Walk', '2×15 bước/bên'], ['Copenhagen Plank', '2×20 giây/bên']] },
-      { vi: 'Core', en: 'Core', why: { vi: 'Giữ thân thẳng về cuối cự ly, khi mỏi hay gập người và sải ngắn lại.', en: 'Holds posture late in the run, when fatigue folds you over and shortens the stride.' },
-        ex: [['Dead Bug', '3×8/bên'], ['Side Plank', '3×30 giây/bên'], ['Pallof Press', '3×10/bên'], ['Back Extension', '3×10']] },
+      {
+        id: 'strength',
+        vi: 'Sức mạnh nặng',
+        en: 'Heavy strength',
+        tag: 'strength',
+        need: true,
+        why: {
+          vi: 'Tạ nặng (~80–85% 1RM), ít rep, không tới thất bại — tăng lực mà gần như không thêm cân. Đây là phần cải thiện "kinh tế chạy" rõ nhất.',
+          en: 'Heavy (~80–85% 1RM), low reps, not to failure — more force with almost no added body weight. The clearest boost to running economy.',
+        },
+        ex: [
+          ['Back Squat', '3–4×4–6', 'High Bar Squat (Barbell)'],
+          ['Trap Bar Deadlift', '3×4–6', 'Deadlift (Trap Bar)'],
+          ['Bulgarian Split Squat', '3×6/bên', 'Bulgarian Split Squat'],
+          ['Romanian Deadlift', '3×6–8', 'Romanian Deadlift'],
+          ['Hip Thrust', '3×6–8', 'Hip Thrust (Barbell)'],
+        ],
+      },
+      {
+        id: 'calves',
+        vi: 'Bắp chân & gân Achilles',
+        en: 'Calves & Achilles',
+        tag: 'accessories',
+        need: true,
+        why: {
+          vi: 'Đa số người chạy tập bắp chân quá nhẹ. Tập nặng, cả gối thẳng (bắp chân) và gối gập (cơ dép).',
+          en: 'Most runners train calves far too light. Go heavy, both straight-knee (gastrocnemius) and bent-knee (soleus).',
+        },
+        ex: [
+          ['Seated Calf Raise', '3×10–15 nặng', 'Seated Calf Raise (Machine)'],
+          ['Standing Calf Raise', '3×10–15', 'Standing Calf Raise (Machine)'],
+          ['Single-Leg Eccentric Heel Drop', '3×12/bên', 'Eccentric Heel Drop (Bodyweight)'],
+          ['Tibialis Raise', '2×15', 'Tibialis Raise (Bodyweight)'],
+        ],
+      },
+      {
+        id: 'plyo',
+        vi: 'Plyometric — độ nảy',
+        en: 'Plyometrics — springiness',
+        tag: 'strength',
+        plyo: true,
+        why: {
+          vi: 'Tiếp đất ngắn, nảy lên ngay. Ít tiếp đất mỗi buổi, làm sau khởi động khi chân còn tươi; người mới bắt đầu bằng pogo nhẹ.',
+          en: 'Short contacts, bounce straight back up. Few contacts per session, right after the warm-up while fresh; beginners start with light pogos.',
+        },
+        ex: [
+          ['Pogo Jumps', '3×15–20', 'Pogo Jump (Bodyweight)'],
+          ['Bounding', '3×20 m', 'Bounding (Bodyweight)'],
+          ['Single-Leg Hop', '3×6/bên', 'Single Leg Hop (Bodyweight)'],
+          ['Box Jump', '3×4', 'Box Jump'],
+        ],
+      },
+      {
+        id: 'hips',
+        vi: 'Hông & ổn định một chân',
+        en: 'Hips & single-leg control',
+        tag: 'accessories',
+        need: true,
+        why: {
+          vi: 'Giữ khung chậu thẳng và gối thẳng hàng mũi chân — nhắm thẳng vào đau gối và dải chậu chày.',
+          en: 'Keeps the pelvis level and knee over toes — aimed squarely at knee and IT band pain.',
+        },
+        ex: [
+          ['Single-Leg Romanian Deadlift', '3×8/bên', 'Single Leg Deadlift (Kettlebell)'],
+          ['Step-Down', '3×8/bên', 'Step Down (Bodyweight)'],
+          ['Banded Lateral Walk', '2×15 bước/bên', 'Lateral Band Walk (Band)'],
+          ['Copenhagen Plank', '2×20 giây/bên', 'Copenhagen Plank (Bodyweight)'],
+        ],
+      },
+      {
+        id: 'core',
+        vi: 'Core',
+        en: 'Core',
+        tag: 'accessories',
+        why: {
+          vi: 'Giữ thân thẳng về cuối cự ly, khi mỏi hay gập người và sải ngắn lại.',
+          en: 'Holds posture late in the run, when fatigue folds you over and shortens the stride.',
+        },
+        ex: [
+          ['Dead Bug', '3×8/bên', 'Dead Bug (Bodyweight)'],
+          ['Side Plank', '3×30 giây/bên', 'Side Plank (Bodyweight)'],
+          ['Pallof Press', '3×10/bên', 'Pallof Press (Cable)'],
+          ['Back Extension', '3×10', 'Back Extension'],
+        ],
+      },
     ],
-    plan: { vi: ['Giai đoạn nền: 2 buổi/tuần. Gần giải: 1 buổi/tuần để giữ, ngưng 10–14 ngày trước race.', 'Tập tạ CÙNG ngày với buổi chạy nặng (cách ≥ 6 giờ) để ngày nhẹ được nhẹ thật.', 'Không tập chân nặng hôm trước long run hoặc buổi interval.', '5–10K cần nhiều plyo / tốc độ hơn; half / marathon nặng về bắp chân và độ bền cơ; trail thêm step-down, xuống dốc, cổ chân.'],
-      en: ['Base phase: 2 sessions a week. Near a race: 1 a week to maintain, stop 10–14 days out.', 'Lift on the SAME day as hard runs (≥ 6 h apart) so easy days stay easy.', 'No heavy legs the day before a long run or interval session.', '5–10K wants more plyo / speed; half / marathon leans on calves and muscular endurance; trail adds step-downs, downhill and ankle work.'] },
+    plan: {
+      vi: [
+        'Giai đoạn nền: 2 buổi/tuần. Gần giải: 1 buổi/tuần để giữ, ngưng 10–14 ngày trước race.',
+        'Tập tạ CÙNG ngày với buổi chạy nặng (cách ≥ 6 giờ) để ngày nhẹ được nhẹ thật.',
+        'Không tập chân nặng hôm trước long run hoặc buổi interval.',
+        '5–10K cần nhiều plyo / tốc độ hơn; half / marathon nặng về bắp chân và độ bền cơ; trail thêm step-down, xuống dốc, cổ chân.',
+      ],
+      en: [
+        'Base phase: 2 sessions a week. Near a race: 1 a week to maintain, stop 10–14 days out.',
+        'Lift on the SAME day as hard runs (≥ 6 h apart) so easy days stay easy.',
+        'No heavy legs the day before a long run or interval session.',
+        '5–10K wants more plyo / speed; half / marathon leans on calves and muscular endurance; trail adds step-downs, downhill and ankle work.',
+      ],
+    },
+    season: {
+      off: {
+        vi: '2 buổi/tuần, tạ nặng + bắp chân + plyo nhẹ.',
+        en: '2 sessions a week, heavy lifting + calves + light plyo.',
+      },
+      pre: {
+        vi: 'Tăng cự ly / tốc độ: 1–2 buổi/tuần, giữ tạ nặng ít set, plyo ngắn.',
+        en: 'Building mileage / speed: 1–2 sessions a week, keep heavy loads with few sets, short plyo.',
+      },
+      in: {
+        vi: '1 buổi/tuần để giữ; ngưng 10–14 ngày trước race chính.',
+        en: '1 session a week to maintain; stop 10–14 days before the A race.',
+      },
+    },
   },
   basketball: {
-    vi: 'Bóng rổ', en: 'Basketball',
-    sum: { vi: 'Bóng rổ là chuỗi nỗ lực ngắn lặp lại: bật nhảy, tiếp đất, tăng tốc, phanh gấp, đổi hướng — hàng trăm lần mỗi trận. Bổ trợ nhắm vào sức bật, khả năng TIẾP ĐẤT và PHANH an toàn (nơi phần lớn chấn thương gối – cổ chân xảy ra), và thể lực chạy – nghỉ ngắt quãng.',
-      en: 'Basketball is short efforts on repeat: jump, land, accelerate, brake, change direction — hundreds of times a game. S&C targets jump power, safe LANDING and BRAKING (where most knee and ankle injuries happen), and stop-start conditioning.' },
-    demands: { vi: ['Sức bật: nhảy hai chân (rebound, block) và một chân (lên rổ)', 'Giảm tốc & đổi hướng: phanh từ chạy nhanh, trượt ngang phòng thủ', 'Tiếp đất vững: gối thẳng hàng mũi chân, không đổ vào trong', 'Thể lực ngắt quãng: bứt tốc vài giây, nghỉ ngắn, lặp lại cả trận', 'Thân vững khi va chạm, giữ thăng bằng để ném'],
-      en: ['Jump power: two-foot (rebounds, blocks) and one-foot (layups)', 'Deceleration & change of direction: braking from a sprint, defensive slides', 'Solid landings: knee tracks over the toes, no caving in', 'Intermittent conditioning: seconds-long bursts, short rests, all game', 'A stable trunk through contact, balance to shoot'] },
+    vi: 'Bóng rổ',
+    en: 'Basketball',
+    sum: {
+      vi: 'Bóng rổ là chuỗi nỗ lực ngắn lặp lại: bật nhảy, tiếp đất, tăng tốc, phanh gấp, đổi hướng — hàng trăm lần mỗi trận. Bổ trợ nhắm vào sức bật, khả năng TIẾP ĐẤT và PHANH an toàn (nơi phần lớn chấn thương gối – cổ chân xảy ra), và thể lực chạy – nghỉ ngắt quãng.',
+      en: 'Basketball is short efforts on repeat: jump, land, accelerate, brake, change direction — hundreds of times a game. S&C targets jump power, safe LANDING and BRAKING (where most knee and ankle injuries happen), and stop-start conditioning.',
+    },
+    demands: {
+      vi: [
+        'Sức bật: nhảy hai chân (rebound, block) và một chân (lên rổ)',
+        'Giảm tốc & đổi hướng: phanh từ chạy nhanh, trượt ngang phòng thủ',
+        'Tiếp đất vững: gối thẳng hàng mũi chân, không đổ vào trong',
+        'Thể lực ngắt quãng: bứt tốc vài giây, nghỉ ngắn, lặp lại cả trận',
+        'Thân vững khi va chạm, giữ thăng bằng để ném',
+      ],
+      en: [
+        'Jump power: two-foot (rebounds, blocks) and one-foot (layups)',
+        'Deceleration & change of direction: braking from a sprint, defensive slides',
+        'Solid landings: knee tracks over the toes, no caving in',
+        'Intermittent conditioning: seconds-long bursts, short rests, all game',
+        'A stable trunk through contact, balance to shoot',
+      ],
+    },
     key: {
-      quads: { vi: 'Phanh khi tiếp đất và đổi hướng, bật nhảy — chịu tải nhiều nhất ở gối.', en: 'Brakes landings and cuts, drives the jump — takes the most load at the knee.' },
-      'glute-max': { vi: 'Duỗi hông khi bật nhảy và tăng tốc; giữ gối không đổ vào trong khi tiếp đất.', en: 'Extends the hip to jump and accelerate; keeps the knee from caving on landing.' },
-      'glute-med': { vi: 'Giữ khung chậu và gối thẳng hàng khi đứng một chân, đổi hướng — liên quan trực tiếp tới rách dây chằng chéo trước (ACL).', en: 'Holds pelvis and knee aligned on one leg and when cutting — directly linked to ACL tears.' },
-      hams: { vi: 'Kéo cẳng chân ra sau, "đỡ" dây chằng chéo trước khi tiếp đất; hay căng khi bứt tốc.', en: 'Pulls the shin back and protects the ACL on landing; commonly strained in sprints.' },
+      quads: {
+        vi: 'Phanh khi tiếp đất và đổi hướng, bật nhảy — chịu tải nhiều nhất ở gối.',
+        en: 'Brakes landings and cuts, drives the jump — takes the most load at the knee.',
+      },
+      'glute-max': {
+        vi: 'Duỗi hông khi bật nhảy và tăng tốc; giữ gối không đổ vào trong khi tiếp đất.',
+        en: 'Extends the hip to jump and accelerate; keeps the knee from caving on landing.',
+      },
+      'glute-med': {
+        vi: 'Giữ khung chậu và gối thẳng hàng khi đứng một chân, đổi hướng — liên quan trực tiếp tới rách dây chằng chéo trước (ACL).',
+        en: 'Holds pelvis and knee aligned on one leg and when cutting — directly linked to ACL tears.',
+      },
+      hams: {
+        vi: 'Kéo cẳng chân ra sau, "đỡ" dây chằng chéo trước khi tiếp đất; hay căng khi bứt tốc.',
+        en: 'Pulls the shin back and protects the ACL on landing; commonly strained in sprints.',
+      },
       gastroc: { vi: 'Bật nhảy từ mũi chân, bước chân nhanh.', en: 'Jumps off the forefoot, quick feet.' },
-      soleus: { vi: 'Hấp thụ lực tiếp đất, giữ cổ chân vững — cổ chân yếu dễ lật.', en: 'Absorbs landing forces and steadies the ankle — weak ankles roll.' },
-      adductors: { vi: 'Trượt ngang và đổi hướng; hay căng háng khi đẩy sang bên.', en: 'Lateral slides and cuts; groin strains on hard side pushes.' },
+      soleus: {
+        vi: 'Hấp thụ lực tiếp đất, giữ cổ chân vững — cổ chân yếu dễ lật.',
+        en: 'Absorbs landing forces and steadies the ankle — weak ankles roll.',
+      },
+      adductors: {
+        vi: 'Trượt ngang và đổi hướng; hay căng háng khi đẩy sang bên.',
+        en: 'Lateral slides and cuts; groin strains on hard side pushes.',
+      },
     },
     k2: ['tibialis', 'hip-flex', 'abs', 'obliques', 'erectors', 'lats', 'delt-f', 'rotator', 'triceps', 'forearm-flex', 'chest-upper'],
-    risk: { vi: ['Lật cổ chân — chấn thương hay gặp nhất', 'Đau gân bánh chè (jumper\'s knee) do nhảy lặp lại', 'Rách dây chằng chéo trước (ACL) khi tiếp đất / đổi hướng sai — nữ có nguy cơ cao hơn', 'Kẹt / bong gân ngón tay', 'Căng háng, căng đùi sau; đau lưng dưới'],
-      en: ['Ankle sprains — the most common injury', 'Patellar tendon pain (jumper\'s knee) from repeated jumping', 'ACL tears on poor landings / cuts — higher risk in women', 'Jammed / sprained fingers', 'Groin and hamstring strains; low back pain'] },
+    risk: {
+      vi: [
+        'Lật cổ chân — chấn thương hay gặp nhất',
+        'Đau gân bánh chè (jumper\'s knee) do nhảy lặp lại',
+        'Rách dây chằng chéo trước (ACL) khi tiếp đất / đổi hướng sai — nữ có nguy cơ cao hơn',
+        'Kẹt / bong gân ngón tay',
+        'Căng háng, căng đùi sau; đau lưng dưới',
+      ],
+      en: [
+        'Ankle sprains — the most common injury',
+        'Patellar tendon pain (jumper\'s knee) from repeated jumping',
+        'ACL tears on poor landings / cuts — higher risk in women',
+        'Jammed / sprained fingers',
+        'Groin and hamstring strains; low back pain',
+      ],
+    },
     blocks: [
-      { vi: 'Sức mạnh nền', en: 'Base strength', why: { vi: 'Chân khoẻ thì nhảy cao hơn và tiếp đất, phanh an toàn hơn. Tạ nặng, ít rep, không tới thất bại.', en: 'Stronger legs jump higher and land and brake more safely. Heavy, low reps, not to failure.' },
-        ex: [['Trap Bar Deadlift', '3–4×3–5'], ['Front Squat', '3–4×3–5'], ['Bulgarian Split Squat', '3×6/bên'], ['Nordic Hamstring Curl', '3×4–6'], ['Pull-Up', '3×5–8']] },
-      { vi: 'Bật nhảy & tiếp đất', en: 'Jumping & landing', why: { vi: 'HỌC TIẾP ĐẤT trước khi nhảy cao: đáp êm, gối thẳng hàng mũi chân, giữ 2 giây. Ít lần, chất lượng; đầu buổi khi còn tươi. Mùa giải đã nhảy nhiều khi tập đội — giảm phần này.', en: 'LEARN TO LAND before jumping high: soft, knee over toes, hold 2 s. Few reps, high quality, first while fresh. In season, practice already has lots of jumps — cut this back.' },
-        ex: [['Drop Landing', '3×5'], ['Countermovement Jump', '3×5'], ['Box Jump', '3×4'], ['Single-Leg Hop and Stick', '3×4/bên'], ['Lateral Bound', '3×5/bên']] },
-      { vi: 'Giảm tốc & đổi hướng', en: 'Deceleration & change of direction', why: { vi: 'Phần lớn chấn thương gối xảy ra lúc PHANH và xoay người, không phải lúc chạy. Tập dừng gấp có kiểm soát: hạ thấp người, bước ngắn dần.', en: 'Most knee injuries happen when BRAKING and turning, not while running. Practise controlled hard stops: get low, shorten the steps.' },
-        ex: [['Sprint rồi dừng gấp', '6×10–15 m'], ['5-10-5 Pro Agility', '4–6×'], ['Lateral Lunge', '3×6/bên'], ['Copenhagen Plank', '2×20 giây/bên']] },
-      { vi: 'Cổ chân & gối — phòng chấn thương', en: 'Ankle & knee — injury prevention', why: { vi: 'Thăng bằng một chân + bắp chân khoẻ giảm rõ số lần lật cổ chân; giữ gân bánh chè chịu tải tốt. Nhẹ, làm đều mỗi buổi.', en: 'Single-leg balance plus strong calves clearly cut ankle sprains; loaded tendon work keeps the patellar tendon resilient. Light, every session.' },
-        ex: [['Đứng một chân trên đệm', '3×30 giây/bên'], ['Seated Calf Raise', '3×12–15'], ['Spanish Squat', '3×30–45 giây'], ['Single-Leg Romanian Deadlift', '3×8/bên'], ['Tibialis Raise', '2×15']] },
-      { vi: 'Core & thân trên', en: 'Core & upper body', why: { vi: 'Thân vững khi va chạm dưới rổ; vai khoẻ cân bằng cho ném và chuyền.', en: 'A stable trunk for contact under the rim; balanced shoulders for shooting and passing.' },
-        ex: [['Pallof Press', '3×10/bên'], ['Dead Bug', '3×8/bên'], ['Side Plank', '3×30 giây/bên'], ['Push-Up', '3×8–12'], ['Face Pull', '3×15']] },
-      { vi: 'Thể lực theo trận', en: 'Game conditioning', why: { vi: 'Trận đấu là bứt tốc ngắn – nghỉ ngắn. Tập đúng nhịp đó thay cho chạy dài đều.', en: 'Games are short bursts, short rests. Train that rhythm instead of long steady runs.' },
-        ex: [['Chạy con thoi hết sân', '8–10 × 15 giây, nghỉ 30–45 giây'], ['Sprint ngắn', '8–10 × 10–15 giây, nghỉ 45 giây'], ['Trượt ngang phòng thủ', '6 × 15 giây, nghỉ 30 giây']] },
+      {
+        id: 'strength',
+        vi: 'Sức mạnh nền',
+        en: 'Base strength',
+        tag: 'strength',
+        need: true,
+        why: {
+          vi: 'Chân khoẻ thì nhảy cao hơn và tiếp đất, phanh an toàn hơn. Tạ nặng, ít rep, không tới thất bại.',
+          en: 'Stronger legs jump higher and land and brake more safely. Heavy, low reps, not to failure.',
+        },
+        ex: [
+          ['Trap Bar Deadlift', '3–4×3–5', 'Deadlift (Trap Bar)'],
+          ['Front Squat', '3–4×3–5', 'Front Squat (Barbell)'],
+          ['Bulgarian Split Squat', '3×6/bên', 'Bulgarian Split Squat'],
+          ['Nordic Hamstring Curl', '3×4–6', 'Nordic Curl (Bodyweight)'],
+          ['Pull-Up', '3×5–8', 'Pull-up'],
+        ],
+      },
+      {
+        id: 'landing',
+        vi: 'Bật nhảy & tiếp đất',
+        en: 'Jumping & landing',
+        tag: 'strength',
+        need: true,
+        plyo: true,
+        why: {
+          vi: 'HỌC TIẾP ĐẤT trước khi nhảy cao: đáp êm, gối thẳng hàng mũi chân, giữ 2 giây. Ít lần, chất lượng; đầu buổi khi còn tươi. Mùa giải đã nhảy nhiều khi tập đội — giảm phần này.',
+          en: 'LEARN TO LAND before jumping high: soft, knee over toes, hold 2 s. Few reps, high quality, first while fresh. In season, practice already has lots of jumps — cut this back.',
+        },
+        ex: [
+          ['Drop Landing', '3×5', 'Drop Landing (Bodyweight)'],
+          ['Countermovement Jump', '3×5', 'Countermovement Jump (Bodyweight)'],
+          ['Box Jump', '3×4', 'Box Jump'],
+          ['Single-Leg Hop and Stick', '3×4/bên', 'Single Leg Hop and Stick (Bodyweight)'],
+          ['Lateral Bound', '3×5/bên', 'Lateral Bound (Bodyweight)'],
+        ],
+      },
+      {
+        id: 'decel',
+        vi: 'Giảm tốc & đổi hướng',
+        en: 'Deceleration & change of direction',
+        tag: 'accessories',
+        need: true,
+        why: {
+          vi: 'Phần lớn chấn thương gối xảy ra lúc PHANH và xoay người, không phải lúc chạy. Tập dừng gấp có kiểm soát: hạ thấp người, bước ngắn dần.',
+          en: 'Most knee injuries happen when BRAKING and turning, not while running. Practise controlled hard stops: get low, shorten the steps.',
+        },
+        ex: [
+          ['Sprint rồi dừng gấp', '6×10–15 m', 'Sprint to Stop (Bodyweight)'],
+          ['5-10-5 Pro Agility', '4–6×', 'Pro Agility Shuttle (Bodyweight)'],
+          ['Lateral Lunge', '3×6/bên', 'Side Lunge (Dumbbell)'],
+          ['Copenhagen Plank', '2×20 giây/bên', 'Copenhagen Plank (Bodyweight)'],
+        ],
+      },
+      {
+        id: 'prehab',
+        vi: 'Cổ chân & gối — phòng chấn thương',
+        en: 'Ankle & knee — injury prevention',
+        tag: 'accessories',
+        need: true,
+        why: {
+          vi: 'Thăng bằng một chân + bắp chân khoẻ giảm rõ số lần lật cổ chân; giữ gân bánh chè chịu tải tốt. Nhẹ, làm đều mỗi buổi.',
+          en: 'Single-leg balance plus strong calves clearly cut ankle sprains; loaded tendon work keeps the patellar tendon resilient. Light, every session.',
+        },
+        ex: [
+          ['Đứng một chân trên đệm', '3×30 giây/bên', 'Single Leg Balance (Balance Pad)'],
+          ['Seated Calf Raise', '3×12–15', 'Seated Calf Raise (Machine)'],
+          ['Spanish Squat', '3×30–45 giây', 'Spanish Squat (Band)'],
+          ['Single-Leg Romanian Deadlift', '3×8/bên', 'Single Leg Deadlift (Kettlebell)'],
+          ['Tibialis Raise', '2×15', 'Tibialis Raise (Bodyweight)'],
+        ],
+      },
+      {
+        id: 'core',
+        vi: 'Core & thân trên',
+        en: 'Core & upper body',
+        tag: 'accessories',
+        why: {
+          vi: 'Thân vững khi va chạm dưới rổ; vai khoẻ cân bằng cho ném và chuyền.',
+          en: 'A stable trunk for contact under the rim; balanced shoulders for shooting and passing.',
+        },
+        ex: [
+          ['Pallof Press', '3×10/bên', 'Pallof Press (Cable)'],
+          ['Dead Bug', '3×8/bên', 'Dead Bug (Bodyweight)'],
+          ['Side Plank', '3×30 giây/bên', 'Side Plank (Bodyweight)'],
+          ['Push-Up', '3×8–12', 'Normal Push up (Bodyweight)'],
+          ['Face Pull', '3×15', 'Face Pull'],
+        ],
+      },
+      {
+        id: 'cond',
+        vi: 'Thể lực theo trận',
+        en: 'Game conditioning',
+        tag: 'circuit',
+        why: {
+          vi: 'Trận đấu là bứt tốc ngắn – nghỉ ngắn. Tập đúng nhịp đó thay cho chạy dài đều.',
+          en: 'Games are short bursts, short rests. Train that rhythm instead of long steady runs.',
+        },
+        ex: [
+          ['Chạy con thoi hết sân', '8–10 × 15 giây, nghỉ 30–45 giây'],
+          ['Sprint ngắn', '8–10 × 10–15 giây, nghỉ 45 giây', 'Sprint (Bodyweight)'],
+          ['Trượt ngang phòng thủ', '6 × 15 giây, nghỉ 30 giây'],
+        ],
+      },
     ],
-    plan: { vi: ['Ngoài mùa giải: 3 buổi S&C/tuần, xây sức mạnh và sức bật. Trong mùa: 1–2 buổi ngắn, giữ tạ nặng nhưng bớt set, gần như bỏ plyo thêm.', 'Trong buổi: tiếp đất / bật nhảy → sức mạnh → phòng chấn thương. Thể lực cuối buổi hoặc ngày riêng.', 'Không tập chân nặng trong 48 giờ trước trận.'],
-      en: ['Off-season: 3 S&C sessions a week to build strength and jump. In season: 1–2 short sessions, keep loads heavy but cut sets, little extra plyo.', 'Within a session: landing / jumps → strength → prehab. Conditioning last or on its own day.', 'No heavy legs within 48 h of a game.'] },
+    plan: {
+      vi: [
+        'Ngoài mùa giải: 3 buổi S&C/tuần, xây sức mạnh và sức bật. Trong mùa: 1–2 buổi ngắn, giữ tạ nặng nhưng bớt set, gần như bỏ plyo thêm.',
+        'Trong buổi: tiếp đất / bật nhảy → sức mạnh → phòng chấn thương. Thể lực cuối buổi hoặc ngày riêng.',
+        'Không tập chân nặng trong 48 giờ trước trận.',
+      ],
+      en: [
+        'Off-season: 3 S&C sessions a week to build strength and jump. In season: 1–2 short sessions, keep loads heavy but cut sets, little extra plyo.',
+        'Within a session: landing / jumps → strength → prehab. Conditioning last or on its own day.',
+        'No heavy legs within 48 h of a game.',
+      ],
+    },
+    season: {
+      off: {
+        vi: '3 buổi/tuần, xây sức mạnh + sức bật + kỹ thuật tiếp đất.',
+        en: '3 sessions a week to build strength, jump and landing skill.',
+      },
+      pre: {
+        vi: '2–3 buổi/tuần, thêm giảm tốc / đổi hướng và thể lực theo trận.',
+        en: '2–3 sessions a week, add deceleration / change of direction and game conditioning.',
+      },
+      in: {
+        vi: '1–2 buổi ngắn, giữ tạ nặng ít set, gần như bỏ plyo thêm (tập đội đã nhảy nhiều). Không chân nặng trong 48 giờ trước trận.',
+        en: '1–2 short sessions, heavy loads with few sets, little extra plyo (team practice has plenty). No heavy legs within 48 h of a game.',
+      },
+    },
   },
 };
-const AN_SPORT_ORDER = ['boxing', 'running', 'basketball'];
+
+const SPORT_ORDER = ["boxing", "running", "basketball"];
+const SPORT_PHASES = {
+  off: { vi: "Ngoài mùa", en: "Off-season" },
+  pre: { vi: "Trước giải", en: "Pre-season" },
+  in: { vi: "Trong mùa", en: "In season" },
+};
+// ── HẾT SPORTS ──
+const AN_SPORTS = SPORTS;
+const AN_SPORT_ORDER = SPORT_ORDER;
 function anDose(s) {
   if (anLang() === 'vi') return s;
   return String(s).replace(/\/bên/g, '/side').replace(/ bước/g, ' steps').replace(/ giây/g, ' s').replace(/ phút/g, ' min')
@@ -13246,29 +13729,84 @@ function anExName(s) {
     'Trượt ngang phòng thủ': 'Defensive slides' };
   return m[s] || s;
 }
-/** Bài trong thư viện có tên chứa đủ các từ của bài gợi ý (bỏ dụng cụ / từ nối) → hiện nhãn "Thư viện". */
-function anInLib(name) {
+/** Bài có trong thư viện → nhãn "Thư viện". Có tên thư viện (mục 3 của bài) thì so ĐÚNG tên đó; không thì so theo từ. */
+function anInLib(name, libName) {
   const lib = (typeof _exerciseCache !== 'undefined' && Array.isArray(_exerciseCache)) ? _exerciseCache : [];
+  if (libName) { const want = String(libName).trim().toLowerCase(); return lib.some((e) => e && e.name && String(e.name).trim().toLowerCase() === want); }
   const t = anTok(name);
   return t.length > 0 && lib.some((e) => { if (!e || !e.name) return false; const k = anTok(e.name); return t.every((w) => k.includes(w)); });
 }
 function anSportLevel(sp, g) { const S = AN_SPORTS[sp]; return !S ? 0 : S.key[g] ? 1 : S.k2.includes(g) ? 2 : 0; }
 function anSetMode(m) { _an.mode = m === 'sport' ? 'sport' : 'muscle'; _an.sel = null; renderAnatomy(); }
 function anSetSport(sp) { if (!AN_SPORTS[sp]) return; _an.sport = sp; _an.sel = null; renderAnatomy(); loadExerciseCache().then(() => { _an.exReady = true; if (_an.mode === 'sport' && !_an.sel) anRenderInfo(); }); }
+/**
+ * Gắn môn cho khách (2026-11-16): clients/{id}.sport = { id, phase } — trợ lý Pulse đọc trường này để soạn giáo án theo
+ * khung môn (functions/sports.js). Chỉ coach phụ trách khách 1-1 (không lớp nhóm, không khi admin đang quan sát).
+ */
+function anClientSport() {
+  const s = activeClient && activeClient.sport;
+  return s && SPORTS[s.id] ? { id: s.id, phase: SPORT_PHASES[s.phase] ? s.phase : 'off' } : null;
+}
+function anCanAssign() {
+  return typeof userRole !== 'undefined' && userRole === 'coach' && activeClient && !activeClient.isGroup
+    && !(typeof isObserving === 'function' && isObserving());
+}
+function anSportClientBar(cs) {
+  if (!anCanAssign()) return '';
+  const nm = escHtml(activeClient.name || activeClient.id), sp = _an.sport, mine = cs && cs.id === sp;
+  const ph = mine ? cs.phase : 'off';
+  const opts = Object.keys(SPORT_PHASES).map((k) => '<option value="' + k + '"' + (k === ph ? ' selected' : '') + '>' + escHtml(anL(SPORT_PHASES[k])) + '</option>').join('');
+  const now = cs ? escHtml(anL(SPORTS[cs.id])) + ' · ' + escHtml(anL(SPORT_PHASES[cs.phase])) : escHtml(anS('chưa gắn môn', 'no sport set'));
+  return '<div class="an-assign"><div class="an-assign-t">' + nm + ': <b>' + now + '</b></div><div class="an-assign-r">'
+    + '<select id="an-phase" class="an-phase" aria-label="' + escHtml(anS('Giai đoạn', 'Phase')) + '"' + (mine ? ' onchange="anAssignSport(\'' + sp + '\', this.value)"' : '') + '>' + opts + '</select>'
+    + (mine
+      ? '<button type="button" class="an-abtn" onclick="anAssignSport(null)">' + escHtml(anS('Bỏ môn', 'Remove')) + '</button>'
+        + '<button type="button" class="an-abtn on" onclick="anAskPulse()">' + escHtml(anS('Nhờ Pulse soạn bổ trợ', 'Ask Pulse to program it')) + '</button>'
+      : '<button type="button" class="an-abtn on" onclick="anAssignSport(\'' + sp + '\', document.getElementById(\'an-phase\').value)">'
+        + escHtml(anS('Gắn ' + anL(AN_SPORTS[sp]) + ' cho khách này', 'Set ' + anL(AN_SPORTS[sp]) + ' for this client')) + '</button>')
+    + '</div></div>';
+}
+async function anAssignSport(id, phase) {
+  if (!anCanAssign()) return;
+  const val = id && SPORTS[id] ? { id, phase: SPORT_PHASES[phase] ? phase : 'off' } : null;
+  try {
+    await updateDoc(doc(db, 'clients', activeClient.id), { sport: val });   // null = bỏ (shim không có deleteField)
+  } catch (e) { alert(anS('Không lưu được: ', 'Could not save: ') + (e && e.message || e)); return; }
+  activeClient.sport = val;
+  const c = (typeof clientsData !== 'undefined' ? clientsData : []).find((x) => x.id === activeClient.id);
+  if (c) c.sport = val;
+  anRenderInfo();
+}
+function anAskPulse() {
+  const cs = anClientSport();
+  if (!cs || typeof aiOpen !== 'function') return;
+  aiOpen('client');
+  const inp = document.getElementById('ai-in');
+  if (inp) {
+    inp.value = 'Soạn giáo án bổ trợ ' + SPORTS[cs.id].vi + ' cho ' + (activeClient.name || activeClient.id) + ' — giai đoạn '
+      + SPORT_PHASES[cs.phase].vi.toLowerCase() + ', ' + (activeClient.sessionsPerWeek || 2) + ' buổi/tuần, 60 phút/buổi.';
+    inp.focus();
+  }
+}
 function anSportCard() {
   const S = AN_SPORTS[_an.sport];
   const li = (a) => '<ul class="an-fn">' + (a[anLang()] || a.vi).map((x) => '<li>' + escHtml(x) + '</li>').join('') + '</ul>';
   const lib = anS('Thư viện', 'Library');
-  const blocks = S.blocks.map((b, i) => '<div class="an-blk"><div class="an-blk-h"><span class="an-blk-n">' + (i + 1) + '</span>' + escHtml(anL(b)) + '</div>'
+  const blocks = S.blocks.map((b, i) => '<div class="an-blk"><div class="an-blk-h"><span class="an-blk-n">' + (i + 1) + '</span>' + escHtml(anL(b))
+    + (b.need ? ' <span class="an-role p">' + escHtml(anS('Bắt buộc', 'Required')) + '</span>' : '') + '</div>'
     + '<p class="an-blk-why">' + escHtml(anL(b.why)) + '</p><ul class="an-ex">'
-    + b.ex.map(([n, d]) => '<li><span class="an-ex-n">' + escHtml(anExName(n)) + (_an.exReady && anInLib(n) ? ' <span class="an-role s">' + escHtml(lib) + '</span>' : '') + '</span><span class="an-dose">' + escHtml(anDose(d)) + '</span></li>').join('')
+    + b.ex.map(([n, d, ln]) => '<li><span class="an-ex-n">' + escHtml(anExName(n)) + (_an.exReady && anInLib(n, ln) ? ' <span class="an-role s">' + escHtml(lib) + '</span>' : '') + '</span><span class="an-dose">' + escHtml(anDose(d)) + '</span></li>').join('')
     + '</ul></div>').join('');
+  const cs = anClientSport();
   return '<div class="an-card">'
     + '<div class="an-card-h"><h2>' + escHtml(anL(S)) + ' · ' + escHtml(anS('bổ trợ S&C', 'S&C')) + '</h2></div>'
+    + anSportClientBar(cs)
     + '<p class="an-sum">' + escHtml(anL(S.sum)) + '</p>'
     + '<h3>' + escHtml(anS('Môn này đòi hỏi', 'What the sport demands')) + '</h3>' + li(S.demands)
     + '<h3>' + escHtml(anS('Chấn thương hay gặp', 'Common injuries')) + '</h3>' + li(S.risk)
     + '<h3>' + escHtml(anS('Các khối tập', 'Training blocks')) + '</h3>' + blocks
+    + '<h3>' + escHtml(anS('Theo giai đoạn', 'By season phase')) + '</h3><ul class="an-fn an-season">'
+    + Object.keys(SPORT_PHASES).map((k) => '<li' + (cs && cs.id === _an.sport && cs.phase === k ? ' class="on"' : '') + '><b>' + escHtml(anL(SPORT_PHASES[k])) + ':</b> ' + escHtml(anL(S.season[k])) + '</li>').join('') + '</ul>'
     + '<h3>' + escHtml(anS('Xếp lịch', 'Scheduling')) + '</h3>' + li(S.plan)
     + '<p class="an-muted">' + escHtml(anS('Khung chung cho người tập phong trào. Khách dưới 18 tuổi: plyo và tạ theo luật youth, không theo liều ở đây.', 'A general framework for recreational athletes. Under-18s: plyo and loads follow the youth rules, not these doses.')) + '</p>'
     + '</div>';
@@ -20563,6 +21101,15 @@ body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-even
 .an-sum{margin:10px 0 0!important;}
 .an-blk{margin-top:12px;padding:14px;border-radius:14px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);}
 .an-blk-h{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:800;}
+.an-assign{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin:4px 0 14px;padding:12px 14px;border-radius:14px;background:rgba(143,219,255,.08);border:1px solid rgba(143,219,255,.25);}
+.an-assign-t{font-size:14px;color:rgba(255,255,255,.8);}
+.an-assign-t b{color:#fff;}
+.an-assign-r{display:flex;flex-wrap:wrap;gap:8px;}
+.an-phase{background:#1f1a1a;color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:7px 12px;font:inherit;font-size:13px;}
+.an-abtn{border:1px solid rgba(255,255,255,.18);background:transparent;color:#fff;border-radius:999px;min-height:36px;padding:0 14px;font:700 13px 'Figtree',sans-serif;cursor:pointer;}
+.an-abtn.on{background:#8FDBFF;border-color:#8FDBFF;color:#161111;}
+.an-season li.on{color:#fff;}
+.an-season li.on b{color:#8FDBFF;}
 .an-blk-n{flex:none;width:24px;height:24px;border-radius:999px;background:rgba(255,150,100,.18);color:#FF9664;font-size:13px;display:inline-flex;align-items:center;justify-content:center;}
 .an-blk-why{margin:6px 0 10px!important;font-size:14px!important;color:rgba(255,255,255,.75)!important;}
 .an-dose{flex:none;font-size:13px;font-weight:700;color:#8FDBFF;text-align:right;}
