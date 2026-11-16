@@ -166,6 +166,17 @@ await renderStats();
   Đo trên máy tính: đổi khách ~800 ms → ~340 ms.
 - Clear cache on client switch: `_historyCache = null`
 
+## Kg gợi ý tuần tới (2026-11-16)
+Chip "Gợi ý 102,5kg × 5" trên bài pha **strength** (tab Workout, coach + khách). `kgSuggestCore()` (khối
+`// ── KG GỢI Ý` trong index.html) — công thức lấy ý tưởng từ streprogen (GPL-3.0: chỉ dùng CÔNG THỨC, KHÔNG chép
+code): %1RM = 97,5 − 3,5(r−1) + 0,05(r−1)² để đổi tạ giữa các mức rep; sóng 3 tuần +2,5% / tuần 4 ×0,9 (tuần nhẹ
+nhận ra khi e1RM tụt ≥ 7%, xong tuần nhẹ quay về đỉnh cũ rồi tăng); nghỉ > 14 ngày ×0,95; tập lần 2 trong tuần giữ
+mức; buổi hôm nay không tính. Nấc tròn: tạ đơn / KB 1 kg, còn lại 2,5 kg; làm tròn ra số cũ thì nhích 1 nấc.
+Bỏ qua: bài BW, lớp nhóm, rep > 12, **khách < 18 tuổi** (`kgLoadAge`: baseline.age → profile.dob → "N tuổi" trong
+ghi chú; chưa biết tuổi = KHÔNG gợi ý). Chạm chip = điền ô set TRỐNG (`kgUseSuggest`), không ghi đè số đã gõ; ô trống
+hiện kg gợi ý làm placeholder. Lịch sử dùng `reps` của GIÁO ÁN lúc lưu (app không ghi rep thực tập).
+`tests/kg-suggest.test.js`.
+
 ---
 
 ## Nutrition tab + Gemini

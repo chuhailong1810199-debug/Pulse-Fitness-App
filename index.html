@@ -6283,6 +6283,105 @@ async function loadStrengthHistory() {
   } catch (e) { console.warn('loadStrengthHistory:', e); return false; }
 }
 
+// ── KG GỢI Ý (2026-11-16) ──────────────────────────────
+/*
+ * Tạ gợi ý cho bài pha STRENGTH, tính từ lịch sử của chính khách — ý tưởng của streprogen (tommyod, GPL-3.0;
+ * chỉ lấy CÔNG THỨC, không chép code):
+ *  - %1RM theo rep: 97,5 − 3,5·(r−1) + 0,05·(r−1)² (5 rep ≈ 84%, 8 rep ≈ 76%) → đổi tạ của rep cũ sang rep mới.
+ *  - Sóng 4 tuần: 3 tuần tăng ~2,5%/tuần, tuần thứ 4 nhẹ (×0,9). Tuần nhẹ nhận ra khi mức (e1RM) tụt ≥ 7%.
+ *  - Nghỉ > 14 ngày: ×0,95 so với lần cuối. Tuần này đã tập bài đó rồi (buổi thứ 2 trong tuần): giữ mức đó.
+ * Chỉ GỢI Ý: chạm chip → điền vào ô set còn TRỐNG, không ghi đè số đã gõ. Không áp cho bài BW, lớp nhóm,
+ * rep > 12 (công thức chỉ đúng 1–12), khách < 18 tuổi (luật youth: không tính theo 1RM).
+ */
+const KG_UP = 0.025, KG_LIGHT = 0.9, KG_WAVE = 3, KG_GAP_DAYS = 14;
+let _kgSug = {};                      // exerciseKey → gợi ý đang hiện (cho kgUseSuggest)
+let _kgAge = { cid: null, minor: null };
+function kgPct(r) { return 97.5 - 3.5 * (r - 1) + 0.05 * (r - 1) * (r - 1); }
+function kgWeekKey(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x.getTime(); }
+function kgStep(name) { return /dumbbell|\bdb\b|kettlebell|\bkb\b|tạ đơn|tạ ấm/i.test(String(name || '')) ? 1 : 2.5; }
+/** hist: [{date, kg, reps}] mới → cũ. Trả {kg, reps, mode: up|light|hold|same, last} hoặc null. */
+function kgSuggestCore(hist, setsReps, name, now) {
+  const rx = parsePrescription(setsReps);
+  if (!rx.lifting) return null;
+  const reps = rx.repsAt(0) / (rx.perSide ? 2 : 1);
+  if (!(reps >= 1 && reps <= 12)) return null;
+  const today = new Date(now || Date.now()); today.setHours(0, 0, 0, 0);
+  const weeks = [];
+  (hist || []).forEach((h) => {
+    const r = Number(h && h.reps), kg = Number(h && h.kg), d = h && new Date(h.date);
+    if (!(kg > 0 && r >= 1 && r <= 12) || !(d < today)) return;   // buổi hôm nay không tính — gợi ý đứng yên cả ngày
+    const wk = kgWeekKey(d), e1 = kg / (kgPct(r) / 100);
+    let w = weeks.find((x) => x.wk === wk);
+    if (!w) weeks.push(w = { wk, e1: 0, kg: 0, date: d });
+    if (e1 > w.e1) { w.e1 = e1; w.kg = kg; }
+    if (d > w.date) w.date = d;
+  });
+  if (!weeks.length) return null;
+  weeks.sort((a, b) => b.wk - a.wk);
+  const light = (i) => i + 1 < weeks.length && weeks[i].e1 < weeks[i + 1].e1 * 0.93;
+  let mode, e1;
+  if (weeks[0].wk === kgWeekKey(today)) { mode = 'same'; e1 = weeks[0].e1; }
+  else if ((today - weeks[0].date) / 864e5 > KG_GAP_DAYS) { mode = 'hold'; e1 = weeks[0].e1 * 0.95; }
+  else {
+    let streak = 0; for (let i = 0; i < weeks.length && !light(i); i++) streak++;
+    if (streak >= KG_WAVE) { mode = 'light'; e1 = weeks[0].e1 * KG_LIGHT; }
+    else {
+      // Vừa xong tuần nhẹ → quay về đỉnh trước đó rồi tăng tiếp.
+      const base = light(0) ? Math.max(...weeks.slice(1, 4).map((w) => w.e1)) : weeks[0].e1;
+      mode = 'up'; e1 = base * (1 + KG_UP);
+    }
+  }
+  const step = kgStep(name);
+  const at = (x) => x * kgPct(reps) / 100;
+  let kg = Math.round(at(e1) / step) * step;
+  if (mode === 'up') {
+    const prev = Math.round(at(light(0) ? e1 / (1 + KG_UP) : weeks[0].e1) / step) * step;
+    if (kg <= prev) kg = prev + step;    // tạ nhỏ: +2,5% làm tròn về số cũ → kẹt mãi, nên nhích đúng một nấc
+  }
+  if (!(kg > 0)) return null;
+  return { kg: +kg.toFixed(2), reps, mode, last: weeks[0].kg };
+}
+function kgSuggestFor(key, ex, phase) {
+  if (!activeClient || activeClient.isGroup || ex.bw || normPhaseTag(phase) !== 'strength') return null;
+  if (_kgAge.cid !== activeClient.id || _kgAge.minor !== false) return null;   // chưa biết tuổi → chưa gợi ý
+  return kgSuggestCore(getStrengthHistory(key, ex.name), ex.setsReps, ex.name);
+}
+function kgChipHTML(key, s) {
+  if (!s) return '';
+  const tag = s.mode === 'light' ? ' · ' + T('tuần nhẹ') : s.mode === 'hold' ? ' · ' + T('nghỉ lâu') : '';
+  const kg = String(s.kg).replace('.', _lang === 'en' ? '.' : ',');
+  return `<button type="button" class="kg-sug${s.mode === 'light' ? ' kg-light' : ''}" data-i18n-skip
+    onclick="event.stopPropagation();kgUseSuggest('${key}')"
+    title="${escHtml(T('Chạm để điền vào các set còn trống'))}">${escHtml(T('Gợi ý'))} ${kg}kg × ${s.reps}${escHtml(tag)}</button>`;
+}
+/** Điền gợi ý vào các ô set còn TRỐNG của bài (không đụng ô đã gõ). */
+function kgUseSuggest(key) {
+  const s = _kgSug[key];
+  if (!s) return;
+  const n = document.querySelectorAll('#card_' + CSS.escape(key) + ' .set-load-input').length || 1;
+  for (let si = 0; si < n; si++) if (getSetLoad(key, si) === '') setSetLoad(key, si, s.kg);
+  renderExercises();
+}
+/** Tuổi khách cho kg gợi ý: baseline.age → profile.dob → "15 tuổi" trong ghi chú / mục tiêu. Không đọc được → coi như chưa biết. */
+async function kgLoadAge(cid) {
+  if (_kgAge.cid === cid && _kgAge.minor !== null) return;
+  _kgAge = { cid, minor: null };
+  let minor = null;
+  try {
+    const [b, p] = await Promise.all([
+      getDoc(doc(db, 'clients', cid, 'assessment', 'baseline')).catch(() => null),
+      getDoc(doc(db, 'clients', cid, 'profile', 'data')).catch(() => null),
+    ]);
+    const age = b && b.exists ? Number((b.data() || {}).age) : NaN;
+    const dob = p && p.exists ? (p.data() || {}).dob : null;
+    const a2 = dob ? youthAge(dob) : null;
+    const c = (clientsData || []).find((x) => x.id === cid) || activeClient || {};
+    const m = String((c.notes || '') + ' ' + (c.goal || '')).match(/(\d{1,2})\s*tuổi/iu);
+    minor = Number.isFinite(age) && age > 0 ? age < 18 : a2 != null ? a2 < 18 : m ? Number(m[1]) < 18 : false;
+  } catch (_e) { minor = null; }
+  if (_kgAge.cid === cid) _kgAge.minor = minor;
+}
+
 /**
  * Huy hiệu ↑/↓ kg + Stats chạy NỀN (2026-11-15): lịch sử sức mạnh cần 2 lượt mạng NỐI TIẾP (danh sách buổi →
  * bài của từng buổi). Trước đây mở app / đổi khách phải chờ nó — trên điện thoại là cả giây. Màn hình hiện
@@ -6290,7 +6389,7 @@ async function loadStrengthHistory() {
  */
 function strengthInBackground() {
   const cid = activeClient && activeClient.id;
-  return loadStrengthHistory().then(() => {
+  return Promise.all([loadStrengthHistory(), cid ? kgLoadAge(cid) : null]).then(() => {
     if (!activeClient || activeClient.id !== cid) return;   // lỗi mạng vẫn vẽ Stats (nó tự đọc lại)
     renderExercises();
     renderStats();
@@ -6584,6 +6683,8 @@ function renderExercises() {
         const done = !!(exerciseState[activeClient.id] && exerciseState[activeClient.id][key]);
         const vKey = 'v_'+activeClient.id+'_'+activeDay+'_'+pi+'_'+ei;
         vKeys.push(vKey);
+        const sug = kgSuggestFor(key, ex, phase);
+        if (sug) _kgSug[key] = sug; else delete _kgSug[key];
         if (ei > 0) html += `<div class="flow-arrow">→</div>`;
         // Compact card: number + name + big check on one line, set chips side by side.
         // Max 4 sets across all real programs, so the chips always fit one row.
@@ -6592,7 +6693,7 @@ function renderExercises() {
             <span class="node-num">${String(ei+1).padStart(2,'0')}</span>
             <div class="node-title" onclick="openModal(${pi},${ei})">
               <div class="node-name${done?' done':''}">${ex.group?`<span class="blk-grp">${escHtml(ex.group)}</span>`:''}${Number(ex.minute)>0?`<span class="blk-grp">${escHtml(T('Phút ' + ex.minute))}</span>`:''}${ex.name}</div>
-              <div class="node-sets">${ex.setsReps}${ex.tempo?' · '+ex.tempo:''}${ex.bw?`<span class="bw-chip" title="Loads are entered as weight added to bodyweight">BW ${_clientBodyweight>0?_clientBodyweight+'kg':'—'}</span>`:''}${getStrengthBadge(key, ex.name)}</div>
+              <div class="node-sets">${ex.setsReps}${ex.tempo?' · '+ex.tempo:''}${ex.bw?`<span class="bw-chip" title="Loads are entered as weight added to bodyweight">BW ${_clientBodyweight>0?_clientBodyweight+'kg':'—'}</span>`:''}${getStrengthBadge(key, ex.name)}${kgChipHTML(key, sug)}</div>
               ${(ex.intensity || exRest(ex) || ex.regression) ? `<div class="blk-ex" data-i18n-skip>${[ex.intensity ? escHtml(ex.intensity) : '', exRest(ex) ? escHtml(T('nghỉ') + ' ' + exRest(ex)) : '', ex.regression ? escHtml(T('dễ hơn') + ': ' + ex.regression) : ''].filter(Boolean).join(' · ')}</div>` : ''}
             </div>
             <div class="node-check${done?' done':''}" onclick="event.stopPropagation();toggleExercise('${key}')">${done?'✓':''}</div>
@@ -6601,7 +6702,7 @@ function renderExercises() {
             ${Array.from({length: parseSetsCount(ex.setsReps, normPhaseTag(phase))}, (_,si) => `
               <label class="set-load-row">
                 <span class="set-load-label">S${si+1}</span>
-                <input class="set-load-input${ex.bw?' set-load-bw':''}" type="number" ${ex.bw?'':'min="0" '}step="0.5" placeholder="${ex.bw?'+0':'—'}"
+                <input class="set-load-input${ex.bw?' set-load-bw':''}" type="number" ${ex.bw?'':'min="0" '}step="0.5" placeholder="${ex.bw?'+0':(sug?sug.kg:'—')}"
                   value="${getSetLoad(key,si)}" oninput="setSetLoad('${key}',${si},this.value)">
               </label>`).join('')}
             <button class="node-info" onclick="openModal(${pi},${ei})" aria-label="Chi tiết, tempo, video">i</button>
@@ -18193,6 +18294,9 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   display:flex;align-items:center;gap:7px;flex-wrap:wrap;
 }
 /* strength badge now sits inline on the meta line */
+#workout-page .node-sets .kg-sug{display:inline-flex;align-items:center;min-height:28px;margin:0 0 0 6px;padding:2px 9px;border-radius:999px;border:1px solid rgba(143,219,255,.45);background:rgba(143,219,255,.12);color:#8FDBFF;font:800 11.5px 'Figtree',sans-serif;cursor:pointer;white-space:nowrap;}
+#workout-page .node-sets .kg-sug.kg-light{border-color:rgba(255,206,120,.45);background:rgba(255,206,120,.12);color:#FFCE78;}
+#workout-page .node-sets .kg-sug:focus-visible{outline:2px solid #fff;outline-offset:2px;}
 #workout-page .node-sets .str-badge{margin:0 !important;padding:2px 7px !important;font-size:10.5px !important;border-radius:6px !important;}
 /* per-set kg chips — side by side, max 4 sets so they always fit one row */
 #workout-page .node-setloads{
@@ -22195,6 +22299,7 @@ Object.assign(I18N_VI_EN, {
   'Độ dài buổi': 'Session length', 'Điều chỉnh cho buổi này': 'Adjustments for this session', 'Soạn 1 buổi': 'Design 1 session',
   'Mỗi lần soạn ĐÚNG 1 buổi — các buổi khác của lớp giữ nguyên.': 'Designs exactly 1 session — the class\'s other sessions stay as they are.',
   'Một lớp = một hồ sơ. Mỗi lần soạn ĐÚNG 1 buổi — buổi sau soạn tiếp trong luồng của lớp. Dụng cụ ghi kèm SỐ LƯỢNG để chia trạm.': 'One class = one profile. Each run designs exactly 1 session — design the next one from the class thread. List equipment WITH quantities so stations can be split.',
+  'Gợi ý': 'Suggested', 'tuần nhẹ': 'light week', 'nghỉ lâu': 'after a break', 'Chạm để điền vào các set còn trống': 'Tap to fill the empty sets',
   'Ghi chú coach': 'Coach notes', 'nghỉ': 'rest', 'dễ hơn': 'easier', 'Set thẳng': 'Straight sets',
   'Lớp đã đủ 7 buổi — chọn một buổi để làm lại.': 'This class already has 7 sessions — pick one to redo.',
   // Chat coach ↔ khách
