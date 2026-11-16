@@ -386,7 +386,10 @@ Key routing rules:
   body-muscles · Ivan Vulović · **Apache-2.0** — giữ ghi công trong file, `lib/anatomy-map.LICENSE.txt`, dòng chân tab),
   tải lười. Bản đồ PHẲNG 2 mặt: "xoay 360°" = lật thẻ (rotateY) — không phải mô hình 3D. Hoạt ảnh chạy bằng JS
   (`anAnimateTo`) và mặt quay đi ẩn bằng `visibility` mỗi khung: WebKit/iPhone bỏ qua backface-visibility → mặt trước
-  lộ xuyên mặt sau. `AN_REGION` (vùng → nhóm), `AN_GROUPS` (27 nhóm, vi + en: vị trí, chức năng, mẹo tập), bài gợi ý
+  lộ xuyên mặt sau. File hình TẠO BẰNG `node scripts/anatomy/build-map.js <clone body-muscles>` — nhãn gốc SAI giải phẫu
+  (soát 2026-11-16: "shoulder-side" là cả khối vai, vai trước gần như không chạm được; "serratus"/"obliques" nằm trên múi
+  bụng; "lats-upper" phủ bả vai + vai sau) → script gán lại theo VỊ TRÍ mảnh, mỗi mục mang sẵn nhóm (mục thứ 4).
+  `AN_GROUPS` (29 nhóm, thêm chóp xoay & cơ tròn, cơ cánh tay; vi + en: vị trí, chức năng, mẹo tập), bài gợi ý
   = `anExercises()` từ thư viện (`cdMapMuscle`, P > S, từ khoá, tối đa 2 bài/kiểu động tác; ẩn bài riêng của coach khác);
   thư viện thiếu thì hiện `alt` "gợi ý chung". `tests/anatomy.test.js`.
 - **Chat theo khách**: tab tên khách trong khung trợ lý (hoặc nút "Hỏi AI về khách này" trên hồ sơ). Lưu ở

@@ -12552,33 +12552,17 @@ window.__finishWorkout = finishWorkout;
  * tab). Đó là bản đồ PHẲNG hai mặt: "xoay 360°" là lật tấm thẻ hai mặt trong 3D (CSS rotateY), không phải mô hình
  * 3D — góc nghiêng thấy tấm hình mỏng lại. Tải lười lần đầu mở tab (~16 KB).
  *
- * AN_REGION: id vùng → khoá nhóm. Vùng không phải cơ (đầu, bàn tay, khớp gối…) = null → chỉ vẽ nền, không chạm.
+ * Nhóm của từng vùng nằm SẴN trong lib/anatomy-map.js (mục thứ 4), do scripts/anatomy/build-map.js gán — script đó
+ * sửa nhãn gốc cho đúng giải phẫu (vai trước / giữa / sau, chóp xoay, bụng thẳng / chéo / răng trước…). null = không
+ * phải cơ (đầu, bàn tay, khớp gối…) → chỉ vẽ nền, không chạm.
  * AN_GROUPS: nội dung từng nhóm. `lib` = vùng chuẩn của app (cdMapMuscle / MUSCLE_CANON_LABEL) để tìm bài trong
  * thư viện theo vai trò P/S; `kw` = từ khoá tên bài ưu tiên; `alt` = gợi ý chung khi thư viện có quá ít bài.
  */
-const AN_REGION = (id) => {
-  const b = id.replace(/-(left|right)$/, '');
-  const m = {
-    'neck': 'neck', 'nape': 'neck',
-    'shoulder-front': 'delt-f', 'shoulder-side': 'delt-s', 'deltoid-rear': 'delt-r',
-    'traps-upper': 'traps', 'traps-mid': 'traps-lo', 'traps-lower': 'traps-lo',
-    'lats-upper': 'lats', 'lats-mid': 'lats', 'lats-lower': 'lats',
-    'biceps': 'biceps', 'triceps-long': 'triceps', 'triceps-lateral': 'triceps',
-    'forearm': 'forearm-flex', 'forearm-flexors': 'forearm-flex', 'forearm-extensors': 'forearm-ext',
-    'chest-upper': 'chest-upper', 'chest-lower': 'chest-lower',
-    'abs-upper': 'abs', 'abs-lower': 'abs', 'obliques': 'obliques', 'serratus-anterior': 'serratus',
-    'hip-flexor': 'hip-flex', 'quads': 'quads', 'adductors': 'adductors', 'tibialis-anterior': 'tibialis',
-    'lower-back-erectors': 'erectors', 'lower-back-ql': 'ql',
-    'gluteus-maximus': 'glute-max', 'gluteus-medius': 'glute-med',
-    'hamstrings-medial': 'hams', 'hamstrings-lateral': 'hams',
-    'calves-gastroc-medial': 'gastroc', 'calves-gastroc-lateral': 'gastroc', 'calves-soleus': 'soleus',
-  };
-  return m[b] || null;
-};
+const AN_REGION = (r) => (r && r[3]) || null;
 
 const AN_AREAS = [
-  ['upper', { vi: 'Thân trên', en: 'Upper body' }, ['chest-upper', 'chest-lower', 'delt-f', 'delt-s', 'delt-r', 'traps', 'traps-lo', 'lats', 'neck']],
-  ['arms', { vi: 'Tay', en: 'Arms' }, ['biceps', 'triceps', 'forearm-flex', 'forearm-ext']],
+  ['upper', { vi: 'Thân trên', en: 'Upper body' }, ['chest-upper', 'chest-lower', 'delt-f', 'delt-s', 'delt-r', 'rotator', 'traps', 'traps-lo', 'lats', 'neck']],
+  ['arms', { vi: 'Tay', en: 'Arms' }, ['biceps', 'brachialis', 'triceps', 'forearm-flex', 'forearm-ext']],
   ['core', { vi: 'Bụng – lưng dưới', en: 'Core' }, ['abs', 'obliques', 'serratus', 'erectors', 'ql']],
   ['legs', { vi: 'Hông – chân', en: 'Hips & legs' }, ['glute-max', 'glute-med', 'hip-flex', 'quads', 'hams', 'adductors', 'gastroc', 'soleus', 'tibialis']],
 ];
@@ -12640,6 +12624,14 @@ const AN_GROUPS = {
     tip: { vi: 'Quan trọng cho tư thế và vai khoẻ. Bài kéo ngang: kết thúc bằng khép bả vai, đừng chỉ kéo tay.', en: 'Key for posture and healthy shoulders. In rows, finish by squeezing the shoulder blades, not just pulling with the arms.' },
     alt: ['Chest-Supported Row', 'Seated Cable Row', 'Prone Y Raise'],
   },
+  rotator: {
+    vi: 'Chóp xoay & cơ tròn', en: 'Rotator cuff & teres', la: 'Infraspinatus · Teres minor · Teres major', lib: ['rotator', 'teres'],
+    kw: /external rotation|rotator|face pull|cuban|y.?t.?w|no.?money|sleeper/i,
+    where: { vi: 'Mặt sau xương bả vai: cơ dưới gai và cơ tròn bé (thuộc chóp xoay) bám vào chỏm xương cánh tay; cơ tròn lớn ở bờ ngoài phía dưới bả vai, chạy cùng lưng xô.', en: 'The back of the shoulder blade: infraspinatus and teres minor (part of the rotator cuff) attach to the top of the upper-arm bone; teres major sits on the lower outer edge of the blade, alongside the lats.' },
+    fn: { vi: ['Xoay ngoài cánh tay (dưới gai, tròn bé)', 'Giữ chỏm xương cánh tay nằm vững trong ổ khớp khi giơ tay, đẩy, ném, đấm', 'Tròn lớn: duỗi, khép và xoay trong cánh tay (cùng lưng xô)'], en: ['External rotation of the arm (infraspinatus, teres minor)', 'Keeps the ball of the shoulder centred in its socket when reaching, pressing, throwing and punching', 'Teres major: extends, adducts and internally rotates the arm (with the lats)'] },
+    tip: { vi: 'Xoay ngoài với cáp / dây chun, tạ nhẹ, chậm, khuỷu sát sườn — tốt khi khởi động buổi đẩy và cho người hay đau vai.', en: 'Cable or band external rotations — light, slow, elbow tucked to the side. Good in push-day warm-ups and for cranky shoulders.' },
+    alt: ['Cable External Rotation', 'Side-Lying Dumbbell External Rotation', 'Face Pull'],
+  },
   lats: {
     vi: 'Cơ lưng xô', en: 'Lats', la: 'Latissimus dorsi', lib: ['lats', 'teres'],
     kw: /pull.?up|chin.?up|pulldown|pull.?down|row|pullover/i,
@@ -12663,6 +12655,14 @@ const AN_GROUPS = {
     fn: { vi: ['Gập khuỷu', 'Ngửa cẳng tay — xoay lòng bàn tay lên', 'Hỗ trợ gập vai'], en: ['Elbow flexion', 'Supination — turning the palm up', 'Assists shoulder flexion'] },
     tip: { vi: 'Cuốn với lòng bàn tay ngửa hẳn. Cuốn ở ghế dốc (tay sau thân) giãn đầu dài nhiều hơn.', en: 'Curl with the palm fully turned up. Incline curls (arm behind the body) stretch the long head more.' },
     alt: ['Dumbbell Curl', 'Barbell Curl', 'Incline Dumbbell Curl'],
+  },
+  brachialis: {
+    vi: 'Cơ cánh tay', en: 'Brachialis', la: 'Brachialis', lib: ['biceps'],
+    kw: /hammer|reverse curl|reverse grip curl|zottman|preacher/i,
+    where: { vi: 'Nằm dưới cơ nhị đầu, lộ ra ở mặt ngoài cánh tay giữa nhị đầu và tam đầu; từ nửa dưới xương cánh tay xuống xương trụ.', en: 'Under the biceps, showing on the outer arm between biceps and triceps; from the lower half of the upper-arm bone to the ulna.' },
+    fn: { vi: ['Gập khuỷu ở MỌI tư thế cẳng tay (ngửa, sấp, búa) — cơ gập khuỷu khoẻ nhất'], en: ['Elbow flexion in every forearm position (palm up, down or neutral) — the strongest elbow flexor'] },
+    tip: { vi: 'Cuốn búa và cuốn sấp tay nhấn cơ này hơn, vì nhị đầu yếu đi khi lòng bàn tay không ngửa. Phát triển tốt làm cánh tay dày hơn khi nhìn nghiêng.', en: 'Hammer and reverse curls bias it, because the biceps is weaker when the palm is not turned up. A well-developed brachialis makes the arm look thicker from the side.' },
+    alt: ['Hammer Curl', 'Reverse Curl', 'Preacher Curl'],
   },
   triceps: {
     vi: 'Cơ tam đầu', en: 'Triceps', la: 'Triceps brachii', lib: ['triceps'],
@@ -12837,7 +12837,7 @@ async function renderAnatomy() {
   const svg = (v) => {
     const vb = v === 'f' ? '0 0 35 93' : '37 0 35 93';
     const paths = window.ANATOMY_MAP.filter((r) => r[1] === v).map((r) => {
-      const g = AN_REGION(r[0]);
+      const g = AN_REGION(r);
       return g ? '<path class="an-m" data-g="' + g + '" d="' + r[2] + '"><title>' + escHtml(anL(AN_GROUPS[g])) + '</title></path>'
         : '<path class="an-bg" d="' + r[2] + '"/>';
     }).join('');

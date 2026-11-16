@@ -5,7 +5,7 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const mapSrc = fs.readFileSync(path.join(root, 'lib', 'anatomy-map.js'), 'utf8');
 
 // 1. Ghi công giấy phép Apache-2.0 của body-muscles phải còn trong file hình + chân tab + bản LICENSE.
-assert.ok(/Ivan Vulović/.test(mapSrc) && /Apache License 2\.0/.test(mapSrc), 'attribution in lib/anatomy-map.js');
+assert.ok(/Ivan Vulović/.test(mapSrc) && /Apache License 2\.0/.test(mapSrc) && /Thay đổi:/.test(mapSrc), 'attribution + change notice in lib/anatomy-map.js');
 assert.ok(fs.existsSync(path.join(root, 'lib', 'anatomy-map.LICENSE.txt')), 'LICENSE copy');
 assert.ok(/body-muscles<\/a> · Ivan Vulović · Apache-2.0/.test(html), 'credit line in tab');
 
@@ -21,15 +21,26 @@ vm.runInContext([fn('escHtml'), block('var CD_MUSCLE_MAP = {'), block('var CD_MU
   'this.AN_REGION = AN_REGION; this.AN_GROUPS = AN_GROUPS; this.AN_AREAS = AN_AREAS; this.anExercises = anExercises; this.anFacing = anFacing;'].join('\n'), ctx);
 const { AN_REGION, AN_GROUPS, AN_AREAS, anExercises, anFacing, ANATOMY_MAP } = ctx;
 
-// 3. Hình: đủ 89 vùng, mỗi vùng hoặc không phải cơ (null) hoặc thuộc một nhóm có nội dung.
-assert.strictEqual(ANATOMY_MAP.length, 89);
+// 3. Hình (scripts/anatomy/build-map.js): mỗi mục hoặc không phải cơ (null) hoặc thuộc một nhóm có nội dung.
+assert.ok(ANATOMY_MAP.length >= 89, 'map entries');
 const used = new Set();
-ANATOMY_MAP.forEach(([id, v, d]) => {
+ANATOMY_MAP.forEach((r) => {
+  const [id, v, d] = r;
   assert.ok(v === 'f' || v === 'b', id);
-  assert.ok(/^[mM]/.test(d), id + ' path');
-  const g = AN_REGION(id);
+  assert.ok(/^M /.test(d), id + ' path');
+  const g = AN_REGION(r);
   if (g) { assert.ok(AN_GROUPS[g], id + ' → ' + g); used.add(g); }
 });
+// Soát 2026-11-16 (coach báo thiếu vai trước): các nhóm này phải có vùng chạm được, ở ĐÚNG mặt và đủ lớn.
+const P = require(path.join(root, 'scripts', 'anatomy', 'pathlib.js'));
+const area = (g, v) => ANATOMY_MAP.filter((r) => r[3] === g && r[1] === v).reduce((a, r) => a + P.parse(r[2]).reduce((b, sub) => {
+  const p = P.pts(sub); let s2 = 0; for (let i = 0; i < p.length; i++) { const q = p[(i + 1) % p.length]; s2 += p[i][0] * q[1] - q[0] * p[i][1]; } return b + Math.abs(s2) / 2; }, 0), 0);
+[['delt-f', 'f', 6], ['delt-s', 'f', 3], ['delt-r', 'b', 4], ['rotator', 'b', 4], ['serratus', 'f', 2], ['obliques', 'f', 6], ['abs', 'f', 20], ['brachialis', 'f', 1]]
+  .forEach(([g, v, min]) => assert.ok(area(g, v) >= min, g + ' too small on ' + v + ': ' + area(g, v).toFixed(2)));
+// Cơ răng trước ở mạn sườn, không nằm trên cột cơ bụng giữa.
+const MIDF = 15.85;
+ANATOMY_MAP.filter((r) => r[3] === 'serratus').forEach((r) => P.parse(r[2]).forEach((sub) => assert.ok(Math.abs(P.centroid(sub)[0] - MIDF) > 3, 'serratus on the midline')));
+ANATOMY_MAP.filter((r) => r[3] === 'abs').forEach((r) => P.parse(r[2]).forEach((sub) => assert.ok(Math.abs(P.centroid(sub)[0] - MIDF) < 3, 'abs off the midline')));
 // Mọi nhóm có vùng để chạm, và có trong danh sách theo khu vực (đúng một lần).
 const listed = AN_AREAS.flatMap((a) => a[2]);
 assert.strictEqual(new Set(listed).size, listed.length, 'group listed twice');
@@ -43,7 +54,7 @@ Object.keys(AN_GROUPS).forEach((g) => {
   assert.ok(G.la && Array.isArray(G.lib) && Array.isArray(G.alt) && G.alt.length, g + ' meta');
 });
 // Vùng không phải cơ không chạm được.
-['head', 'face', 'hand-left', 'foot-back-right', 'knee-left', 'elbow-right', 'spine'].forEach((id) => assert.strictEqual(AN_REGION(id), null, id));
+['head', 'face', 'hand-left', 'foot-back-right', 'knee-left', 'elbow-right', 'spine'].forEach((id) => assert.strictEqual(AN_REGION(ANATOMY_MAP.find((r) => r[0] === id)), null, id));
 
 // 4. Góc → mặt.
 assert.strictEqual(anFacing(0), 'f'); assert.strictEqual(anFacing(180), 'b'); assert.strictEqual(anFacing(-100), 'b');
