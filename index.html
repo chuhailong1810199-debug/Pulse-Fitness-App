@@ -1447,7 +1447,7 @@ async function switchClient(id) {
 
   activeClient = next;
   _recovery = [];                 // dữ liệu hồi phục của khách CŨ, phải xoá
-  _rcBriefCache = null; _rcBriefAt = null;   // nếu không, khách B thấy lời khuyên của khách A
+  _rcBriefCache = null; _rcBriefAt = null; _rcBriefStale = false;   // nếu không, khách B thấy lời khuyên của khách A
   checkRecoveryTab();             // hiện/ẩn tab Recovery theo khách mới (không await)
   _activity = []; checkActiveTab();
   _historyCache = null; // clear cache for new client
@@ -8700,6 +8700,180 @@ async function checkRecoveryTab() {
   syncHealthTab();
 }
 
+// ── TẬP LUYỆN CHO RECOVERY (2026-11-16) ─────────────────────────────────
+// BẢN SAO của functions/training-context.js (máy chủ dùng cho lời khuyên) — tab Recovery hiện cùng con số AI đọc.
+// tests/training-context.test.js bắt hai bản giống nhau. Sửa một bản phải sửa cả hai.
+const TR_DAY = 864e5;
+
+function trCat(sport) {
+  const s = String(sport || "").toLowerCase();
+  if (/run/.test(s)) return "run";
+  if (/strength|weight/.test(s)) return "strength";
+  if (/hiit|cardio|boxing|crossfit|interval|bootcamp/.test(s)) return "hiit";
+  if (/cycl|bik|spin/.test(s)) return "bike";
+  return "other";
+}
+
+const trNum = (v) => (typeof v === "number" && isFinite(v) ? v : null);
+function trT(at) {
+  const m = String(at || "").match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  return m ? Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5]) : null;   // giờ địa phương đọc như UTC — chỉ để so / trừ
+}
+function trDays(a, b) {   // số ngày từ b tới a, hai chuỗi YYYY-MM-DD
+  const p = String(a).split("-").map(Number), q = String(b).split("-").map(Number);
+  return Math.round((Date.UTC(p[0], p[1] - 1, p[2]) - Date.UTC(q[0], q[1] - 1, q[2])) / TR_DAY);
+}
+
+/** Buổi tập của Work list từ các doc activity (mới → cũ), đã chuẩn hoá. */
+function worklistWorkouts(activityDocs) {
+  const g = [], s = [], polar = [];
+  for (const d of activityDocs || []) {
+    if (!d) continue;
+    for (const w of ((d.garmin || {}).workouts || [])) if (w && w.at) g.push({ ...w, src: "garmin" });
+    for (const w of ((d.strava || {}).workouts || [])) if (w && w.at) s.push({ ...w, src: "strava" });
+    if (!d.garmin && !d.strava) for (const w of (d.workouts || [])) if (w && w.at) polar.push({ ...w, src: "polar" });
+  }
+  const gT = g.map((w) => trT(w.at));
+  const items = g.concat(s.filter((w) => !gT.some((t) => t != null && Math.abs(t - trT(w.at)) <= 120000)));
+  const use = items.length ? items : polar;
+  return use.map((w) => {
+    const cat = trCat(w.sport), km = trNum(w.distM) ? w.distM / 1000 : null;
+    return {
+      date: String(w.at).slice(0, 10), at: String(w.at).replace(" ", "T").slice(0, 16), cat, src: w.src,
+      name: w.name || null, sec: trNum(w.sec), km: km != null ? Math.round(km * 100) / 100 : null,
+      paceSec: cat === "run" && trNum(w.speed) > 0 ? Math.round(1000 / w.speed) : null,
+      hrAvg: trNum(w.hrAvg), hrMax: trNum(w.hrMax), load: trNum(w.load), teAer: trNum(w.teAer), teAna: trNum(w.teAna),
+    };
+  }).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+}
+
+/**
+ * Tóm tắt tập luyện tới ngày `today` (YYYY-MM-DD, giờ VN).
+ * sessions: buổi ghi trong app [{date, day, done, total, volume, muscles: {nhóm: set}}].
+ * Buổi NẶNG: Training Effect của Garmin (aerobic ≥ 3,5 hoặc anaerobic ≥ 2,5); buổi không có TE thì tải ≥ 1,5 × trung vị
+ * tải 28 ngày của chính người đó. Không đủ dữ liệu để biết → không gắn nặng.
+ */
+function trainingSummary(workouts, sessions, today) {
+  const ws = (workouts || []).filter((w) => { const g = trDays(today, w.date); return g >= 0 && g < 28; });
+  const ss = (sessions || []).filter((x) => x && x.date && (x.done || 0) > 0 && trDays(today, x.date) >= 0 && trDays(today, x.date) < 28);
+  const loads = ws.map((w) => w.load).filter((v) => v != null && v > 0).sort((a, b) => a - b);
+  const med = loads.length >= 4 ? loads[Math.floor((loads.length - 1) / 2)] : null;
+  const hard = (w) => (w.teAer != null || w.teAna != null)
+    ? ((w.teAer || 0) >= 3.5 || (w.teAna || 0) >= 2.5)
+    : (med != null && w.load != null && w.load >= 1.5 * med);
+  const win = (lo, hi) => {
+    const a = ws.filter((w) => { const g = trDays(today, w.date); return g >= lo && g < hi; });
+    const sd = new Set(a.filter((w) => w.cat === "strength").map((w) => w.date));
+    ss.forEach((x) => { const g = trDays(today, x.date); if (g >= lo && g < hi) sd.add(x.date); });
+    const byCat = {};
+    a.forEach((w) => { byCat[w.cat] = (byCat[w.cat] || 0) + 1; });
+    return {
+      sessions: a.length + ss.filter((x) => { const g = trDays(today, x.date); return g >= lo && g < hi && !a.some((w) => w.cat === "strength" && w.date === x.date); }).length,
+      byCat, strengthDays: sd.size,
+      runKm: Math.round(a.filter((w) => w.cat === "run").reduce((t, w) => t + (w.km || 0), 0) * 10) / 10,
+      min: Math.round(a.reduce((t, w) => t + (w.sec || 0), 0) / 60),
+      load: Math.round(a.reduce((t, w) => t + (w.load || 0), 0)),
+      loadN: a.filter((w) => w.load != null).length,
+      hard: a.filter(hard).length,
+    };
+  };
+  // Số tuần trước có DỮ LIỆU (tính từ buổi cũ nhất trong 28 ngày, tối đa 3): mới kết nối Garmin 2 tuần thì chia 2,
+  // không chia 3 — chia 3 kéo trung bình xuống và thổi tỉ lệ tuần này lên.
+  const oldest = Math.max(-1, ...ws.map((w) => trDays(today, w.date)), ...ss.map((x) => trDays(today, x.date)));
+  const prevWeeks = Math.max(0, Math.min(3, Math.ceil((oldest - 6) / 7)));
+  const d7 = win(0, 7), prev = win(7, 7 + 7 * prevWeeks);
+  const avg = (v) => (prevWeeks ? Math.round((v / prevWeeks) * 10) / 10 : 0);
+  const avg3 = { sessions: avg(prev.sessions), runKm: avg(prev.runKm), min: Math.round(avg(prev.min)), load: Math.round(avg(prev.load)) };
+  // Tỉ lệ tuần này / TB 3 tuần trước — theo tải nếu đa số buổi có tải, không thì theo phút. Cần ≥ 2 tuần dữ liệu trước đó.
+  const byLoad = d7.loadN > 0 && prev.loadN > 0 && d7.loadN >= (d7.sessions - d7.strengthDays) / 2;
+  const base = byLoad ? avg3.load : avg3.min, cur = byLoad ? d7.load : d7.min;
+  const ratio = prevWeeks >= 2 && base > 0 ? Math.round((cur / base) * 100) / 100 : null;
+  const since = (pred) => { const w = ws.find(pred); return w ? trDays(today, w.date) : null; };
+  const lastHardW = ws.find(hard);
+  const lastApp = ss.slice().sort((a, b) => String(b.date).localeCompare(String(a.date)))[0];
+  const appStrengthAgo = lastApp ? trDays(today, lastApp.date) : null;
+  const sAgo = since((w) => w.cat === "strength");
+  return {
+    today,
+    d7, avg3, ratio, ratioBasis: ratio == null ? null : byLoad ? "load" : "min",
+    prevWeeks,
+    daysSince: {
+      any: [since(() => true), appStrengthAgo].filter((v) => v != null).sort((a, b) => a - b)[0] ?? null,
+      run: since((w) => w.cat === "run"),
+      strength: [sAgo, appStrengthAgo].filter((v) => v != null).sort((a, b) => a - b)[0] ?? null,
+      hard: lastHardW ? trDays(today, lastHardW.date) : null,
+    },
+    lastHard: lastHardW ? { date: lastHardW.date, cat: lastHardW.cat, name: lastHardW.name, teAer: lastHardW.teAer, teAna: lastHardW.teAna, load: lastHardW.load } : null,
+    // 48 giờ gần nhất (hôm nay + hôm qua): buổi Work list + nhóm cơ của buổi tạ ghi trong app.
+    recent: ws.filter((w) => trDays(today, w.date) <= 1).map((w) => ({ ...w, hard: hard(w) })),
+    recentApp: ss.filter((x) => trDays(today, x.date) <= 1).map((x) => ({
+      date: x.date, day: x.day || null, done: x.done, total: x.total,
+      top: Object.entries(x.muscles || {}).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([m, n]) => m + " " + Math.round(n * 10) / 10),
+    })),
+    list14: ws.filter((w) => trDays(today, w.date) < 14).map((w) => ({ ...w, hard: hard(w) })),
+  };
+}
+
+/** Chữ ký để biết lời khuyên đã cũ: có buổi Work list / buổi app mới hơn lúc phân tích. */
+function trainingSig(workouts, sessions) {
+  // Chỉ buổi MỚI NHẤT — đếm tổng thì cửa sổ 28 ngày trượt qua ngày mới cũng làm chữ ký đổi.
+  const w = (workouts || [])[0], s = (sessions || []).filter((x) => (x.done || 0) > 0).map((x) => x.at || x.date).sort().pop();
+  return (w ? w.at : "") + "|" + (s || "");
+}
+// ── HẾT BẢN SAO ──
+
+/** Ngày YYYY-MM-DD theo giờ máy (khách ở VN). */
+function _rcYmd(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+/** Buổi tạ ghi trong app của khách đang mở (từ _historyCache — cùng nguồn lịch sử sức mạnh). */
+function _rcAppSessions() {
+  if (!_historyCache || !activeClient || _historyCache.clientId !== activeClient.id) return [];
+  return (_historyCache.docs || []).map((v) => {
+    const t = v.date && v.date.toDate ? v.date.toDate() : null;
+    return t ? { date: _rcYmd(t), at: t.toISOString(), day: v.day, done: v.done, total: v.total, volume: v.totalVolume, muscles: v.volumeByMuscle || {} } : null;
+  }).filter(Boolean);
+}
+const RC_CAT_VI = { run: 'chạy', strength: 'tạ', hiit: 'HIIT', bike: 'đạp xe', other: 'khác' };
+/** Khối "Tập luyện · 7 ngày" — đọc Work list (activity/.garmin|.strava) + buổi tạ ghi trong app, đúng thứ lời khuyên đọc. */
+function _rcMountTraining(wrap) {
+  if (wrap.querySelector('#rc-train')) return;
+  const wl = worklistWorkouts(_activity || []);
+  const T0 = trainingSummary(wl, _rcAppSessions(), _rcYmd(new Date()));
+  const d = T0.d7, a = T0.avg3, ds = T0.daysSince;
+  const box = document.createElement('section');
+  box.className = 'rc-sec';
+  box.id = 'rc-train';
+  const go = '<button type="button" class="rc-tr-go" onclick="showPage(\'worklist\')">' + escHtml(T('Mở Work list')) + ' →</button>';
+  if (!d.sessions && !T0.list14.length && ds.any == null) {
+    box.innerHTML = '<div class="rc-sec-head"><h2 class="rc-h2">' + escHtml(T('Tập luyện · 7 ngày')) + '</h2></div>'
+      + '<p class="hs-lead">' + escHtml(T('Chưa có buổi tập nào trong Work list 28 ngày qua. Kết nối Garmin hoặc Strava ở tab Work list để lời khuyên tính cả phần tập luyện.')) + '</p>' + go;
+  } else {
+    const tile = (k, v, sub, cls) => '<div class="rc-g-t' + (cls ? ' ' + cls : '') + '"><span class="rc-g-k">' + escHtml(T(k)) + '</span><b>' + v + '</b>'
+      + (sub ? '<span class="rc-g-s">' + sub + '</span>' : '') + '</div>';
+    const cats = Object.entries(d.byCat).map(([k, n]) => n + ' ' + T(RC_CAT_VI[k] || k)).join(' · ');
+    const r = T0.ratio, rCls = r == null ? '' : r > 1.5 ? 'rc-tr-hi' : r > 1.3 ? 'rc-tr-mid' : r < 0.7 ? 'rc-tr-lo' : 'rc-tr-ok';
+    const rTxt = r == null ? T('cần ≥ 2 tuần dữ liệu trước để so')
+      : (r > 1.5 ? T('tăng vọt') : r > 1.3 ? T('tăng nhanh') : r < 0.7 ? T('nhẹ hơn hẳn') : T('ổn định')) + ' · ' + T('so với TB') + ' ' + T0.prevWeeks + ' ' + T('tuần trước') + ' (' + T(T0.ratioBasis === 'load' ? 'theo tải' : 'theo phút') + ')';
+    const lh = T0.lastHard;
+    const rows = T0.list14.slice(0, 5).map((w) => '<li><span class="rc-tr-d">' + escHtml(_rcDate(w.date)) + '</span>'
+      + '<span class="rc-tr-n" data-i18n-skip>' + escHtml(w.name || T(RC_CAT_VI[w.cat] || w.cat)) + '</span>'
+      + '<span class="rc-tr-m">' + escHtml([_rcHM(w.sec), w.km ? w.km.toFixed(1) + ' km' : '', w.load != null ? T('tải') + ' ' + Math.round(w.load) : ''].filter(Boolean).join(' · ')) + '</span>'
+      + (w.hard ? '<span class="rc-tr-hard">' + escHtml(T('nặng')) + '</span>' : '') + '</li>').join('');
+    box.innerHTML = '<div class="rc-sec-head"><h2 class="rc-h2">' + escHtml(T('Tập luyện · 7 ngày')) + '</h2><span class="rc-micro">Work list</span></div>'
+      + '<div class="rc-g">'
+      + tile('Buổi tập', String(d.sessions), escHtml(cats || T('chỉ buổi tạ trong app')))
+      + tile('Chạy', d.runKm + ' km', escHtml(T0.prevWeeks ? T('TB tuần trước đó') + ' ' + a.runKm + ' km' : T('chưa có tuần trước để so')))
+      + tile('Ngày tập tạ', String(d.strengthDays), escHtml(ds.strength != null ? T('gần nhất') + ' ' + (ds.strength === 0 ? T('hôm nay') : ds.strength + ' ' + T('ngày trước')) : T('chưa có')))
+      + tile('Tải tuần', r == null ? '—' : '×' + r.toFixed(2), escHtml(rTxt), rCls)
+      + tile('Buổi nặng gần nhất', ds.hard == null ? '—' : ds.hard === 0 ? T('hôm nay') : ds.hard + ' ' + T('ngày'),
+          lh ? '<span data-i18n-skip>' + escHtml((lh.name || T(RC_CAT_VI[lh.cat] || lh.cat)) + ' · ' + _rcDate(lh.date)) + '</span>' : escHtml(T('không có buổi nặng trong 28 ngày')))
+      + '</div>'
+      + (rows ? '<ul class="rc-tr-list">' + rows + '</ul>' : '')
+      + '<p class="hs-lead">' + escHtml(T('Lời khuyên ở đầu trang đọc cả phần này cùng giấc ngủ và hồi phục. "Nặng" = Training Effect của Garmin cao, hoặc tải ≥ 1,5 lần mức thường của bạn.')) + '</p>' + go;
+  }
+  const after = wrap.querySelector('#rc-rings');
+  if (after && after.parentNode) after.parentNode.insertBefore(box, after.nextSibling); else wrap.appendChild(box);
+}
+
 async function loadRecovery() {
   const wrap = document.getElementById('recovery-body');
   if (!wrap || !activeClient) return;
@@ -8743,6 +8917,7 @@ function renderRecovery() {
   _rcMountSleep(wrap);
   _rcMountRings(wrap);
   _rcMountGarmin(wrap);
+  _rcMountTraining(wrap);       // sau Garmin nhưng chèn ngay dưới ba vòng: tập luyện đứng cạnh hồi phục
   // Healthspan chuyển sang tab Health riêng, không mount ở đây nữa.
 }
 
@@ -9635,7 +9810,7 @@ function _rcBriefIdle(box) {
     + 'và nhận lời khuyên cho hôm nay.</p>';
 }
 
-let _rcBriefCache = null, _rcBriefAt = null;
+let _rcBriefCache = null, _rcBriefAt = null, _rcBriefStale = false;
 
 /**
  * Ba chế độ, vì mỗi lần gọi model là mất tiền thật:
@@ -9669,6 +9844,7 @@ async function recoveryBrief(mode) {
     if (res.data.empty) { _rcBriefIdle(box); return; }
     _rcBriefCache = res.data.brief;
     _rcBriefAt    = res.data.at;
+    _rcBriefStale = !!res.data.stale;
     _rcBriefPaint(_rcBriefCache, _rcBriefAt);
   } catch (e) {
     if (mode === 'cached') { _rcBriefIdle(box); return; }
@@ -9700,7 +9876,10 @@ function _rcBriefPaint(b, at) {
       + '<p class="rc-brief-p">' + escHtml(txt) + '</p></div>' : '';
 
   box.innerHTML =
-    '<div class="rc-brief-top">'
+    // Có buổi tập mới (Work list / buổi tạ) sau lúc phân tích → lời khuyên chưa tính buổi đó.
+    (_rcBriefStale ? '<div class="rc-brief-stale"><span>' + escHtml(T('Có buổi tập mới sau lần phân tích này — lời khuyên chưa tính buổi đó.')) + '</span>'
+      + '<button type="button" onclick="recoveryBrief(\'auto\')">' + escHtml(T('Cập nhật lời khuyên')) + '</button></div>' : '')
+    + '<div class="rc-brief-top">'
       + '<span class="rc-brief-chip ' + st.cls + '">' + st.label + '</span>'
       + '<button class="rc-brief-again" onclick="rcBriefRedo()" title="Phân tích lại">↻</button>'
     + '</div>'
@@ -9760,7 +9939,7 @@ async function rcGarminSyncNow() {
     await fn({ clientId: activeClient.id });
     const cs = await getDoc(doc(db, 'clients', activeClient.id)).catch(() => null);
     if (cs && cs.exists) { const x = cs.data() || {}; activeClient.garminProfile = x.garminProfile || null; activeClient.garminSync = x.garminSync || null; }
-    _recovery = []; _activity = []; _rcBriefCache = null; _rcBriefAt = null;
+    _recovery = []; _activity = []; _rcBriefCache = null; _rcBriefAt = null; _rcBriefStale = false;
     if (document.getElementById('health-page')?.classList.contains('active')) await loadHealth(); else await loadRecovery();
   } catch (e) {
     set(T('Đồng bộ ngay'), false);
@@ -21636,6 +21815,18 @@ html.cp-lock, html.cp-lock body{ overflow:hidden; }
 .rc-brief-row .rc-brief-p{margin:0;}
 .rc-brief-watch{margin:13px 0 0;font-size:12.5px;line-height:1.5;color:var(--rc-txt);
   background:rgba(143,219,255,.09);border-left:2px solid #8FDBFF;border-radius:0 8px 8px 0;padding:8px 11px;}
+.rc-brief-stale{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-bottom:12px;padding:10px 14px;border-radius:12px;background:rgba(230,179,74,.12);border:1px solid rgba(230,179,74,.4);font-size:13.5px;color:#F2D49A;}
+.rc-brief-stale button{min-height:40px;padding:0 14px;border-radius:999px;border:0;background:#E6B34A;color:#161111;font:800 13px 'Figtree',sans-serif;cursor:pointer;}
+.rc-brief-stale button:focus-visible,.rc-tr-go:focus-visible{outline:2px solid #fff;outline-offset:2px;}
+#rc-train .rc-g-t.rc-tr-hi b{color:#EE5A4F;} #rc-train .rc-g-t.rc-tr-mid b{color:#E6B34A;} #rc-train .rc-g-t.rc-tr-ok b{color:#7ED9A0;} #rc-train .rc-g-t.rc-tr-lo b{color:#8FDBFF;}
+.rc-tr-list{list-style:none;margin:14px 0 10px;padding:0;display:flex;flex-direction:column;gap:6px;}
+.rc-tr-list li{display:flex;align-items:center;gap:10px;min-height:44px;padding:8px 12px;border-radius:12px;background:rgba(255,255,255,.05);font-size:14px;}
+.rc-tr-d{flex:none;width:64px;color:rgba(255,255,255,.65);font-size:13px;}
+.rc-tr-n{flex:1;min-width:0;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.rc-tr-m{flex:none;color:rgba(255,255,255,.72);font-size:13px;}
+.rc-tr-hard{flex:none;padding:2px 8px;border-radius:999px;background:rgba(238,90,79,.16);color:#FF8A80;font-size:11.5px;font-weight:800;}
+.rc-tr-go{margin-top:12px;min-height:44px;padding:0 16px;border-radius:999px;border:1px solid rgba(255,255,255,.2);background:transparent;color:#fff;font:700 14px 'Figtree',sans-serif;cursor:pointer;}
+@media (max-width:520px){ .rc-tr-list li{flex-wrap:wrap;row-gap:2px;} .rc-tr-m{order:3;width:100%;padding-left:74px;} }
 .rc-brief-at{margin-top:10px;font-size:11px;color:rgba(255,255,255,0.55);}
 .rc-brief-wait{font-size:13px;color:var(--rc-muted);padding:6px 0;}
 .rc-brief-err{font-size:13px;line-height:1.6;color:#F2A9A3;}

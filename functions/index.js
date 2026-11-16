@@ -2211,6 +2211,30 @@ const POLAR_API = "https://www.polaraccesslink.com";
 const { parseFitHeartRate } = require("./fit-hr");
 const { workoutStrain, dailyStrain, resolveHrMax } = require("./strain");
 const { buildContext } = require("./brief-context");
+const { worklistWorkouts, trainingSummary, trainingSig } = require("./training-context");
+
+/** Ngày YYYY-MM-DD theo giờ Việt Nam. */
+const vnDay = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ho_Chi_Minh" }).format(d || new Date());
+
+/**
+ * Đầu vào của lời khuyên Recovery ngoài các đêm: buổi tạ ghi trong app (workoutHistory, kèm set theo nhóm cơ) +
+ * buổi tập Work list (activity/{ngày}.garmin|strava.workouts, 28 ngày) → trainingSummary. sig = chữ ký buổi mới nhất,
+ * lưu cùng lời khuyên để biết lời khuyên đã cũ (có buổi tập mới sau lúc phân tích).
+ */
+async function briefInputs(cRef) {
+  const [wSnap, aSnap] = await Promise.all([
+    cRef.collection("workoutHistory").orderBy("date", "desc").limit(20).get(),
+    cRef.collection("activity").orderBy("date", "desc").limit(28).get(),
+  ]);
+  const workouts = wSnap.docs.map((d) => {
+    const v = d.data(), t = v.date && v.date.toDate ? v.date.toDate() : null;
+    return { date: t ? vnDay(t) : "?", at: t ? t.toISOString() : "", day: v.day, done: v.done, total: v.total,
+      totalVolume: v.totalVolume, volume: v.totalVolume, muscles: v.volumeByMuscle || {} };
+  });
+  const activity = aSnap.docs.map((d) => d.data());
+  const wl = worklistWorkouts(activity);
+  return { workouts, activity, training: trainingSummary(wl, workouts, vnDay()), sig: trainingSig(wl, workouts) };
+}
 
 // Client duy nhất đang nối Polar. Mỗi người cần token riêng, nên đây là map
 // chứ không phải một hằng số — thêm người sau này chỉ là thêm một dòng.
@@ -2779,6 +2803,28 @@ const _r = (v) => (typeof v === "number" ? Math.round(v) : "—");
 const _hm = (sec) => (sec == null ? "—"
   : Math.floor(sec / 3600) + "h" + String(Math.round((sec % 3600) / 60)).padStart(2, "0"));
 
+/** Mục 8 của bản tin: tóm tắt trainingSummary thành chữ. */
+function briefTrainingText(T) {
+  if (!T) return "(chưa đọc được Work list)";
+  const pace = (s) => (s ? Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") + "/km" : "");
+  const te = (w) => (w.teAer != null || w.teAna != null ? ` TE ${w.teAer ?? "—"}/${w.teAna ?? "—"}` : "");
+  const line = (w) => `${w.date} ${String(w.at).slice(11, 16)} ${w.cat}${w.name ? " \"" + w.name + "\"" : ""} ${_hm(w.sec)}`
+    + (w.km ? ` ${w.km} km` : "") + (w.paceSec ? ` ${pace(w.paceSec)}` : "")
+    + (w.hrAvg ? ` HR ${w.hrAvg}/${w.hrMax ?? "—"}` : "") + (w.load != null ? ` tải ${Math.round(w.load)}` : "") + te(w)
+    + (w.hard ? " [NẶNG]" : "");
+  const d = T.d7, a = T.avg3;
+  const cats = Object.entries(d.byCat).map(([k, v]) => `${k} ${v}`).join(", ") || "không có";
+  return `7 ngày qua: ${d.sessions} buổi (${cats}) · chạy ${d.runKm} km · ${d.strengthDays} ngày tập tạ · ${d.min} phút`
+    + ` · tổng tải ${d.loadN ? d.load : "—"} · ${d.hard} buổi nặng
+trung bình ${T.prevWeeks || 0} tuần trước đó: ${a.sessions} buổi/tuần · chạy ${a.runKm} km · ${a.min} phút · tải ${a.load}
+tuần này so với trung bình: ${T.ratio != null ? "×" + T.ratio + " (theo " + (T.ratioBasis === "load" ? "tải" : "phút") + ")" : "chưa tính được (cần ≥ 2 tuần dữ liệu trước đó)"}
+cách đây: buổi gần nhất ${T.daysSince.any ?? "—"} ngày · chạy ${T.daysSince.run ?? "—"} ngày · tạ ${T.daysSince.strength ?? "—"} ngày · buổi NẶNG ${T.daysSince.hard ?? "—"} ngày${T.lastHard ? ` (${T.lastHard.date} ${T.lastHard.cat}${T.lastHard.name ? " \"" + T.lastHard.name + "\"" : ""})` : ""}
+48 giờ qua: ${T.recent.length ? T.recent.map(line).join(" ; ") : "không có buổi Work list"}${T.recentApp.length ? " ; buổi tạ trong app: " + T.recentApp.map((x) => `${x.date} ${x.day || ""} ${x.done}/${x.total} bài — set nhiều nhất: ${x.top.join(", ") || "—"}`).join(" ; ") : ""}
+(NẶNG = Training Effect Garmin aerobic ≥ 3,5 hoặc anaerobic ≥ 2,5; buổi không có TE: tải ≥ 1,5 lần trung vị 28 ngày)
+buổi Work list 14 ngày (mới nhất trước):
+${T.list14.length ? T.list14.map((w) => "  · " + line(w)).join("\n") : "  (không có — khách chưa kết nối Garmin / Strava hoặc không tập)"}`;
+}
+
 function buildBriefPrompt(ctx) {
   const C = buildContext(ctx);
   if (!C) return null;
@@ -2801,9 +2847,13 @@ function buildBriefPrompt(ctx) {
     : "(không có)";
 
   const hist = C.history.length
-    ? C.history.map((w) => `${w.date} — ${w.day || "?"} — ${w.done ?? "?"}/${w.total ?? "?"} bài`
+    ? C.history.slice(0, 10).map((w) => `${w.date} — ${w.day || "?"} — ${w.done ?? "?"}/${w.total ?? "?"} bài`
         + (w.volume ? ` — ${Math.round(w.volume)} kg` : "")).join("\n")
-    : "(khách không tự ghi lại buổi tập trong app)";
+    : "(khách không tự ghi lại buổi tạ trong app)";
+  const trainingBlock = briefTrainingText(ctx.training);
+  const gm = (ctx.nights[0] || {}).garmin || null;
+  const garminRec = gm ? `Garmin: Body Battery ${(gm.bodyBattery || {}).high ?? "—"} cao / ${(gm.bodyBattery || {}).low ?? "—"} thấp`
+    + ` · Stress TB ${gm.stressAvg ?? "—"} · Training Readiness ${(gm.readiness || {}).score ?? "—"}${(gm.readiness || {}).level ? " (" + gm.readiness.level + ")" : ""}` : "";
 
   const days = Object.keys(ctx.program || {}).sort();
   const prog = days.length
@@ -2821,7 +2871,8 @@ function buildBriefPrompt(ctx) {
     : `hôm nay ${b.today ?? "—"}${unit} · chưa đủ đêm để dựng nền (${b.n})`;
 
   return `Bạn là huấn luyện viên thể hình đọc dữ liệu vòng đeo tay Polar của một khách.
-Nhiệm vụ: quyết định HÔM NAY khách nên tập thế nào, và nói rõ vì sao.
+Nhiệm vụ: quyết định HÔM NAY khách nên tập thế nào, và nói rõ vì sao — dựa trên CẢ mức hồi phục lẫn những gì khách
+đã tập (Work list: chạy bộ, tạ, …).
 
 KHÁCH
 tên ${ctx.client.name || "?"} | trình độ ${C.level || "?"} | ${C.sessionsPerWeek || "?"} buổi/tuần
@@ -2832,6 +2883,7 @@ GHI CHÚ / BỐI CẢNH: ${C.notes || "(không có)"}
 Nightly Recharge ${C.recovery.recharge ?? "—"}/6 (thang Polar: 1 rất kém … 4 ổn … 6 rất tốt)
 ANS charge ${C.recovery.ansCharge ?? "—"} (thang -10…+10, quanh 0 là mức thường ngày của khách)
 HRV ${C.recovery.hrv ?? "—"} ms | nhịp tim ngủ TB ${C.recovery.sleepingHr ?? "—"} | đáy thật trong đêm ${C.recovery.restingHrNight ?? "—"}
+${garminRec}
 
 ════ 2. SLEEP — khả năng phục hồi
 ngủ ${hm(C.sleep.total)} / mục tiêu ${hm(C.sleep.goal)} | sleep score ${C.sleep.score ?? "—"}
@@ -2861,7 +2913,9 @@ nhịp tim tối đa dùng để tính: ${C.hr.hrMax ?? "—"} (${C.hr.hrMaxSour
 phút mỗi vùng 7 ngày (z1→z5): ${C.hr.zoneMin7 ? C.hr.zoneMin7.join(" / ") : "—"}
 phút mỗi vùng 14 ngày: ${C.hr.zoneMin14 ? C.hr.zoneMin14.join(" / ") : "—"}
 
-════ 8. TRAINING HISTORY — khách tự ghi trong app
+════ 8. TẬP LUYỆN — Work list (buổi Garmin / Strava) + buổi tạ ghi trong app
+${trainingBlock}
+buổi tạ ghi trong app (10 gần nhất):
 ${hist}
 
 ════ 9. BASELINE CÁ NHÂN — so với trạng thái bình thường của CHÍNH khách này
@@ -2913,6 +2967,19 @@ QUY TẮC — bắt buộc
 
 9. Không chẩn đoán y khoa. Bất thường kéo dài thì khuyên đi khám.
 
+11. Lời khuyên phải bám HAI trục cùng lúc: RECOVERY (mục 1, 2, 3, 9 — cơ thể hồi tới đâu) và TẬP LUYỆN (mục 4, 5, 8
+    — đã tập gì, nặng tới đâu). "why" phải nêu ít nhất MỘT con số của mỗi trục. Recovery tốt không có nghĩa là
+    tập nặng nếu 48 giờ qua vừa có buổi nặng; recovery kém mà cả tuần gần như không tập thì nguyên nhân có thể
+    nằm ngoài tập luyện — nói rõ điều đó.
+
+12. "loadRead" đọc mục 8: tuần này bao nhiêu buổi / km chạy / buổi tạ, so với trung bình 3 tuần trước, buổi nặng
+    gần nhất cách mấy ngày. Tỉ lệ tuần này so với trung bình tăng vọt (khoảng trên 1,3 tới 1,5 lần) là tín hiệu
+    rủi ro cần cân cùng recovery, không phải luật cứng.
+
+13. nextSession không lặp lại kiểu tải vừa nặng trong 48 giờ: vừa chạy interval / chạy dài nặng thì tránh thêm buổi
+    chạy nặng; vừa tạ nặng một nhóm cơ (xem nhóm cơ trong mục 8) thì ưu tiên buổi giáo án tập nhóm khác hoặc nhẹ.
+    Khách chạy bộ: nói rõ buổi chạy kế tiếp nên là chạy nhẹ, chạy dài hay chất lượng.
+
 10. Toàn bộ trả lời bằng TIẾNG VIỆT, giọng trực tiếp, không hoa mỹ, không dùng
     dấu gạch ngang dài.
 
@@ -2956,16 +3023,10 @@ async function generateBriefIfMissing(clientId) {
       return latest.brief.text;
     }
 
-    const wSnap = await cRef.collection("workoutHistory").orderBy("date", "desc").limit(10).get();
-    const workouts = wSnap.docs.map((d) => {
-      const v = d.data();
-      const dt = v.date && v.date.toDate ? v.date.toDate().toISOString().slice(0, 10) : "?";
-      return { date: dt, day: v.day, done: v.done, total: v.total, totalVolume: v.totalVolume };
-    });
-    const aSnap = await cRef.collection("activity").orderBy("date", "desc").limit(14).get();
-    const activity = aSnap.docs.map((d) => d.data());
+    const inp = await briefInputs(cRef);
+    const { workouts, activity, training } = inp;
 
-    const prompt = buildBriefPrompt({ client, nights, program: client.program || {}, workouts, activity });
+    const prompt = buildBriefPrompt({ client, nights, program: client.program || {}, workouts, activity, training });
     const raw = await callGemini(GEMINI_API_KEY.value(), [{ type: "text", text: prompt }],
       BRIEF_SCHEMA, "recoveryBrief", "low");
 
@@ -2980,7 +3041,7 @@ async function generateBriefIfMissing(clientId) {
       brief.nextSession.sessionKey = "";
     }
     await cRef.collection("recovery").doc(latest.date)
-      .set({ brief: { text: brief, at: new Date().toISOString(), model: GEMINI_MODEL } }, { merge: true });
+      .set({ brief: { text: brief, at: new Date().toISOString(), model: GEMINI_MODEL, sig: inp.sig } }, { merge: true });
     console.log(`[brief] ${clientId} ${latest.date}: đã sinh`);
     return brief;
   } catch (e) {
@@ -3015,27 +3076,23 @@ exports.recoveryBrief = onCall(
     }
 
     const latest = nights[0];
-    if (!force && latest.brief && latest.brief.text) {
-      return { cached: true, date: latest.date, brief: latest.brief.text, at: latest.brief.at };
+    // Đọc tập luyện (Work list + buổi tạ trong app) TRƯỚC khi trả bản đã lưu: có buổi mới hơn lúc phân tích → bản
+    // đó đã cũ. Mở tab ('cached') chỉ báo stale, không gọi model; sau đồng bộ ('auto') thì sinh lại.
+    const inp = await briefInputs(cRef);
+    const has = latest.brief && latest.brief.text;
+    const stale = !!(has && latest.brief.sig !== undefined && latest.brief.sig !== inp.sig);
+    if (!force && has && (!stale || cachedOnly)) {
+      return { cached: true, date: latest.date, brief: latest.brief.text, at: latest.brief.at, stale };
     }
     // Chỉ lấy bản đã lưu, KHÔNG gọi model. Màn hình dùng đường này khi mở tab:
     // xem lại trong ngày phải miễn phí, chỉ lần sinh đầu tiên mới tốn token.
     if (cachedOnly) {
       return { cached: false, empty: true, date: latest.date, brief: null, at: null };
     }
-
-    const wSnap = await cRef.collection("workoutHistory").orderBy("date", "desc").limit(10).get();
-    const workouts = wSnap.docs.map((d) => {
-      const v = d.data();
-      const dt = v.date && v.date.toDate ? v.date.toDate().toISOString().slice(0, 10) : "?";
-      return { date: dt, day: v.day, done: v.done, total: v.total, totalVolume: v.totalVolume };
-    });
-
-    const aSnap = await cRef.collection("activity").orderBy("date", "desc").limit(14).get();
-    const activity = aSnap.docs.map((d) => d.data());
+    const { workouts, activity, training } = inp;
 
     const prompt = buildBriefPrompt({
-      client, nights, program: client.program || {}, workouts, activity,
+      client, nights, program: client.program || {}, workouts, activity, training,
     });
     const raw = await callGemini(GEMINI_API_KEY.value(), [{ type: "text", text: prompt }],
       BRIEF_SCHEMA, "recoveryBrief", "low");
@@ -3055,9 +3112,9 @@ exports.recoveryBrief = onCall(
 
     const at = new Date().toISOString();
     await cRef.collection("recovery").doc(latest.date)
-      .set({ brief: { text: brief, at, model: GEMINI_MODEL } }, { merge: true });
+      .set({ brief: { text: brief, at, model: GEMINI_MODEL, sig: inp.sig } }, { merge: true });
 
-    return { cached: false, date: latest.date, brief, at };
+    return { cached: false, date: latest.date, brief, at, stale: false };
   },
 );
 
