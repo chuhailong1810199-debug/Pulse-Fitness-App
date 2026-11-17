@@ -93,6 +93,7 @@ const getFirestore      = (app) => firebase.firestore();
 const getStorage        = (app) => firebase.storage();
 const GoogleAuthProvider = firebase.auth.GoogleAuthProvider;
 const signInWithPopup   = (auth, provider) => auth.signInWithPopup(provider);
+const signInWithRedirect = (auth, provider) => auth.signInWithRedirect(provider);
 const signOut           = (auth) => auth.signOut();
 const onAuthStateChanged = (auth, cb) => auth.onAuthStateChanged(cb);
 const serverTimestamp   = () => firebase.firestore.FieldValue.serverTimestamp();
@@ -420,18 +421,43 @@ function goalDirection(goal) {
   return gain && lose ? 'recomp' : gain ? 'gain' : lose ? 'lose' : 'recomp';
 }
 
-// ── IN-APP BROWSER DETECTION ───────────────────────────
-(function detectInAppBrowser() {
-  const ua = navigator.userAgent || '';
-  const isInApp = /FBAN|FBAV|FB_IAB|Messenger|Instagram|FB4A|FBIOS/i.test(ua);
-  if (!isInApp) return;
-  // Try Chrome first, fallback to Safari if Chrome not installed
-  const url = window.location.href;
-  window.location.href = url.replace(/^https:\/\//, 'googlechromes://').replace(/^http:\/\//, 'googlechrome://');
-  setTimeout(() => {
-    window.location.href = 'safari://' + url.replace(/^https?:\/\//, '');
-  }, 1500);
-})();
+// ── TRÌNH DUYỆT TRONG APP (2026-11-17) ─────────────────
+// Mở link trong Zalo / Messenger / TikTok… = webview nhúng → Google CHẶN đăng nhập ("403 disallowed_useragent"), chưa tạo
+// nổi tài khoản Firebase. Coach Vy kẹt đúng chỗ này (không có tài khoản Auth nào mang Gmail của Vy). Bản cũ chỉ nhận
+// Facebook / Instagram và tự nhảy sang googlechromes:// / safari:// (scheme không có thật) — giờ hiện hướng dẫn + nút.
+function inAppBrowserName(ua) {
+  ua = String(ua || '');
+  if (/Zalo/i.test(ua)) return 'Zalo';
+  if (/Messenger|FB_IAB\/MESSENGER|FBAN\/Messenger/i.test(ua)) return 'Messenger';
+  if (/FBAN|FBAV|FB_IAB|FB4A|FBIOS/i.test(ua)) return 'Facebook';
+  if (/Instagram/i.test(ua)) return 'Instagram';
+  if (/musical_ly|BytedanceWebview|TikTok/i.test(ua)) return 'TikTok';
+  if (/\bLine\//.test(ua)) return 'LINE';
+  if (/KAKAOTALK/i.test(ua)) return 'KakaoTalk';
+  if (/Android/i.test(ua) && /; wv\)/.test(ua)) return 'app';      // WebView Android chung
+  return null;
+}
+const _inApp = (typeof navigator !== 'undefined' && navigator.standalone !== true) ? inAppBrowserName(navigator.userAgent) : null;
+/** Hộp trên màn đăng nhập: vì sao không đăng nhập được ở đây + mở Chrome (Android) / hướng dẫn Safari (iPhone) + chép link. */
+function inAppBanner(flash) {
+  const box = document.getElementById('inapp-banner');
+  if (!box || !_inApp) return;
+  const android = /Android/i.test(navigator.userAgent || '');
+  const where = _inApp === 'app' ? 'trình duyệt bên trong một ứng dụng' : 'trình duyệt của ' + _inApp;
+  const chrome = 'intent://' + location.host + location.pathname + location.search + '#Intent;scheme=https;package=com.android.chrome;end';
+  box.innerHTML = '<b>Đang mở trong ' + where + '.</b> Google không cho đăng nhập ở đây. '
+    + (android ? 'Bấm nút dưới để mở bằng Chrome.' : 'Bấm <b>⋯</b> (góc trên) → <b>Mở bằng trình duyệt</b> / <b>Open in Safari</b>.')
+    + '<div class="inapp-row">' + (android ? '<a class="inapp-btn" href="' + chrome + '">Mở bằng Chrome</a>' : '')
+    + '<button type="button" class="inapp-btn ghost" onclick="inAppCopy()">Sao chép link</button></div>'
+    + '<input id="inapp-url" class="inapp-url" readonly value="' + location.href.replace(/"/g, '&quot;') + '" aria-label="Link app">';
+  box.classList.remove('hidden');
+  if (flash) { box.classList.remove('inapp-flash'); void box.offsetWidth; box.classList.add('inapp-flash'); }
+}
+function inAppCopy() {
+  const inp = document.getElementById('inapp-url');
+  const done = () => { const b = document.querySelector('#inapp-banner .inapp-btn.ghost'); if (b) b.textContent = 'Đã chép — dán vào Chrome / Safari'; };
+  try { navigator.clipboard.writeText(location.href).then(done, () => { inp.select(); done(); }); } catch (_e) { inp.select(); done(); }
+}
 
 // ── AUTH STATE ─────────────────────────────────────────
 // Handle redirect result FIRST (mobile login returns here after Google page)
@@ -477,18 +503,24 @@ onAuthStateChanged(auth, async user => {
 });
 
 async function loginWithGoogle() {
-  const ua = navigator.userAgent || '';
-  if (ua.includes('Instagram') || ua.includes('FBAN') || ua.includes('FBAV')) {
-    alert('Please open in Safari or Chrome to sign in.\n\niPhone: tap "..." top-right → "Open in Safari"');
-    return;
-  }  try {
-    setLoginLoading(true);
-    const provider = new GoogleAuthProvider();
-    // Always use popup — redirect fails on Safari/iOS due to ITP cookie blocking
+  if (_inApp) { inAppBanner(true); return; }
+  const provider = new GoogleAuthProvider();
+  // Chuyển trang (redirect) chỉ an toàn khi authDomain = chính tên miền app (AUTH_HOSTS, proxy /__/auth của Vercel).
+  const canRedirect = AUTH_HOSTS.includes(location.hostname);
+  setLoginLoading(true);
+  try {
+    // App đã cài trên màn hình chính (iPhone): cửa sổ bật lên mở ra Safari riêng và KHÔNG báo kết quả về app — đi đường
+    // chuyển trang, quay về đây thì getRedirectResult / onAuthStateChanged nhận tài khoản.
+    if (canRedirect && pwaInstalled()) { await signInWithRedirect(auth, provider); return; }
     await signInWithPopup(auth, provider);
-  } catch(e) {
+  } catch (e) {
+    let err = e;
+    if (canRedirect && ['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment', 'auth/web-storage-unsupported'].includes(e && e.code)) {
+      try { await signInWithRedirect(auth, provider); return; } catch (e2) { err = e2; }
+    }
     setLoginLoading(false);
-    alert('Sign-in failed: ' + e.code + '\n' + e.message);
+    if (err && (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request')) return;   // tự đóng cửa sổ
+    alert('Sign-in failed: ' + (err && err.code) + '\n' + (err && err.message));
   }
 }
 
@@ -10419,6 +10451,8 @@ window.addEventListener('beforeinstallprompt', e => {
 });
 
 function checkPWAPrompt(onDone) {
+  // Trong Zalo / Messenger…: không mời cài app (không cài được từ webview) — vào thẳng màn đăng nhập có hướng dẫn mở trình duyệt.
+  if (_inApp) { onDone(); inAppBanner(false); return; }
   const isStandalone = window.matchMedia('(display-mode: standalone)').matches
                     || window.navigator.standalone === true;
   const dismissed = localStorage.getItem('pwa-prompt-dismissed');
@@ -16495,6 +16529,15 @@ body{font-family:"Figtree",-apple-system,BlinkMacSystemFont,sans-serif;color:#ff
 .login-card{background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);border-top:2px solid #8FDBFF;border-radius:8px;padding:2rem;width:100%;max-width:360px;text-align:center;box-shadow:0 0 40px rgba(63,63,61,0.15);}
 .login-title{font-family:'Figtree',sans-serif;font-size:20px;font-weight:600;text-transform:uppercase;color:#fff;margin-bottom:.5rem;letter-spacing:2px;}
 .login-sub{font-size:13px;color:rgba(255,255,255,0.60);margin-bottom:1.5rem;line-height:1.5;}
+.inapp-banner{margin:-0.5rem 0 1.2rem;padding:12px 14px;border-radius:12px;background:rgba(255,196,0,.10);border:1px solid rgba(255,196,0,.45);color:#fff;font-size:13.5px;line-height:1.5;text-align:left;}
+.inapp-banner.hidden{display:none;}
+.inapp-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
+.inapp-btn{display:inline-flex;align-items:center;min-height:40px;padding:0 14px;border-radius:999px;border:1px solid #8FDBFF;background:#8FDBFF;color:#161111;font:700 13.5px 'Figtree',sans-serif;text-decoration:none;cursor:pointer;}
+.inapp-btn.ghost{background:transparent;color:#fff;border-color:rgba(255,255,255,.3);}
+.inapp-url{width:100%;margin-top:8px;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(0,0,0,.25);color:rgba(255,255,255,.8);font:12px ui-monospace,monospace;}
+.inapp-flash{animation:inappFlash .6s ease 2;}
+@keyframes inappFlash{50%{border-color:#ffc400;background:rgba(255,196,0,.22);}}
+@media (prefers-reduced-motion:reduce){.inapp-flash{animation:none;}}
 .google-btn{width:100%;padding:14px;border-radius:6px;background:#fff;color:rgba(255,255,255,0.12);border:none;font-family:'Figtree',sans-serif;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;transition:all .15s;}
 .google-btn:hover{background:#ffffff;}
 .google-btn svg{flex-shrink:0;}
@@ -17884,6 +17927,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
   <div class="login-card">
     <div class="login-title">Sign In</div>
     <div class="login-sub">Use your Gmail to access your personalised training program.</div>
+    <div id="inapp-banner" class="inapp-banner hidden" role="alert"></div>
     <button class="google-btn" id="google-login-btn" onclick="loginWithGoogle()">
       <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>
       <span id="google-login-btn-text">Sign in with Google</span>

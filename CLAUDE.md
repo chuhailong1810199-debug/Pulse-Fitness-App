@@ -137,6 +137,16 @@ giờ `.catch → _bootFail` (trước đây lỗi coach = đứng mãi ở logo
 
 ---
 
+## Đăng nhập từ Zalo / app đã cài (2026-11-17)
+Coach Vy không vào được: KHÔNG có tài khoản Firebase Auth nào mang Gmail của Vy → kẹt ở bước Google, trước phần quyền
+coach (đăng nhập Google thành công thì dù sai Gmail Auth vẫn có tài khoản). Google chặn đăng nhập trong webview nhúng
+("403 disallowed_useragent") — bản cũ chỉ nhận Facebook/Instagram, bỏ sót **Zalo**. Giờ `inAppBrowserName()` (Zalo,
+Messenger, Facebook, Instagram, TikTok, LINE, KakaoTalk, WebView Android) → màn đăng nhập hiện hộp `#inapp-banner` (Android:
+nút "Mở bằng Chrome" = intent://; iPhone: hướng dẫn ⋯ → Mở bằng Safari; nút chép link), không mời cài app trong webview.
+App đã cài trên iPhone (standalone) + tên miền trong `AUTH_HOSTS` → `signInWithRedirect` (popup không báo về app);
+popup bị chặn → lùi về redirect. Kiểm nhanh ai chưa từng đăng nhập: `getAuth().getUserByEmail(email)` (Admin SDK).
+`tests/inapp-login.test.js`.
+
 ## Performance: user profile cache
 - `loadUserProfile` now caches `{role, clientId}` in localStorage under key `pulse_user_v2_{uid}`
 - Returning users skip Firestore read → near-instant app load
