@@ -3704,6 +3704,51 @@ exports.clientAssistant = onCall(
  * dựng ra đề xuất. Và hàm này kiểm lại dữ liệu từ đầu chứ không tin máy khách
  * — cái gì đi qua trình duyệt thì sửa được trên đường đi.
  */
+// ─────────────────────────────────────────────────────────────────────────
+// importProgramSheet — nhập giáo án cũ từ Excel (2026-11-17). App gửi CÁC Ô CHỮ của file (SheetJS đọc trên máy),
+// Gemini đổi về khuôn giáo án, resolveProgram khớp tên thư viện. KHÔNG ghi: trả bản xem trước, coach bấm lưu thì app gọi
+// coachApply (apply_program) — kiểm quyền / giáo án, sao lưu bản cũ, chuyển tạ theo tên bài. functions/program-import.js.
+// ─────────────────────────────────────────────────────────────────────────
+exports.importProgramSheet = onCall(
+  { region: "asia-southeast1", secrets: [GEMINI_API_KEY], timeoutSeconds: 120, memory: "512MiB" },
+  async (request) => {
+    const PI = require("./program-import.js");
+    const { libFor, validateProgram } = require("./assistant.js");
+    const { matchExercise } = require("./program-lib.js");
+    const d = request.data || {};
+    const clientId = String(d.clientId || "");
+    const db = getFirestore();
+    await authz.assertCanManage(request, clientId, db);
+    const { text, truncated } = PI.sheetsToText(d.sheets);
+    if (text.length < 20) throw new HttpsError("invalid-argument", "File không có nội dung đọc được (sheet trống?).");
+    const raw = await callGemini(GEMINI_API_KEY.value(), [{ type: "text", text: PI.importPrompt(d.fileName, text, truncated) }],
+      PI.IMPORT_SCHEMA, "importProgramSheet", "low");
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch (_e) {
+      console.error("[importProgramSheet] JSON hỏng:", String(raw).slice(0, 200));
+      throw new HttpsError("internal", "Không đọc được kết quả chuyển đổi. Thử lại.");
+    }
+    const { program: imported, notes } = PI.toProgram(parsed);
+    if (!Object.keys(imported).length) {
+      throw new HttpsError("failed-precondition", "Không tìm thấy buổi tập nào trong file. " + (notes[0] || "Kiểm tra lại file có bảng bài tập."));
+    }
+    const cur = await db.collection("clients").doc(clientId).get();
+    const old = (cur.data() || {}).program || {};
+    const lib = await libFor(db, old);
+    // Không nghiêm: bài lạ vẫn nhập (giáo án của coach), chỉ báo. Đổi tên về thư viện khi khớp → có nhóm cơ + hình minh hoạ.
+    const r = lib.resolve ? lib.resolve(imported, { strict: false, setBw: false }) : { program: imported, renamed: [], reused: [] };
+    const v = validateProgram(r.program);
+    return {
+      program: r.program,
+      stats: v.stats || {},
+      problems: v.ok ? [] : v.errors.slice(0, 12),
+      notes: notes.concat(truncated ? ["File dài — phần cuối bị cắt, kiểm tra đủ buổi chưa."] : []),
+      renamed: (r.renamed || []).slice(0, 40),
+      unmatched: lib.idx ? PI.unmatched(r.program, lib.idx, matchExercise).slice(0, 40) : [],
+    };
+  },
+);
+
 exports.coachApply = onCall(
   { region: "asia-southeast1", timeoutSeconds: 60 },
   async (request) => {

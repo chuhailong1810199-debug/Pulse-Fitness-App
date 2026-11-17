@@ -157,6 +157,15 @@ giáo án vào đâu. Giờ: 0 khách → `coachStartHTML()` (+ Thêm khách / N
 khách thấy "Coach chưa đưa giáo án lên"). KHÔNG dẫn coach sang `migrate.html` — trang cũ ghi `clients.email` thẳng (bỏ qua
 `claimClientEmail`), id khách theo tên, đăng nhập qua firebaseapp.com. `tests/coach-start.test.js`.
 
+## Nhập giáo án cũ từ Excel (2026-11-17)
+Nút **⇪ Excel** (thanh Edit program, chỉ coach) + lựa chọn trên màn "chưa có giáo án". SheetJS 0.18.5 (cdnjs, tải lười) đọc
+file TRÊN MÁY (≤ 5 MB, ≤ 12 sheet × 300 dòng) → gửi các ô chữ → callable `importProgramSheet` (Gemini `callGemini` +
+`IMPORT_SCHEMA`, `functions/program-import.js`; `assertCanManage`; KHÔNG ghi) → khuôn SessionA… + `resolveProgram`
+không nghiêm (khớp thì đổi tên thư viện + gắn cơ, bài lạ vẫn nhập nhưng tô vàng) → xem trước → `coachApply` apply_program
+(kiểm giáo án, sao lưu `programBackups`, chuyển tạ theo tên). "Thêm buổi mới" = đánh số tiếp sau buổi cũ, merge.
+Định dạng file tuỳ ý — model CHÉP, không sáng tác; tuần lặp lại chỉ lấy tuần đầu (ghi notes). Thay cho `migrate.html`
+(công cụ cũ, không an toàn cho coach). Tốn 1 lượt Gemini mỗi file. `tests/program-import.test.js`.
+
 ## Performance: user profile cache
 - `loadUserProfile` now caches `{role, clientId}` in localStorage under key `pulse_user_v2_{uid}`
 - Returning users skip Firestore read → near-instant app load

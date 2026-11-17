@@ -907,6 +907,8 @@ async function loadApp() {
     // Work list: buổi tập Garmin — coach xem của khách đang mở (hoặc của chính mình).
     const wlTab = document.getElementById('worklist-nav-tab');
     if (wlTab) wlTab.style.display = '';
+    const xlBtn = document.getElementById('excel-imp-btn');   // nhập giáo án cũ từ Excel — chỉ coach
+    if (xlBtn) xlBtn.style.display = '';
     if (userIsAdmin) loadCoachNames();       // tên coach cho biển "đang quan sát"
     afterClientChange();
     // Youth là công cụ của coach: khách không cần thấy pin test này.
@@ -7376,6 +7378,127 @@ async function exaShow(box, name, withCue) {
   return true;
 }
 
+// ── NHẬP GIÁO ÁN TỪ EXCEL (2026-11-17) ─────────────────────
+// Coach mới có giáo án cũ trong Excel (định dạng riêng). SheetJS (cdnjs, tải lười) đọc file TRÊN MÁY → gửi các ô chữ lên
+// importProgramSheet (Gemini đổi về khuôn giáo án + khớp thư viện, KHÔNG ghi) → xem trước → coachApply (apply_program:
+// kiểm quyền, kiểm giáo án, sao lưu bản cũ, chuyển tạ theo tên bài). "Thêm" = đánh số buổi tiếp sau buổi cũ (merge).
+let _xl = null, _xlLibLoading = null;
+function xlLoadLib() {
+  if (window.XLSX) return Promise.resolve(true);
+  if (_xlLibLoading) return _xlLibLoading;
+  _xlLibLoading = new Promise((resolve) => {
+    const js = document.createElement('script');
+    js.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    js.onload = () => resolve(!!window.XLSX);
+    js.onerror = () => { _xlLibLoading = null; resolve(false); };
+    document.head.appendChild(js);
+  });
+  return _xlLibLoading;
+}
+function xlOpen() {
+  if (userRole !== 'coach' || !activeClient) { if (userRole === 'coach') alert('Thêm hoặc chọn một khách trước, rồi nhập giáo án cho khách đó.'); return; }
+  if (typeof isObserving === 'function' && isObserving()) { alert('Đang quan sát khách của coach khác — không nhập được.'); return; }
+  _xl = { cid: activeClient.id, name: activeClient.name || activeClient.id, result: null };
+  document.getElementById('xl-for').textContent = 'Cho khách: ' + _xl.name;
+  document.getElementById('xl-file').value = '';
+  document.getElementById('xl-file-lab').textContent = 'Chọn file giáo án (.xlsx, .xls, .csv)';
+  document.getElementById('xl-status').textContent = '';
+  document.getElementById('xl-preview').innerHTML = '';
+  document.getElementById('xl-mode').hidden = true;
+  document.getElementById('xl-save').hidden = true;
+  document.getElementById('xl-modal').classList.add('open');
+  xlLoadLib();
+}
+function xlClose() { document.getElementById('xl-modal').classList.remove('open'); _xl = null; }
+const XL_MAX_BYTES = 5 * 1024 * 1024;
+async function xlPick(input) {
+  const f = input.files && input.files[0];
+  if (!f || !_xl) return;
+  const st = document.getElementById('xl-status'), cid = _xl.cid;
+  document.getElementById('xl-file-lab').textContent = f.name;
+  document.getElementById('xl-preview').innerHTML = '';
+  document.getElementById('xl-save').hidden = true;
+  document.getElementById('xl-mode').hidden = true;
+  if (f.size > XL_MAX_BYTES) { st.textContent = 'File quá lớn (tối đa 5 MB).'; return; }
+  st.textContent = 'Đang đọc file…';
+  if (!(await xlLoadLib())) { st.textContent = 'Không tải được bộ đọc Excel. Kiểm tra mạng rồi thử lại.'; return; }
+  let sheets;
+  try {
+    const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
+    sheets = wb.SheetNames.slice(0, 12).map((n) => ({ name: n, rows: XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: '', raw: false, blankrows: false }).slice(0, 300) }));
+  } catch (e) { st.textContent = 'Không đọc được file: ' + (e.message || e); return; }
+  if (!sheets.some((s) => s.rows.length)) { st.textContent = 'File trống.'; return; }
+  st.textContent = 'Pulse đang chuyển giáo án (20–60 giây)…';
+  try {
+    const fn = firebase.app().functions('asia-southeast1').httpsCallable('importProgramSheet', { timeout: 130000 });
+    const res = await fn({ clientId: cid, fileName: f.name, sheets });
+    if (!_xl || _xl.cid !== cid) return;                     // đã đóng / đổi khách
+    _xl.result = res.data;
+    st.textContent = '';
+    xlPaint();
+  } catch (e) { if (_xl && _xl.cid === cid) st.textContent = 'Không chuyển được: ' + (e.message || e); }
+}
+function xlPaint() {
+  const r = _xl && _xl.result;
+  if (!r) return;
+  const prog = r.program || {}, keys = Object.keys(prog).sort();
+  const un = new Set((r.unmatched || []).map(String));
+  const sec = keys.map((k) => {
+    const d = prog[k];
+    return '<div class="xl-ses"><div class="xl-ses-h">' + escHtml(k.replace('Session', 'Buổi ')) + ' · ' + escHtml(d.label || '') + '</div>'
+      + (d.phases || []).map((ph) => '<div class="xl-ph"><span class="phase-tag ' + (phaseTagClass[normPhaseTag(ph)] || 'phase-accessories') + '">' + escHtml(ph.name) + '</span><ul>'
+        + (ph.exercises || []).map((x) => '<li' + (un.has(k + ' · ' + x.name) ? ' class="xl-un" title="Không có trong thư viện — vẫn nhập được, không tô nhóm cơ / không có hình"' : '') + '><b>' + escHtml(x.name) + '</b> <span>' + escHtml(x.setsReps || '') + '</span>'
+          + (x.cue ? '<div class="xl-cue">' + escHtml(x.cue) + '</div>' : '') + '</li>').join('') + '</ul></div>').join('') + '</div>';
+  }).join('');
+  const st = r.stats || {};
+  const head = '<div class="xl-sum">' + keys.length + ' buổi · ' + (st.exercises || 0) + ' bài'
+    + (r.renamed && r.renamed.length ? ' · ' + r.renamed.length + ' tên bài đổi theo thư viện' : '')
+    + (un.size ? ' · <span class="xl-un-t">' + un.size + ' bài chưa có trong thư viện</span>' : '') + '</div>';
+  const warn = (r.problems || []).concat(r.notes || []);
+  document.getElementById('xl-preview').innerHTML = head
+    + (warn.length ? '<ul class="xl-notes">' + warn.map((n) => '<li>' + escHtml(n) + '</li>').join('') + '</ul>' : '') + sec;
+  const has = Object.keys((activeClient && activeClient.id === _xl.cid && activeClient.program) || {}).some((k) => /^Session[A-G]$/.test(k));
+  document.getElementById('xl-mode').hidden = !has;
+  const save = document.getElementById('xl-save');
+  save.hidden = !!(r.problems && r.problems.length);
+  save.textContent = 'Lưu vào giáo án của ' + _xl.name;
+}
+async function xlSave() {
+  const r = _xl && _xl.result;
+  if (!r) return;
+  const st = document.getElementById('xl-status'), btn = document.getElementById('xl-save'), cid = _xl.cid;
+  const cur = (activeClient && activeClient.id === cid && activeClient.program) || {};
+  const add = !document.getElementById('xl-mode').hidden && (document.querySelector('input[name="xl-mode"]:checked') || {}).value === 'add';
+  let program = r.program;
+  if (add) {
+    const used = Object.keys(cur).filter((k) => /^Session[A-G]$/.test(k)).sort();
+    let next = used.length ? used[used.length - 1].charCodeAt(7) + 1 : 65;
+    program = {};
+    for (const k of Object.keys(r.program).sort()) {
+      if (next > 71) { st.textContent = 'Quá 7 buổi nếu thêm — chọn "Thay toàn bộ" hoặc bớt buổi cũ trước.'; return; }
+      program['Session' + String.fromCharCode(next++)] = r.program[k];
+    }
+  } else if (Object.keys(cur).length && !confirm('Thay toàn bộ giáo án hiện tại của ' + _xl.name + '? Bản cũ được sao lưu trên máy chủ.')) return;
+  btn.disabled = true; st.textContent = 'Đang lưu…';
+  try {
+    const fn = firebase.app().functions('asia-southeast1').httpsCallable('coachApply', { timeout: 60000 });
+    const res = await fn({ action: { kind: 'apply_program', clientId: cid, program, merge: add } });
+    const saved = (res && res.data && res.data.program) || program;
+    if (activeClient && activeClient.id === cid) {
+      activeClient.program = saved;
+      saveProgramCache(cid, saved);
+      _progSig = _programSig(saved);
+      activeDay = Object.keys(saved).sort()[0] || activeDay;
+      clearTimeout(_saveLoadsFBTimer);
+      renderDayTabs();
+      await hydrateExerciseLoadsForActiveDay();
+      renderExercises();
+    }
+    xlClose();
+  } catch (e) { st.textContent = 'Không lưu được: ' + (e.message || e); }
+  btn.disabled = false;
+}
+
 // ── COACH MỚI / GIÁO ÁN TRỐNG (2026-11-17) ───────────────
 // Coach Vy đăng nhập lần đầu: 0 khách → màn trống chỉ ghi "Bam + Add" (không dấu); thêm khách xong tab Workout ghi
 // "Rest day" — không có đường nào để đưa giáo án vào. Giờ hai màn trống chỉ đường: Pulse soạn hoặc tự tạo buổi. KHÔNG dẫn sang
@@ -7399,9 +7522,11 @@ function emptyProgramHTML() {
     + '<div class="start-acts">'
     + '<button type="button" class="start-btn on" onclick="launchPulse()">⚡ Pulse soạn giáo án</button>'
     + '<button type="button" class="start-btn" onclick="startBlankProgram()">Tự soạn từng buổi</button>'
+    + '<button type="button" class="start-btn" onclick="xlOpen()">⇪ Nhập từ Excel</button>'
     + '</div>'
     + '<div class="start-help"><b>Pulse soạn:</b> đọc hồ sơ + mục tiêu của khách, soạn đủ các buổi, mày duyệt rồi mới lưu.<br>'
-    + '<b>Tự soạn:</b> tạo Buổi A, bật chế độ sửa — dùng <b>+ Add Phase</b> / <b>+ Add Exercise</b>; thêm buổi bằng <b>+ Day</b>.</div></div>';
+    + '<b>Tự soạn:</b> tạo Buổi A, bật chế độ sửa — dùng <b>+ Add Phase</b> / <b>+ Add Exercise</b>; thêm buổi bằng <b>+ Day</b>.<br>'
+    + '<b>Excel:</b> chọn file giáo án cũ (.xlsx / .csv, định dạng nào cũng được) — xem trước rồi mới lưu.</div></div>';
 }
 /** Tạo Buổi A trống cho khách đang mở rồi bật chế độ sửa để coach thêm phase / bài. */
 async function startBlankProgram() {
@@ -17268,6 +17393,28 @@ body.reordering .phase-exercises-wrap{min-height:46px;border-radius:14px;transit
 .start-acts{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-top:1.2rem;}
 .start-btn{display:inline-flex;align-items:center;min-height:44px;padding:0 18px;border-radius:999px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.04);color:#fff;font:700 14px 'Figtree',sans-serif;text-decoration:none;cursor:pointer;}
 .start-btn.on{background:#8FDBFF;border-color:#8FDBFF;color:#161111;}
+.xl-modal{max-width:560px;}
+.xl-for{font-size:13px;color:rgba(255,255,255,.65);margin:-4px 0 12px;}
+.xl-drop{display:flex;align-items:center;justify-content:center;min-height:64px;border:1.5px dashed rgba(143,219,255,.5);border-radius:12px;padding:10px;cursor:pointer;color:#8FDBFF;font-weight:700;text-align:center;}
+.xl-drop input{position:absolute;width:1px;height:1px;opacity:0;}
+.xl-drop:focus-within{outline:2px solid #fff;outline-offset:2px;}
+.xl-hint{font-size:12.5px;color:rgba(255,255,255,.55);line-height:1.5;margin:8px 0;}
+.xl-status{font-size:13.5px;color:#8FDBFF;min-height:1.2em;margin:6px 0;}
+.xl-sum{font-weight:700;margin:6px 0 8px;}
+.xl-un-t{color:#ffc46b;}
+.xl-notes{margin:0 0 10px;padding:8px 10px 8px 26px;border-radius:10px;background:rgba(255,196,0,.08);border:1px solid rgba(255,196,0,.3);font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.8);}
+.xl-ses{border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:10px 12px;margin-bottom:8px;}
+.xl-ses-h{font-weight:800;margin-bottom:6px;}
+.xl-ph{margin:6px 0;}
+.xl-ph ul{margin:4px 0 0;padding-left:18px;font-size:13px;line-height:1.45;}
+.xl-ph li span{color:#8FDBFF;font-variant-numeric:tabular-nums;}
+.xl-ph li.xl-un b{color:#ffc46b;}
+.xl-cue{font-size:12px;color:rgba(255,255,255,.5);}
+.xl-mode{display:flex;flex-direction:column;gap:6px;margin:10px 0;font-size:13.5px;}
+.xl-mode[hidden],.xl-save[hidden]{display:none;}
+.xl-actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;}
+.xl-save{min-height:44px;padding:0 18px;border-radius:999px;border:0;background:#8FDBFF;color:#161111;font:700 14px 'Figtree',sans-serif;cursor:pointer;}
+.xl-save:disabled{opacity:.5;cursor:wait;}
 .start-help{max-width:440px;margin:1.2rem auto 0;text-align:left;font-size:13px;line-height:1.6;color:rgba(255,255,255,.62);}
 .empty-sub strong{color:#8FDBFF;}
 
@@ -18214,6 +18361,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
       <div class="ctrl-right">
         <button class="add-day-btn" onclick="document.getElementById('add-day-modal').classList.add('open')">+ Day</button>
         <button class="pulse-gen-btn" id="pulse-gen-btn" onclick="launchPulse()">⚡ Pulse</button>
+        <button class="add-day-btn" id="excel-imp-btn" style="display:none" onclick="xlOpen()">⇪ Excel</button>
         <div class="edit-toggle" onclick="toggleEditMode()">
           <div class="toggle-track" id="toggle-track"><div class="toggle-thumb"></div></div>
           <span class="edit-mode-text" id="edit-mode-text">Off</span>
@@ -18735,6 +18883,29 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 </div>
 
 <!-- PULSE AI REVIEW MODAL -->
+<!-- NHẬP GIÁO ÁN TỪ EXCEL (2026-11-17) -->
+<div class="modal-overlay" id="xl-modal" onclick="if(event.target===this)xlClose()">
+  <div class="modal xl-modal" data-i18n-skip>
+    <div class="modal-name">Nhập giáo án từ Excel</div>
+    <div class="xl-for" id="xl-for"></div>
+    <label class="xl-drop" for="xl-file">
+      <input type="file" id="xl-file" accept=".xlsx,.xls,.csv,.ods" onchange="xlPick(this)">
+      <span id="xl-file-lab">Chọn file giáo án (.xlsx, .xls, .csv)</span>
+    </label>
+    <div class="xl-hint">Định dạng nào cũng được: mỗi buổi một sheet, hay cả giáo án trong một bảng. Pulse đọc file, đổi về giáo án của app và khớp tên bài với thư viện. Chưa lưu gì cho tới khi bạn bấm lưu.</div>
+    <div class="xl-status" id="xl-status" role="status"></div>
+    <div class="xl-preview" id="xl-preview"></div>
+    <div class="xl-mode" id="xl-mode" hidden>
+      <label><input type="radio" name="xl-mode" value="replace" checked> Thay toàn bộ giáo án hiện tại (bản cũ được sao lưu)</label>
+      <label><input type="radio" name="xl-mode" value="add"> Thêm thành buổi mới, giữ các buổi đang có</label>
+    </div>
+    <div class="modal-actions xl-actions">
+      <button class="modal-close" onclick="xlClose()">Đóng</button>
+      <button class="xl-save" id="xl-save" hidden onclick="xlSave()">Lưu vào giáo án</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="ai-review-modal">
   <div class="modal" style="max-width:560px;max-height:86vh;display:flex;flex-direction:column;padding:0;overflow:hidden;border-radius:16px;">
 
