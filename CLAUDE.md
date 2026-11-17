@@ -431,6 +431,12 @@ Key routing rules:
   `need` — miễn bằng `coverageExceptions["sport:<id khối>"]`. Bài môn chưa có trong thư viện → `NEW_LIBRARY`, ghi bằng
   `node scripts/sports/add-library.js --write` (chỉ tạo doc mới, doc id = slug, mang `sports: [...]`). Thêm môn = thêm vào
   SPORTS + SPORT_ORDER + bài thiếu vào NEW_LIBRARY → sync → add-library.
+- **Hình động minh hoạ bài tập** (2026-11-17): `lib/exercise-anim.js` (tải lười, `exaLoad` / `exaShow` trong index.html) — người
+  dạng nét SVG, KHÔNG video. Tư thế = keyframe (hông, góc thân, chân / tay theo góc HOẶC bám điểm IK), nội suy mượt; tự nhấc người
+  khi có điểm lọt dưới sàn; một vòng rAF chung, chỉ vẽ hình đang trong màn hình, dừng khi bị gỡ; giảm chuyển động → hình tĩnh.
+  Có cho ĐỦ 51 bài của khung môn (functions/sports.js), tra theo tên thư viện + tên hiển thị (ALIAS). Hiện ở thẻ môn Anatomy
+  (chạm bài → `anExDemo`) và hộp thông tin bài tab Workout (`#modal-anim`, mọi giáo án có bài trùng tên). Thêm bài vào khung môn
+  = thêm hình — `tests/exercise-anim.test.js` bắt bài thiếu hình, khung NaN, người xuyên sàn.
 - **Chat theo khách**: tab tên khách trong khung trợ lý (hoặc nút "Hỏi AI về khách này" trên hồ sơ). Lưu ở
   `clients/{id}/aiChat` — chỉ hàm nền `coachAssistant` ghi (`thread: true`), coach của khách + admin đọc, KHÁCH
   KHÔNG đọc. Form "Hôm nay khách không khoẻ" → chỉnh buổi cho hôm nay theo `EXPLAIN_METHOD`, KHÔNG đổi giáo án gốc.

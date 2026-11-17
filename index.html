@@ -7315,6 +7315,36 @@ async function deleteDay() {
   renderExercises();
 }
 
+// ── HÌNH ĐỘNG MINH HOẠ BÀI TẬP (2026-11-17) ──────────────────────────────
+// lib/exercise-anim.js (tải lười): người dạng nét vẽ SVG cho các bài bổ trợ theo môn (functions/sports.js).
+// Dùng ở thẻ môn tab Anatomy và hộp thông tin bài (tab Workout). Bài chưa có hình → không hiện gì.
+let _exaLoading = null, _exaTok = 0;
+function exaLoad() {
+  if (window.EXERCISE_ANIM) return Promise.resolve(true);
+  if (_exaLoading) return _exaLoading;
+  _exaLoading = new Promise((resolve) => {
+    const js = document.createElement('script');
+    js.src = '/lib/exercise-anim.js';
+    js.onload = () => resolve(!!window.EXERCISE_ANIM);
+    js.onerror = () => { _exaLoading = null; resolve(false); };
+    document.head.appendChild(js);
+  });
+  return _exaLoading;
+}
+/** Gắn hình động của bài `name` vào `box` (ẩn nếu chưa có hình). Mở bài khác giữa chừng thì lần cũ bỏ qua. */
+async function exaShow(box, name, withCue) {
+  if (!box) return false;
+  const tok = ++_exaTok;
+  box.style.display = 'none'; box.innerHTML = '';
+  const ok = await exaLoad();
+  if (tok !== _exaTok || !ok || !window.EXERCISE_ANIM.has(name)) return false;
+  const lang = (typeof _lang !== 'undefined' && _lang === 'vi') ? 'vi' : 'en';
+  box.innerHTML = '<div class="exa-stage"></div>' + (withCue ? '<p class="exa-cue" data-i18n-skip>' + escHtml(window.EXERCISE_ANIM.cue(name, lang)) + '</p>' : '');
+  window.EXERCISE_ANIM.mount(box.querySelector('.exa-stage'), name);
+  box.style.display = '';
+  return true;
+}
+
 // ── EXERCISE MODAL ─────────────────────────────────────
 function openModal(pi, ei) {
   const day = getProgram()[activeDay]; if (!day) return;
@@ -7325,6 +7355,7 @@ function openModal(pi, ei) {
   document.getElementById('modal-setsreps').textContent  = ex.setsReps;
   document.getElementById('modal-tempo').textContent     = ex.tempo || '—';
   document.getElementById('modal-cue').textContent       = ex.cue   || '—';
+  exaShow(document.getElementById('modal-anim'), ex.name);
   // Lý do chọn bài — lưu cùng giáo án (trường why), khách và coach đều xem được.
   const whyWrap = document.getElementById('modal-why-wrap');
   if (whyWrap) {
@@ -13788,6 +13819,21 @@ function anAskPulse() {
     inp.focus();
   }
 }
+/** Chạm một bài trong khối → mở / đóng hình động minh hoạ ngay dưới dòng đó (mỗi lúc một bài). */
+function anExDemo(li) {
+  const S = AN_SPORTS[_an.sport], b = +li.dataset.b, j = +li.dataset.j;
+  const row = S && S.blocks[b] && S.blocks[b].ex[j];
+  if (!row) return;
+  const open = li.nextElementSibling && li.nextElementSibling.classList.contains('an-exd');
+  document.querySelectorAll('#an-info .an-exd').forEach((x) => x.remove());
+  document.querySelectorAll('#an-info .an-exr[aria-expanded="true"]').forEach((x) => x.setAttribute('aria-expanded', 'false'));
+  if (open) return;
+  const box = document.createElement('li');
+  box.className = 'an-exd exa-box';
+  li.after(box);
+  li.setAttribute('aria-expanded', 'true');
+  exaShow(box, row[2] || row[0], true).then((ok) => { if (!ok && box.isConnected) { box.style.display = ''; box.innerHTML = '<p class="exa-cue">' + escHtml(anS('Chưa có hình minh hoạ cho bài này.', 'No illustration for this exercise yet.')) + '</p>'; } });
+}
 function anSportCard() {
   const S = AN_SPORTS[_an.sport];
   const li = (a) => '<ul class="an-fn">' + (a[anLang()] || a.vi).map((x) => '<li>' + escHtml(x) + '</li>').join('') + '</ul>';
@@ -13795,7 +13841,8 @@ function anSportCard() {
   const blocks = S.blocks.map((b, i) => '<div class="an-blk"><div class="an-blk-h"><span class="an-blk-n">' + (i + 1) + '</span>' + escHtml(anL(b))
     + (b.need ? ' <span class="an-role p">' + escHtml(anS('Bắt buộc', 'Required')) + '</span>' : '') + '</div>'
     + '<p class="an-blk-why">' + escHtml(anL(b.why)) + '</p><ul class="an-ex">'
-    + b.ex.map(([n, d, ln]) => '<li><span class="an-ex-n">' + escHtml(anExName(n)) + (_an.exReady && anInLib(n, ln) ? ' <span class="an-role s">' + escHtml(lib) + '</span>' : '') + '</span><span class="an-dose">' + escHtml(anDose(d)) + '</span></li>').join('')
+    + b.ex.map(([n, d, ln], j) => '<li class="an-exr" role="button" tabindex="0" aria-expanded="false" data-b="' + i + '" data-j="' + j + '" onclick="anExDemo(this)" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();anExDemo(this)}">'
+      + '<span class="an-ex-n"><span class="an-play" aria-hidden="true">▶</span>' + escHtml(anExName(n)) + (_an.exReady && anInLib(n, ln) ? ' <span class="an-role s">' + escHtml(lib) + '</span>' : '') + '</span><span class="an-dose">' + escHtml(anDose(d)) + '</span></li>').join('')
     + '</ul></div>').join('');
   const cs = anClientSport();
   return '<div class="an-card">'
@@ -13804,7 +13851,7 @@ function anSportCard() {
     + '<p class="an-sum">' + escHtml(anL(S.sum)) + '</p>'
     + '<h3>' + escHtml(anS('Môn này đòi hỏi', 'What the sport demands')) + '</h3>' + li(S.demands)
     + '<h3>' + escHtml(anS('Chấn thương hay gặp', 'Common injuries')) + '</h3>' + li(S.risk)
-    + '<h3>' + escHtml(anS('Các khối tập', 'Training blocks')) + '</h3>' + blocks
+    + '<h3>' + escHtml(anS('Các khối tập', 'Training blocks')) + '</h3><p class="an-muted">' + escHtml(anS('Chạm một bài để xem hình minh hoạ động tác.', 'Tap an exercise to see an animated demo.')) + '</p>' + blocks
     + '<h3>' + escHtml(anS('Theo giai đoạn', 'By season phase')) + '</h3><ul class="an-fn an-season">'
     + Object.keys(SPORT_PHASES).map((k) => '<li' + (cs && cs.id === _an.sport && cs.phase === k ? ' class="on"' : '') + '><b>' + escHtml(anL(SPORT_PHASES[k])) + ':</b> ' + escHtml(anL(S.season[k])) + '</li>').join('') + '</ul>'
     + '<h3>' + escHtml(anS('Xếp lịch', 'Scheduling')) + '</h3>' + li(S.plan)
@@ -18473,6 +18520,7 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
       </div>
       <div><div class="modal-label">Tempo</div><div class="modal-value" id="modal-tempo"></div></div>
     </div>
+    <div id="modal-anim" class="exa-box" style="display:none" aria-label="Minh hoạ động tác"></div>
     <div><div class="modal-label">Coaching Cue</div><div class="modal-value" id="modal-cue" data-i18n-skip></div></div>
     <div id="modal-why-wrap" style="display:none"><div class="modal-label">Vì sao bài này</div><div class="modal-value modal-why" id="modal-why" data-i18n-skip></div></div>
     <div id="modal-strength-history" style="display:none;margin-top:1rem;"></div>
@@ -21108,6 +21156,16 @@ body:has(#ai-sheet.open) #ai-fab{ opacity: 0; transform: scale(.6); pointer-even
 .an-phase{background:#1f1a1a;color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:7px 12px;font:inherit;font-size:13px;}
 .an-abtn{border:1px solid rgba(255,255,255,.18);background:transparent;color:#fff;border-radius:999px;min-height:36px;padding:0 14px;font:700 13px 'Figtree',sans-serif;cursor:pointer;}
 .an-abtn.on{background:#8FDBFF;border-color:#8FDBFF;color:#161111;}
+.an-exr{cursor:pointer;}
+.an-exr:hover .an-play,.an-exr[aria-expanded="true"] .an-play{color:#8FDBFF;}
+.an-exr:focus-visible{outline:2px solid #fff;outline-offset:2px;}
+.an-play{display:inline-block;width:16px;font-size:10px;color:rgba(255,255,255,.45);}
+.an-ex li.an-exd{display:block;min-height:0;}
+.exa-box{background:#1c1717;border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:8px 10px;margin:4px 0 8px;list-style:none;}
+.exa-stage svg{display:block;width:100%;height:auto;max-height:240px;}
+.exa-cue{margin:6px 2px 2px;font-size:13px;line-height:1.45;color:rgba(255,255,255,.75);}
+#modal-anim{margin:0 0 12px;}
+.an-ex li.an-exd .exa-cue{font-weight:400;font-size:13.5px;}
 .an-season li.on{color:#fff;}
 .an-season li.on b{color:#8FDBFF;}
 .an-blk-n{flex:none;width:24px;height:24px;border-radius:999px;background:rgba(255,150,100,.18);color:#FF9664;font-size:13px;display:inline-flex;align-items:center;justify-content:center;}
