@@ -14,9 +14,13 @@ for (const [k, S] of Object.entries(SPORTS)) for (const b of S.blocks) for (cons
   assert.ok(A.has(n), k + ': tên hiển thị không tra ra hình: ' + n);
   assert.ok(A.cue(lib || n, 'vi') && A.cue(lib || n, 'en') !== A.cue(lib || n, 'vi'), 'cue ' + n);
 }
+// 1b. TOÀN BỘ thư viện chung (ảnh chụp tên bài: tests/fixtures/library-names.json — cập nhật khi thêm bài) đều có hình.
+const LIBN = require(path.join(root, 'tests', 'fixtures', 'library-names.json'));
+const noAnim = LIBN.filter((n) => !A.has(n));
+assert.deepStrictEqual(noAnim, [], 'bài thư viện chưa có hình: ' + noAnim.join(', '));
 // 2. Vẽ được mọi khung: không NaN, toạ độ hữu hạn, người không chui xuống đất quá sâu.
-for (const name of A.names()) {
-  const ex = A._EX[name];
+for (const name of new Set(A.names().concat(LIBN))) {
+  const ex = A.find(name);
   for (let i = 0; i < 40; i++) {
     const u = i / 40, svg = A.svgFor(ex, u);
     assert.ok(!/NaN|undefined|Infinity/.test(svg), name + ' @' + u);
@@ -32,5 +36,6 @@ for (const name of A.names()) {
 assert.ok(html.includes("js.src = '/lib/exercise-anim.js'"));
 assert.ok(/exaShow\(document\.getElementById\('modal-anim'\), ex\.name\)/.test(html));
 assert.ok(/onclick="anExDemo\(this\)"/.test(html) && /function anExDemo\(li\)/.test(html));
+assert.ok(/_anExList\.push\(x\.name\)/.test(html), 'Bài tập gợi ý của thẻ cơ cũng mở hình');
 assert.ok(/it\.el\.isConnected/.test(fs.readFileSync(path.join(root, 'lib', 'exercise-anim.js'), 'utf8')), 'dừng khi hình bị gỡ');
 console.log('exercise-anim ok');

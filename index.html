@@ -13820,10 +13820,12 @@ function anAskPulse() {
   }
 }
 /** Chạm một bài trong khối → mở / đóng hình động minh hoạ ngay dưới dòng đó (mỗi lúc một bài). */
+let _anExList = [];   // tên bài trong danh sách "Bài tập gợi ý" của thẻ cơ đang mở (data-k)
 function anExDemo(li) {
-  const S = AN_SPORTS[_an.sport], b = +li.dataset.b, j = +li.dataset.j;
-  const row = S && S.blocks[b] && S.blocks[b].ex[j];
-  if (!row) return;
+  let row = null;
+  if (li.dataset.k != null) row = [_anExList[+li.dataset.k]];
+  else { const S = AN_SPORTS[_an.sport], b = +li.dataset.b, j = +li.dataset.j; row = S && S.blocks[b] && S.blocks[b].ex[j]; }
+  if (!row || !row[0]) return;
   const open = li.nextElementSibling && li.nextElementSibling.classList.contains('an-exd');
   document.querySelectorAll('#an-info .an-exd').forEach((x) => x.remove());
   document.querySelectorAll('#an-info .an-exr[aria-expanded="true"]').forEach((x) => x.setAttribute('aria-expanded', 'false'));
@@ -14086,9 +14088,11 @@ function anRenderInfo() {
   if (!_an.exReady) ex = '<p class="an-muted">' + escHtml(anS('Đang tìm bài trong thư viện…', 'Searching the exercise library…')) + '</p>';
   else {
     const list = anExercises(g);
+    _anExList = [];
     const roleTag = (r) => r === 'P' ? '<span class="an-role p">' + escHtml(anS('Chính', 'Primary')) + '</span>' : r === 'S' ? '<span class="an-role s">' + escHtml(anS('Phụ', 'Secondary')) + '</span>' : '';
     ex = list.length
-      ? '<ul class="an-ex">' + list.map((x) => '<li><span class="an-ex-n">' + escHtml(x.name) + '</span>' + roleTag(x.role) + '</li>').join('') + '</ul>'
+      ? '<ul class="an-ex">' + list.map((x) => { _anExList.push(x.name); return '<li class="an-exr" role="button" tabindex="0" aria-expanded="false" data-k="' + (_anExList.length - 1) + '" onclick="anExDemo(this)" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();anExDemo(this)}">'
+        + '<span class="an-ex-n"><span class="an-play" aria-hidden="true">▶</span>' + escHtml(x.name) + '</span>' + roleTag(x.role) + '</li>'; }).join('') + '</ul>'
       : '';
     if (list.length < 3) {
       const have = new Set(list.map((x) => x.name.toLowerCase()));
@@ -14107,7 +14111,7 @@ function anRenderInfo() {
     + '<h3>' + escHtml(anS('Vị trí', 'Where')) + '</h3><p>' + escHtml(anL(G.where)) + '</p>'
     + '<h3>' + escHtml(anS('Chức năng', 'What it does')) + '</h3><ul class="an-fn">' + fn + '</ul>'
     + '<h3>' + escHtml(anS('Tập thế nào', 'How to train it')) + '</h3><p>' + escHtml(anL(G.tip)) + '</p>'
-    + '<h3>' + escHtml(anS('Bài tập gợi ý', 'Suggested exercises')) + '</h3>' + ex
+    + '<h3>' + escHtml(anS('Bài tập gợi ý', 'Suggested exercises')) + '</h3>' + (_anExList.length ? '<p class="an-muted">' + escHtml(anS('Chạm một bài để xem hình minh hoạ.', 'Tap an exercise to see an animated demo.')) + '</p>' : '') + ex
     + '</div>';
 }
 

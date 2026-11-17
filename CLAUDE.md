@@ -434,9 +434,13 @@ Key routing rules:
 - **Hình động minh hoạ bài tập** (2026-11-17): `lib/exercise-anim.js` (tải lười, `exaLoad` / `exaShow` trong index.html) — người
   dạng nét SVG, KHÔNG video. Tư thế = keyframe (hông, góc thân, chân / tay theo góc HOẶC bám điểm IK), nội suy mượt; tự nhấc người
   khi có điểm lọt dưới sàn; một vòng rAF chung, chỉ vẽ hình đang trong màn hình, dừng khi bị gỡ; giảm chuyển động → hình tĩnh.
-  Có cho ĐỦ 51 bài của khung môn (functions/sports.js), tra theo tên thư viện + tên hiển thị (ALIAS). Hiện ở thẻ môn Anatomy
-  (chạm bài → `anExDemo`) và hộp thông tin bài tab Workout (`#modal-anim`, mọi giáo án có bài trùng tên). Thêm bài vào khung môn
-  = thêm hình — `tests/exercise-anim.test.js` bắt bài thiếu hình, khung NaN, người xuyên sàn.
+  Hai tầng: `EX` (51 bài khung môn, vẽ riêng) + **toàn bộ thư viện chung** qua ~85 MẪU chuyển động có tham số (`T.squat`,
+  `T.bench`, `T.curl`… dụng cụ đổi theo tên) và bảng `RULES` (regex tên → mẫu, khớp ĐẦU TIÊN thắng — thứ tự quan trọng, vd
+  `rowing machine` phải trước `row`). Hiện ở thẻ môn Anatomy, danh sách "Bài tập gợi ý" của thẻ cơ (chạm bài → `anExDemo`) và hộp
+  thông tin bài tab Workout (`#modal-anim`). `tests/fixtures/library-names.json` = ảnh chụp tên bài thư viện chung — THÊM BÀI VÀO
+  THƯ VIỆN thì thêm tên vào đây; `tests/exercise-anim.test.js` bắt bài thiếu hình / thiếu câu kỹ thuật, khung NaN, người xuyên sàn.
+  Bài riêng của coach (ownerUid) không khớp mẫu → không hiện hình (không lỗi). Giới hạn: máy tập vẽ giản lược; động tác hướng về
+  người xem (fly, pull-apart, hydrant) dùng co ngắn tay / chân (`as` / `ls`); xoay thân không thể hiện được.
 - **Chat theo khách**: tab tên khách trong khung trợ lý (hoặc nút "Hỏi AI về khách này" trên hồ sơ). Lưu ở
   `clients/{id}/aiChat` — chỉ hàm nền `coachAssistant` ghi (`thread: true`), coach của khách + admin đọc, KHÁCH
   KHÔNG đọc. Form "Hôm nay khách không khoẻ" → chỉnh buổi cho hôm nay theo `EXPLAIN_METHOD`, KHÔNG đổi giáo án gốc.
