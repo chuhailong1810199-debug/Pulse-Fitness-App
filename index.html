@@ -920,12 +920,7 @@ async function loadApp() {
       activeClient = null;
       updateDateDisplay();
       showScreen('app');
-      document.getElementById('exercise-list').innerHTML =
-        `<div class="empty-state">
-          <div class="empty-icon">&#128075;</div>
-          <div class="empty-title">Chao mung, Coach!</div>
-          <div class="empty-sub">Bam <strong>+ Add</strong> de them client dau tien.</div>
-        </div>`;
+      document.getElementById('exercise-list').innerHTML = coachStartHTML();
       document.getElementById('day-tabs').innerHTML = '';
       return;
     }
@@ -6682,7 +6677,11 @@ function initDaySwipe() {
 function renderExercises() {
   const prog = getProgram(), day = prog[activeDay];
   const list = document.getElementById('exercise-list');
-  if (!day) { list.innerHTML = '<div class="loading">Rest day 💤</div>'; updateProgress(); return; }
+  if (!day) {
+    // Giáo án CHƯA CÓ buổi nào (khách vừa thêm) ≠ ngày nghỉ — chỉ đường soạn giáo án thay vì "Rest day".
+    list.innerHTML = Object.keys(prog).some((k) => /^Session[A-Z]$/.test(k) && prog[k]) ? '<div class="loading">Rest day 💤</div>' : emptyProgramHTML();
+    updateProgress(); return;
+  }
 
   const vKeys = [];
   const sortedPhases = sortPhases(day.phases);
@@ -7375,6 +7374,44 @@ async function exaShow(box, name, withCue) {
   window.EXERCISE_ANIM.mount(box.querySelector('.exa-stage'), name);
   box.style.display = '';
   return true;
+}
+
+// ── COACH MỚI / GIÁO ÁN TRỐNG (2026-11-17) ───────────────
+// Coach Vy đăng nhập lần đầu: 0 khách → màn trống chỉ ghi "Bam + Add" (không dấu); thêm khách xong tab Workout ghi
+// "Rest day" — không có đường nào để đưa giáo án vào. Giờ hai màn trống chỉ đường: Pulse soạn hoặc tự tạo buổi. KHÔNG dẫn sang
+// migrate.html: trang cũ đó ghi clients.email thẳng (bỏ qua claimClientEmail) và đăng nhập qua firebaseapp.com.
+function coachStartHTML() {
+  return '<div class="empty-state start-state" data-i18n-skip>'
+    + '<div class="empty-icon">&#128075;</div><div class="empty-title">Chào mừng, Coach!</div>'
+    + '<div class="empty-sub">Thêm khách đầu tiên bằng tay, hoặc nhờ Pulse tạo hồ sơ khách kèm giáo án — mày duyệt rồi mới lưu.</div>'
+    + '<div class="start-acts">'
+    + '<button type="button" class="start-btn on" onclick="document.getElementById(\'add-client-modal\').classList.add(\'open\')">+ Thêm khách</button>'
+    + '<button type="button" class="start-btn" onclick="aiOpen(\'general\');aiFormOpen(\'client\')">⚡ Nhờ Pulse tạo khách + giáo án</button>'
+    + '</div></div>';
+}
+function emptyProgramHTML() {
+  const nm = escHtml((activeClient && activeClient.name) || '');
+  if (userRole !== 'coach') return '<div class="empty-state start-state" data-i18n-skip><div class="empty-icon">&#128203;</div>'
+    + '<div class="empty-title">Chưa có giáo án</div><div class="empty-sub">Coach chưa đưa giáo án lên. Có giáo án là bài tập hiện ở đây.</div></div>';
+  return '<div class="empty-state start-state" data-i18n-skip><div class="empty-icon">&#128203;</div>'
+    + '<div class="empty-title">' + nm + ' chưa có giáo án</div>'
+    + '<div class="empty-sub">Chọn một cách để đưa giáo án vào:</div>'
+    + '<div class="start-acts">'
+    + '<button type="button" class="start-btn on" onclick="launchPulse()">⚡ Pulse soạn giáo án</button>'
+    + '<button type="button" class="start-btn" onclick="startBlankProgram()">Tự soạn từng buổi</button>'
+    + '</div>'
+    + '<div class="start-help"><b>Pulse soạn:</b> đọc hồ sơ + mục tiêu của khách, soạn đủ các buổi, mày duyệt rồi mới lưu.<br>'
+    + '<b>Tự soạn:</b> tạo Buổi A, bật chế độ sửa — dùng <b>+ Add Phase</b> / <b>+ Add Exercise</b>; thêm buổi bằng <b>+ Day</b>.</div></div>';
+}
+/** Tạo Buổi A trống cho khách đang mở rồi bật chế độ sửa để coach thêm phase / bài. */
+async function startBlankProgram() {
+  if (!activeClient || userRole !== 'coach') return;
+  const prog = getOrCreateProgram();
+  if (!prog.SessionA) prog.SessionA = { label: 'Buổi A', phases: [] };
+  await saveProgramToFirestore();
+  activeDay = 'SessionA';
+  renderDayTabs();
+  if (!editMode) toggleEditMode(); else renderExercises();
 }
 
 // ── EXERCISE MODAL ─────────────────────────────────────
@@ -17227,6 +17264,11 @@ body.reordering .phase-exercises-wrap{min-height:46px;border-radius:14px;transit
 .empty-icon{font-size:40px;margin-bottom:1rem;}
 .empty-title{font-family:'Figtree',sans-serif;font-size:22px;font-weight:800;text-transform:uppercase;color:#ffffff;margin-bottom:.5rem;}
 .empty-sub{font-size:14px;color:rgba(255,255,255,0.60);line-height:1.6;}
+.start-state .empty-title{text-transform:none;}
+.start-acts{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-top:1.2rem;}
+.start-btn{display:inline-flex;align-items:center;min-height:44px;padding:0 18px;border-radius:999px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.04);color:#fff;font:700 14px 'Figtree',sans-serif;text-decoration:none;cursor:pointer;}
+.start-btn.on{background:#8FDBFF;border-color:#8FDBFF;color:#161111;}
+.start-help{max-width:440px;margin:1.2rem auto 0;text-align:left;font-size:13px;line-height:1.6;color:rgba(255,255,255,.62);}
 .empty-sub strong{color:#8FDBFF;}
 
 /* ── EXERCISE DISMISS ANIMATION ── */

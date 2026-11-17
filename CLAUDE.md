@@ -150,6 +150,13 @@ App đã cài trên iPhone (standalone) + tên miền trong `AUTH_HOSTS` → `si
 popup bị chặn → lùi về redirect. Kiểm nhanh ai chưa từng đăng nhập: `getAuth().getUserByEmail(email)` (Admin SDK).
 `tests/inapp-login.test.js`.
 
+## Coach mới — màn trống chỉ đường (2026-11-17)
+Coach Vy vào được nhưng 0 khách → màn "Bam + Add" (không dấu); thêm khách xong tab Workout ghi "Rest day" → không biết đưa
+giáo án vào đâu. Giờ: 0 khách → `coachStartHTML()` (+ Thêm khách / Nhờ Pulse tạo khách + giáo án); khách chưa có buổi
+`SessionX` nào → `emptyProgramHTML()` (⚡ Pulse soạn = `launchPulse` / Tự soạn = `startBlankProgram` tạo Buổi A + bật sửa;
+khách thấy "Coach chưa đưa giáo án lên"). KHÔNG dẫn coach sang `migrate.html` — trang cũ ghi `clients.email` thẳng (bỏ qua
+`claimClientEmail`), id khách theo tên, đăng nhập qua firebaseapp.com. `tests/coach-start.test.js`.
+
 ## Performance: user profile cache
 - `loadUserProfile` now caches `{role, clientId}` in localStorage under key `pulse_user_v2_{uid}`
 - Returning users skip Firestore read → near-instant app load
