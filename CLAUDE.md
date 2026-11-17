@@ -143,6 +143,9 @@ coach (đăng nhập Google thành công thì dù sai Gmail Auth vẫn có tài 
 ("403 disallowed_useragent") — bản cũ chỉ nhận Facebook/Instagram, bỏ sót **Zalo**. Giờ `inAppBrowserName()` (Zalo,
 Messenger, Facebook, Instagram, TikTok, LINE, KakaoTalk, WebView Android) → màn đăng nhập hiện hộp `#inapp-banner` (Android:
 nút "Mở bằng Chrome" = intent://; iPhone: hướng dẫn ⋯ → Mở bằng Safari; nút chép link), không mời cài app trong webview.
+**Nguyên nhân chính (tìm ra sau):** 4 nút "Sign In" ở `landing.html` trỏ tên miền cũ `fitness-app-azure-eight.vercel.app` →
+Vercel chuyển về `fitwithlongchu.vercel.app/` = lại TRANG CHỦ, không bao giờ vào app (và tên miền lạ thì authDomain rơi về
+firebaseapp.com). Giờ mọi nút vào app = `/index.html` tương đối; `tests/auth-domain.test.js` cấm link *.vercel.app ở trang chủ.
 App đã cài trên iPhone (standalone) + tên miền trong `AUTH_HOSTS` → `signInWithRedirect` (popup không báo về app);
 popup bị chặn → lùi về redirect. Kiểm nhanh ai chưa từng đăng nhập: `getAuth().getUserByEmail(email)` (Admin SDK).
 `tests/inapp-login.test.js`.

@@ -20,3 +20,14 @@ test('vercel.json chuyển tiếp /__/auth và /__/firebase, đứng trước fi
   assert.strictEqual(routes[i].dest, 'https://fitness-app-a22c8.firebaseapp.com/__/$1/$2');
   assert.ok(i < routes.findIndex(r => r.handle === 'filesystem'));
 });
+
+// 2026-11-17 (coach Vy không vào được app): 4 nút "Sign In" trang chủ trỏ tên miền cũ fitness-app-azure-eight.vercel.app
+// → Vercel chuyển về fitwithlongchu.vercel.app/ = lại trang chủ, không bao giờ tới app; và trên tên miền lạ authDomain
+// rơi về firebaseapp.com (iPhone kẹt). Mọi đường vào app từ trang chủ phải là đường dẫn TƯƠNG ĐỐI cùng tên miền.
+test('trang chủ dẫn vào app bằng /index.html cùng tên miền, không sang vercel.app', () => {
+  const h = fs.readFileSync(path.join(root, 'landing.html'), 'utf8');
+  assert.ok(!/href="https?:\/\/[^"]*vercel\.app/.test(h), 'còn link sang *.vercel.app');
+  const signIns = h.match(/<a [^>]*>[^<]*(Sign In|Sign in to Pulse|Client Sign In|Open App)[^<]*<\/a>/g) || [];
+  assert.ok(signIns.length >= 5, 'tìm thấy ' + signIns.length + ' nút vào app');
+  signIns.forEach((a) => assert.match(a, /href="\/index\.html"/, a));
+});
