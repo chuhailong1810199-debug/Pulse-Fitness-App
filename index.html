@@ -807,6 +807,39 @@ function _launchAfterProfile(user) {
     });
 }
 
+// ── MỞ NHANH (2026-11-20) ──────────────────────────────
+// Hồ sơ khách lưu trên máy (bỏ avatar — ảnh base64 ~10 KB) để lần mở sau không chờ Firestore. Gắn theo uid: đăng xuất
+// đăng nhập tài khoản khác không đọc nhầm. Bản lưu chỉ để HIỆN; mọi lần ghi vẫn đi Firestore như cũ.
+const BOOT_WAIT_MS = 1200;
+const _bootSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const _CLIENT_DOC_KEY = (uid) => 'pulse_client_v1_' + uid;
+function saveClientDocCache(uid, id, data) {
+  try {
+    const { avatar, ...rest } = data || {};
+    localStorage.setItem(_CLIENT_DOC_KEY(uid), JSON.stringify({ id, t: Date.now(), data: rest }));
+  } catch (_e) { /* đầy bộ nhớ / chế độ riêng tư — chỉ mất đường nhanh */ }
+}
+function readClientDocCache(uid, id) {
+  try {
+    const c = JSON.parse(localStorage.getItem(_CLIENT_DOC_KEY(uid)) || 'null');
+    return c && c.id === id && c.data && typeof c.data === 'object' ? c : null;
+  } catch (_e) { return null; }
+}
+/** Hồ sơ mới từ Firestore về SAU khi app đã mở bằng bản lưu. */
+function _applyFreshClientDoc(s) {
+  if (!s) return;
+  if (!s.exists) {   // hồ sơ đổi / mất: bỏ bản lưu, tải lại để đi đường khôi phục clientId
+    try { localStorage.removeItem(_CLIENT_DOC_KEY(currentUser.uid)); } catch (_e) {}
+    window.location.reload();
+    return;
+  }
+  saveClientDocCache(currentUser.uid, s.id, s.data());
+  if (!activeClient || activeClient.id !== s.id) return;
+  const { program, ...rest } = s.data() || {};   // giáo án: subscribeProgram tự vẽ lại khi khác
+  Object.assign(activeClient, rest);
+  afterClientChange();
+}
+
 // ── LOAD APP ───────────────────────────────────────────
 /**
  * One-time localStorage migration: rename all day keys from Mon/Wed/Fri → SessionA/B/C.
@@ -969,7 +1002,18 @@ async function loadApp() {
         return;
       }
     }
-    let [snap] = await Promise.all([getDoc(doc(db, 'clients', userClientId)), _platformP]);
+    // Mở nhanh (2026-11-20, Lee báo app tải chậm / không vào được): có bản hồ sơ đã lưu trên máy thì KHÔNG chờ
+    // Firestore quá BOOT_WAIT_MS — mở ngay bằng bản lưu, bản mới về thì _applyFreshClientDoc cập nhật (giáo án mới do
+    // subscribeProgram vẽ lại). Lần đầu trên máy / hồ sơ mất → đi đường cũ (chờ server, tự khôi phục clientId).
+    const _cc = readClientDocCache(currentUser.uid, userClientId);
+    const _freshP = Promise.all([getDoc(doc(db, 'clients', userClientId)), _platformP]).then(([s]) => s);
+    let snap = _cc ? await Promise.race([_freshP, _bootSleep(BOOT_WAIT_MS).then(() => null)]) : await _freshP;
+    let _fromCache = false;
+    if (!snap) {
+      _fromCache = true;
+      snap = { exists: true, id: _cc.id, data: () => _cc.data };
+      _freshP.then(_applyFreshClientDoc).catch((e) => console.warn('[boot] hồ sơ mới chưa về:', e.code || e.message));
+    }
     if (!snap.exists) {
       // clientId in the users doc is stale — re-resolve via the email index first
       console.log('[loadApp] client doc missing for', userClientId, '— re-resolving...');
@@ -1010,6 +1054,7 @@ async function loadApp() {
     }
     clientsData  = [{ id: snap.id, ...snap.data() }];
     activeClient = clientsData[0];
+    if (!_fromCache) saveClientDocCache(currentUser.uid, snap.id, snap.data());
     afterClientChange();
     aiMount();                       // khách cũng có trợ lý (chỉ đọc giáo án của chính mình)
     chatMount();                     // nhắn tin với coach
@@ -1044,11 +1089,24 @@ async function loadApp() {
   // ── Parallel fetch: loads + strength history run simultaneously ──
   // Baseline (khách) chỉ bật một màn phủ — chạy cùng lượt, không chặn trước.
   // Lịch sử sức mạnh (huy hiệu ↑/↓ + Stats) KHÔNG chặn — strengthInBackground() vẽ lại khi xong.
-  await Promise.all([
+  // Tạ / cân nặng / InBody: tối đa BOOT_WAIT_MS rồi vẽ luôn — số tạ trên máy đã nạp ĐỒNG BỘ ở đầu hydrate (localStorage),
+  // phần máy chủ về sau thì vẽ lại (không vẽ khi đang gõ). Trước đây chờ đủ 3 lượt mạng nối nhau (sessionLoads → lịch sử →
+  // bài của buổi trước) mới hiện app.
+  const _bootData = Promise.all([
     hydrateExerciseLoadsForActiveDay(),
     loadClientBodyweight(),
     userRole === 'client' ? checkAndShowBaseline() : null
   ]);
+  const _bootQuick = await Promise.race([_bootData.then(() => true, () => true), _bootSleep(BOOT_WAIT_MS).then(() => false)]);
+  if (!_bootQuick) {
+    const _bootCid = activeClient && activeClient.id, _bootDay = activeDay;
+    _bootData.then(() => {
+      if (!activeClient || activeClient.id !== _bootCid || activeDay !== _bootDay) return;
+      const ae = document.activeElement;
+      if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
+      renderExercises();
+    }, () => {});
+  }
   strengthInBackground(); // TRƯỚC renderExercises: xoá chỉ mục cũ ngay; vẽ lại bài + Stats khi lịch sử về
   renderExercises();
   initDaySwipe();
@@ -5944,6 +6002,7 @@ function setExerciseLoad(exerciseKey, rawValue) {
   } else {
     exerciseLoads[exerciseKey] = val;
   }
+  if (_hydrateEdits) _hydrateEdits.ex[exerciseKey] = exerciseLoads[exerciseKey];
   saveExerciseLoadsToLocal();
   scheduleSaveLoadsFB();
 }
@@ -5996,11 +6055,21 @@ function setSetLoad(key, si, rawValue) {
     exerciseLoads[key] = Math.max(...valid);
     saveExerciseLoadsToLocal();
   }
+  if (_hydrateEdits) { _hydrateEdits.set[key] = setLoads[key].slice(); _hydrateEdits.ex[key] = exerciseLoads[key]; }
   saveSetLoadsToLocal();
   scheduleSaveLoadsFB();
 }
 
+// Số khách gõ TRONG LÚC hydrate còn chờ máy chủ (app giờ mở trước khi hydrate xong) — gộp số máy chủ xong thì
+// đặt lại các ô này, không để số cũ trên máy chủ đè số vừa gõ.
+let _hydrateEdits = null;
+function _reapplyHydrateEdits() {
+  if (!_hydrateEdits) return;
+  for (const [k, v] of Object.entries(_hydrateEdits.ex)) { if (v === undefined) delete exerciseLoads[k]; else exerciseLoads[k] = v; }
+  for (const [k, v] of Object.entries(_hydrateEdits.set)) setLoads[k] = v;
+}
 async function hydrateExerciseLoadsForActiveDay() {
+  _hydrateEdits = { ex: {}, set: {} };
   _loadsHydrated = false;
   _lastSavedTonnage = null;   // đổi khách/buổi: không hiện lại tonnage của buổi khác
   exerciseLoads = {};
@@ -6041,10 +6110,12 @@ async function hydrateExerciseLoadsForActiveDay() {
       const slData = slSnap.data() || {};
       if (slData.exerciseLoads && Object.keys(slData.exerciseLoads).length > 0) {
         exerciseLoads = { ...exerciseLoads, ...slData.exerciseLoads };
+        _reapplyHydrateEdits();
         saveExerciseLoadsToLocal();
       }
       if (slData.setLoads && Object.keys(slData.setLoads).length > 0) {
         setLoads = { ...setLoads, ...slData.setLoads };
+        _reapplyHydrateEdits();
         saveSetLoadsToLocal();
       }
       // Restore ticked exercises so a half-finished session survives a reload
@@ -6064,6 +6135,7 @@ async function hydrateExerciseLoadsForActiveDay() {
     }
   } catch (_e) {}
 
+  _hydrateEdits = null;
   // ── Mark hydrated HERE — localStorage + sessionLoads are fully loaded ──
   // Must be set before workoutHistory fallback so saveLoadsFB works even if
   // there is no matching workoutHistory (early return below would skip it otherwise).
@@ -12811,6 +12883,21 @@ function pushState() {
   return { ok: true, permission: Notification.permission };
 }
 
+// Mở nhanh (2026-11-20): đăng ký SW cho MỌI người (trước chỉ khi bật thông báo) — SW lưu file app để lần sau mạng yếu
+// vẫn mở được (sw.js). Đăng ký sau khi trang tải xong, không tranh băng thông lúc mở. Bản mới về → thanh nhắc tải lại.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => setTimeout(() => { _swRegister().catch(() => {}); }, 2500));
+  navigator.serviceWorker.addEventListener('message', (e) => { if (e.data && e.data.type === 'pulse-new-build') showNewBuildBar(); });
+}
+function showNewBuildBar() {
+  if (document.getElementById('new-build-bar')) return;
+  const b = document.createElement('button');
+  b.id = 'new-build-bar'; b.type = 'button'; b.className = 'new-build-bar';
+  b.setAttribute('data-i18n-skip', '');
+  b.textContent = (typeof _lang !== 'undefined' && _lang !== 'vi') ? 'New version available — tap to reload' : 'Có bản mới của app — chạm để tải lại';
+  b.onclick = () => window.location.reload();
+  document.body.appendChild(b);
+}
 async function _swRegister() {
   if (_swReg) return _swReg;
   _swReg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
@@ -17415,6 +17502,7 @@ body.reordering .phase-exercises-wrap{min-height:46px;border-radius:14px;transit
 .xl-actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;}
 .xl-save{min-height:44px;padding:0 18px;border-radius:999px;border:0;background:#8FDBFF;color:#161111;font:700 14px 'Figtree',sans-serif;cursor:pointer;}
 .xl-save:disabled{opacity:.5;cursor:wait;}
+.new-build-bar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom,0px));z-index:9999;min-height:44px;padding:0 18px;border-radius:999px;border:0;background:#8FDBFF;color:#161111;font:700 14px 'Figtree',sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.45);cursor:pointer;max-width:calc(100% - 32px);}
 .start-help{max-width:440px;margin:1.2rem auto 0;text-align:left;font-size:13px;line-height:1.6;color:rgba(255,255,255,.62);}
 .empty-sub strong{color:#8FDBFF;}
 

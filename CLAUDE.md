@@ -166,6 +166,23 @@ không nghiêm (khớp thì đổi tên thư viện + gắn cơ, bài lạ vẫn
 Định dạng file tuỳ ý — model CHÉP, không sáng tác; tuần lặp lại chỉ lấy tuần đầu (ghi notes). Thay cho `migrate.html`
 (công cụ cũ, không an toàn cho coach). Tốn 1 lượt Gemini mỗi file. `tests/program-import.test.js`.
 
+## Mở app nhanh cho khách (2026-11-20)
+Lee báo vào app chậm / không vào được. Đo: dữ liệu Lee nhỏ, đăng nhập ổn; chậm vì (1) mỗi lần mở phải tải lại `index.html`
+1,5 MB (440 KB nén) TRƯỚC khi hiện gì — SW không lưu gì, mạng yếu là đứng ở logo, mất mạng là không mở được; (2) có file rồi
+vẫn chờ hồ sơ khách + 3 lượt mạng nối nhau (sessionLoads → lịch sử → bài buổi trước) mới hiện giáo án.
+- **SW lưu file app, MẠNG TRƯỚC** (`sw.js`, coach chốt — đảo quyết định "không cache" tháng 9 một cách có kiểm soát):
+  /index.html hỏi mạng trước, kịp `SHELL_WAIT_MS` 2,5 s thì dùng bản mạng (luôn mới nhất); chậm / mất mạng → bản lưu, tải bản
+  mới ngầm, etag khác → `pulse-new-build` → thanh "Có bản mới — chạm để tải lại" (`showNewBuildBar`). SDK Firebase (có số
+  phiên bản) + font Google: cache trước. Đổi cách lưu = đổi tên cache (`pulse-shell-v1`, `pulse-libs-v1`), activate xoá cache lạ.
+  SW giờ đăng ký cho MỌI người (sau `load` + 2,5 s), không chỉ ai bật thông báo. Đo (file app chậm 5 s): 5,1 s → 2,5 s;
+  mất mạng: không mở được → mở được.
+- **Không chờ Firestore quá `BOOT_WAIT_MS` 1,2 s**: hồ sơ khách lưu ở `pulse_client_v1_{uid}` (bỏ avatar) → mở ngay bằng bản
+  lưu, bản mới về thì `_applyFreshClientDoc` (hồ sơ mất → xoá bản lưu + tải lại để đi đường khôi phục). Tạ / cân nặng / InBody
+  chờ tối đa 1,2 s rồi vẽ (số tạ trên máy nạp đồng bộ đầu `hydrate…`), xong thì vẽ lại (không vẽ khi đang gõ). Số khách gõ
+  trong lúc chờ không bị số máy chủ đè (`_hydrateEdits`). `tests/sw-cache.test.js`.
+- Kẹt / chậm trên máy khách: xin ảnh hộp "App tải lâu bất thường" (bước + lỗi). Kiểm nhanh khách có đăng nhập được không:
+  Admin SDK `getAuth().getUserByEmail(email)` → lastSignInTime.
+
 ## Performance: user profile cache
 - `loadUserProfile` now caches `{role, clientId}` in localStorage under key `pulse_user_v2_{uid}`
 - Returning users skip Firestore read → near-instant app load
