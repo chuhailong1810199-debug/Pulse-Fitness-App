@@ -237,9 +237,12 @@ function parsePrescription(str) {
  *  - Không có ô nào → tạ chung (fallbackLoad) cho mọi set.
  * Chuỗi không ghi số set ("10", "AMRAP × 10"): số set = số ô đã điền.
  */
+// Trần số kg một set (2026-11-21): anh Tiến SessionA ghi 22222 kg cho Bodyweight Reverse Lunge (gõ lặp phím) → volume buổi
+// 715.952 kg. Ô nhập từ chối số > KG_MAX; tính volume bỏ qua số > KG_MAX (dữ liệu cũ đã lỡ ghi không thổi phồng thống kê).
+const KG_MAX = 500;
 function resolveSetLoads(setsReps, perSetLoads, fallbackLoad) {
   const rx = parsePrescription(setsReps);
-  const ok = v => Number.isFinite(v) && v > 0;
+  const ok = v => Number.isFinite(v) && v > 0 && v <= KG_MAX;
   const raw = Array.isArray(perSetLoads) ? perSetLoads.map(v => (v == null || v === '' ? NaN : Number(v))) : [];
   let last = -1; raw.forEach((v, i) => { if (ok(v)) last = i; });
   const n = rx.explicit ? rx.sets : Math.max(rx.sets, last + 1);
@@ -5993,7 +5996,18 @@ function saveExerciseLoadsToLocal() {
   localStorage.setItem(key, JSON.stringify(exerciseLoads));
 }
 
-function setExerciseLoad(exerciseKey, rawValue) {
+/** Số gõ vào ô kg vượt KG_MAX → báo đỏ, coi như ô trống (không lưu, không tính volume). */
+function kgTooBig(rawValue, el) {
+  const bad = parseFloat(rawValue) > KG_MAX;
+  if (el && el.classList) {
+    el.classList.toggle('kg-bad', bad);
+    if (bad && !el._kgWarned) { el._kgWarned = true; showToast('Số kg tối đa ' + KG_MAX + ' — kiểm tra lại ô vừa gõ'); }
+    if (!bad) el._kgWarned = false;
+  }
+  return bad;
+}
+function setExerciseLoad(exerciseKey, rawValue, el) {
+  if (kgTooBig(rawValue, el)) rawValue = '';
   let val = parseFloat(rawValue);
   const bw = isBodyweightKey(exerciseKey) && _clientBodyweight > 0 ? _clientBodyweight : 0;
   if (bw) val = bw + (Number.isFinite(val) ? val : (String(rawValue).trim() === '' ? 0 : NaN));
@@ -6040,7 +6054,8 @@ function getSetLoad(key, si) {
   }
   return String(v);
 }
-function setSetLoad(key, si, rawValue) {
+function setSetLoad(key, si, rawValue, el) {
+  if (kgTooBig(rawValue, el)) rawValue = '';
   let val = parseFloat(rawValue);
   const bw = isBodyweightKey(key) && _clientBodyweight > 0 ? _clientBodyweight : 0;
   if (bw) {
@@ -6814,7 +6829,7 @@ function renderExercises() {
               <label class="set-load-row">
                 <span class="set-load-label">S${si+1}</span>
                 <input class="set-load-input${ex.bw?' set-load-bw':''}" type="number" ${ex.bw?'':'min="0" '}step="0.5" placeholder="${ex.bw?'+0':(sug?sug.kg:'—')}"
-                  value="${getSetLoad(key,si)}" oninput="setSetLoad('${key}',${si},this.value)">
+                  value="${getSetLoad(key,si)}" oninput="setSetLoad('${key}',${si},this.value,this)">
               </label>`).join('')}
             <button class="node-info" onclick="openModal(${pi},${ei})" aria-label="Chi tiết, tempo, video">i</button>
           </div>
@@ -6849,7 +6864,7 @@ function renderExercises() {
             ${ex.tempo ? `<span class="tempo-text">@ ${ex.tempo}</span>` : ''}
             <span class="badge">${ex.type||''}</span>
             <div class="weight-load">
-              <input class="weight-input" id="weight_${key}" type="number" ${ex.bw?'':'min="0" '}step="0.5" placeholder="${ex.bw?'+kg':'kg'}" value="${getExerciseLoadValue(key)}" oninput="setExerciseLoad('${key}', this.value)">
+              <input class="weight-input" id="weight_${key}" type="number" ${ex.bw?'':'min="0" '}step="0.5" placeholder="${ex.bw?'+kg':'kg'}" value="${getExerciseLoadValue(key)}" oninput="setExerciseLoad('${key}', this.value, this)">
               <span class="weight-unit">kg</span>
             </div>
           </div>
@@ -17502,6 +17517,7 @@ body.reordering .phase-exercises-wrap{min-height:46px;border-radius:14px;transit
 .xl-actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;}
 .xl-save{min-height:44px;padding:0 18px;border-radius:999px;border:0;background:#8FDBFF;color:#161111;font:700 14px 'Figtree',sans-serif;cursor:pointer;}
 .xl-save:disabled{opacity:.5;cursor:wait;}
+.set-load-input.kg-bad,.weight-input.kg-bad{border-color:#ff5a5a!important;background:rgba(255,90,90,.12)!important;}
 .new-build-bar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom,0px));z-index:9999;min-height:44px;padding:0 18px;border-radius:999px;border:0;background:#8FDBFF;color:#161111;font:700 14px 'Figtree',sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.45);cursor:pointer;max-width:calc(100% - 32px);}
 .start-help{max-width:440px;margin:1.2rem auto 0;text-align:left;font-size:13px;line-height:1.6;color:rgba(255,255,255,.62);}
 .empty-sub strong{color:#8FDBFF;}
