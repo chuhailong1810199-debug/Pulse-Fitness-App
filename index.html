@@ -1114,6 +1114,7 @@ async function loadApp() {
   renderExercises();
   initDaySwipe();
   initNavAutoHide();
+  setTimeout(navOverflowCheck, 0); setTimeout(navOverflowCheck, 2500);   // tab Recovery / Health hiện muộn
   subscribeProgram();
   checkRecoveryTab();   // non-blocking — tab chỉ hiện nếu khách có dữ liệu Polar
   checkActiveTab();
@@ -10565,10 +10566,18 @@ async function polarSyncNow() {
 
 // ── NAV ────────────────────────────────────────────────
 function centerActiveNavTab() {
-  const active = document.querySelector('.nav-tab.active');
-  if (!active || !window.matchMedia('(max-width: 700px)').matches) return;
-  active.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  navOverflowCheck();
+  const active = document.querySelector('.nav-tab.active'), nav = active && active.parentElement;
+  if (!active || !nav || nav.scrollWidth <= nav.clientWidth + 1) return;
+  // Cuộn riêng thanh tab (không dùng scrollIntoView: nó kéo cả trang theo chiều dọc).
+  nav.scrollTo({ left: active.offsetLeft - (nav.clientWidth - active.offsetWidth) / 2, behavior: 'smooth' });
 }
+/** Mờ hai mép chỉ khi còn tab bị che (thanh tab tràn) — đủ chỗ thì không làm mờ tab đầu / cuối. */
+function navOverflowCheck() {
+  const nav = document.querySelector('#app-screen .nav');
+  if (nav) nav.classList.toggle('nav-over', nav.scrollWidth > nav.clientWidth + 1);
+}
+window.addEventListener('resize', () => { clearTimeout(window._navOvT); window._navOvT = setTimeout(navOverflowCheck, 150); });
 
 function showPage(page) {
   // Youth chỉ dành cho coach. Giấu tab mới là trang trí; chỗ chặn thật nằm ở
@@ -19784,6 +19793,19 @@ window.selectExercise      = function(n){ _q('_selectExercise',[n]); };
 #app-screen .nav-tab.active{
   color:#fff !important;background:linear-gradient(135deg,var(--ac-lo),var(--ac)) !important;
   border:none !important;box-shadow:0 8px 20px -8px rgba(63,63,61,.7) !important;
+}
+/* Thanh tab cuộn ngang ở MỌI bề rộng (2026-11-24): trước chỉ ≤ 700px mới cuộn; rộng hơn (điện thoại xoay ngang, iPad,
+   laptop nhỏ) thì justify-content:center + không cuộn → 15 tab của coach tràn ĐỀU hai bên, Profile/Dashboard bên trái và
+   Chat/Schedule bên phải bị cắt, không với tới được. Giờ: bắt đầu từ trái + cuộn; đủ chỗ thì tab giãn đều (flex-grow) như cũ. */
+#app-screen .nav{
+  justify-content:flex-start !important;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;
+  scrollbar-width:none;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;
+}
+#app-screen .nav::-webkit-scrollbar{display:none;}
+#app-screen .nav-tab{flex:1 0 auto;white-space:nowrap;max-width:none;}
+#app-screen .nav.nav-over{
+  -webkit-mask-image:linear-gradient(90deg,transparent 0,#000 14px,#000 calc(100% - 14px),transparent 100%);
+  mask-image:linear-gradient(90deg,transparent 0,#000 14px,#000 calc(100% - 14px),transparent 100%);
 }
 </style>
 
